@@ -9,10 +9,24 @@
              x:DataType="vm:ScanPageViewModel">
 
     <UserControl.Styles>
+        <Style Selector="Border.step">
+            <Setter Property="Background" Value="{DynamicResource SurfaceAltBrush}"/>
+            <Setter Property="CornerRadius" Value="12"/>
+            <Setter Property="Padding" Value="14"/>
+        </Style>
+        <Style Selector="TextBlock.h4">
+            <Setter Property="FontWeight" Value="Medium"/>
+            <Setter Property="FontSize" Value="14"/>
+        </Style>
+        <Style Selector="TextBlock.tip">
+            <Setter Property="FontSize" Value="12.5"/>
+            <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}"/>
+            <Setter Property="TextWrapping" Value="Wrap"/>
+        </Style>
         <Style Selector="Border.slot">
             <Setter Property="Height" Value="215"/>
             <Setter Property="CornerRadius" Value="12"/>
-            <Setter Property="Background" Value="{DynamicResource SurfaceAltBrush}"/>
+            <Setter Property="Background" Value="{DynamicResource SurfaceBrush}"/>
             <Setter Property="Padding" Value="14"/>
             <Setter Property="Cursor" Value="Hand"/>
         </Style>
@@ -48,12 +62,6 @@
             <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}"/>
             <Setter Property="FontSize" Value="12"/>
         </Style>
-        <Style Selector="Border.calbanner">
-            <Setter Property="BorderBrush" Value="{DynamicResource WarningBrush}"/>
-        </Style>
-        <Style Selector="Border.calbanner.done">
-            <Setter Property="BorderBrush" Value="{DynamicResource BorderBrush}"/>
-        </Style>
 
         <!-- Slot 2's coupon sits statically quarter-turned; while the slot is hovered it plays the turn. -->
         <Style Selector="Border#Slot2:pointerover Border.turn">
@@ -76,26 +84,48 @@
                            Text="Scan the coupon, turn it a quarter-turn, and scan again — combining the two cancels your scanner's own X/Y stretch and skew."/>
             </StackPanel>
 
-            <!-- Scanner-calibration status — front and centre -->
-            <Border Classes="calbanner" Classes.done="{Binding IsCalibrated}" CornerRadius="12"
-                    BorderThickness="1" Padding="14,12" Background="{DynamicResource SurfaceBrush}">
-                <Grid ColumnDefinitions="Auto,*,Auto">
-                    <TextBlock Grid.Column="0" Text="✓" FontSize="20" Margin="2,0,12,0" VerticalAlignment="Center"
-                               IsVisible="{Binding IsCalibrated}" Foreground="{DynamicResource SuccessBrush}"/>
-                    <TextBlock Grid.Column="0" Text="⚠" FontSize="20" Margin="2,0,12,0" VerticalAlignment="Center"
-                               IsVisible="{Binding !IsCalibrated}" Foreground="{DynamicResource WarningBrush}"/>
-                    <StackPanel Grid.Column="1" Spacing="2" VerticalAlignment="Center">
-                        <TextBlock Text="{Binding CalibrationStatusText}" FontWeight="Medium"/>
-                        <TextBlock Text="{Binding CalibrationDetailText}" FontSize="12.5" Opacity="0.75" TextWrapping="Wrap"/>
+            <!-- 1 · Calibrate scanner -->
+            <Border Classes="step">
+                <StackPanel Spacing="8">
+                    <Grid ColumnDefinitions="*,Auto">
+                        <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="7" VerticalAlignment="Center">
+                            <TextBlock Text="1" Foreground="{DynamicResource PrimaryBrush}" Classes="h4"/>
+                            <TextBlock Text="Calibrate scanner" Classes="h4"/>
+                        </StackPanel>
+                        <Button Grid.Column="1" Content="{Binding CalibrateButtonText}" Command="{Binding CalibrateCommand}"
+                                Classes.accent="{Binding !IsCalibrated}" Padding="10,6" FontSize="12.5"/>
+                    </Grid>
+                    <StackPanel Orientation="Horizontal" Spacing="7">
+                        <TextBlock Text="✓" Foreground="{DynamicResource SuccessBrush}" IsVisible="{Binding IsCalibrated}"/>
+                        <TextBlock Text="⚠" Foreground="{DynamicResource WarningBrush}" IsVisible="{Binding !IsCalibrated}"/>
+                        <TextBlock Text="{Binding CalibrationLineText}" Classes="tip"/>
                     </StackPanel>
-                    <Button Grid.Column="2" Content="{Binding CalibrateButtonText}" Command="{Binding CalibrateCommand}"
-                            Classes.accent="{Binding !IsCalibrated}" VerticalAlignment="Center" Margin="12,0,0,0"/>
-                </Grid>
+                </StackPanel>
             </Border>
 
-            <Border Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}"
-                    BorderThickness="1" CornerRadius="16" Padding="20">
-                <StackPanel Spacing="16">
+            <!-- 2 · Print the coupon -->
+            <Border Classes="step">
+                <StackPanel Spacing="8">
+                    <Grid ColumnDefinitions="*,Auto">
+                        <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="7" VerticalAlignment="Center">
+                            <TextBlock Text="2" Foreground="{DynamicResource PrimaryBrush}" Classes="h4"/>
+                            <TextBlock Text="Print the coupon" Classes="h4"/>
+                        </StackPanel>
+                        <Button Grid.Column="1" Content="Open STL" Click="OnGetCouponPressed" Padding="10,6" FontSize="12.5"
+                                BorderBrush="{DynamicResource PrimaryBrush}" Foreground="#B7BDF8"
+                                ToolTip.Tip="Copies the 100 mm coupon to a temp folder and lets you pick a program (your slicer) to open it in."/>
+                    </Grid>
+                    <TextBlock Classes="tip" Text="100 mm model — opens in your slicer, print it flat."/>
+                </StackPanel>
+            </Border>
+
+            <!-- 3 · Add the two scans -->
+            <Border Classes="step">
+                <StackPanel Spacing="14">
+                    <StackPanel Orientation="Horizontal" Spacing="7">
+                        <TextBlock Text="3" Foreground="{DynamicResource PrimaryBrush}" Classes="h4"/>
+                        <TextBlock Text="Add the two scans" Classes="h4"/>
+                    </StackPanel>
 
                     <Grid ColumnDefinitions="*,64,*" VerticalAlignment="Center">
 
@@ -204,7 +234,7 @@
                     </Grid>
 
                     <!-- Slim settings strip -->
-                    <StackPanel Orientation="Horizontal" Spacing="18" Margin="2,2,0,0">
+                    <StackPanel Orientation="Horizontal" Spacing="18" Margin="2,0,0,0">
                         <StackPanel Spacing="3" IsVisible="{Binding !IsCalibrated}">
                             <TextBlock Text="Scanner DPI" FontSize="11" Foreground="{DynamicResource TextSecondaryBrush}"/>
                             <TextBox Text="{Binding DpiText}" Width="80"

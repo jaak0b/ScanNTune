@@ -11,6 +11,8 @@
   <ItemGroup>
     <Folder Include="Models\" />
     <AvaloniaResource Include="Assets\**" />
+    <!-- Bundle the printable coupon (from the repo root) so the app can hand the user an STL to slice. -->
+    <AvaloniaResource Include="..\..\calibration_coupon.stl" Link="Assets\calibration_coupon.stl" />
   </ItemGroup>
 
   <ItemGroup>

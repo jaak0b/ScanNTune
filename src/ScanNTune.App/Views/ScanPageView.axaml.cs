@@ -1,9 +1,12 @@
 using System;
+using System.Diagnostics;
+using System.IO;
 using System.Threading.Tasks;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Markup.Xaml;
+using Avalonia.Platform;
 using Avalonia.Platform.Storage;
 using ScanNTune.App.ViewModels;
 
@@ -40,6 +43,36 @@ public partial class ScanPageView : UserControl
             return;
         if (e.DataTransfer.TryGetFile()?.TryGetLocalPath() is { } path)
             Load(vm, path, isFirst);
+    }
+
+    // Hand the user the printable coupon: drop a fresh copy of the bundled STL in a temp folder (so the
+    // original stays pristine) and pop the Windows "Open with…" picker so they can send it to their slicer.
+    private void OnGetCouponPressed(object? sender, RoutedEventArgs e)
+    {
+        try
+        {
+            string dir = Path.Combine(Path.GetTempPath(), "ScanNTune");
+            Directory.CreateDirectory(dir);
+            string dest = Path.Combine(dir, "calibration_coupon.stl");
+
+            using (Stream source = AssetLoader.Open(new Uri("avares://ScanNTune.App/Assets/calibration_coupon.stl")))
+            using (FileStream file = File.Create(dest))
+                source.CopyTo(file);
+
+            // OpenAs_RunDLL forces the "Open with…" chooser regardless of file associations. The
+            // ShellExecute "openas" verb instead errors "no application associated" for a type (like .stl)
+            // that has no default handler. The temp path has no spaces, so it needs no quoting.
+            Process.Start(new ProcessStartInfo("rundll32.exe")
+            {
+                Arguments = $"shell32.dll,OpenAs_RunDLL {dest}",
+                UseShellExecute = false,
+            });
+        }
+        catch (Exception ex)
+        {
+            if (DataContext is ScanPageViewModel vm)
+                vm.StatusText = $"Could not open the coupon: {ex.Message}";
+        }
     }
 
     private void OnSlot1Pressed(object? sender, PointerPressedEventArgs e) => _ = PickAsync(isFirst: true);

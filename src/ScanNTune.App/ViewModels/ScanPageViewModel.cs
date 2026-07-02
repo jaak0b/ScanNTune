@@ -88,13 +88,10 @@ public partial class ScanPageViewModel : ViewModelBase
 
     public bool IsCalibrated => _calibration is not null;
 
-    public string CalibrationStatusText => _calibration is null
-        ? "Scanner not calibrated"
-        : $"Scanner calibrated · {_calibration.EffectiveDpi.ToString("0", CultureInfo.InvariantCulture)} dpi";
-
-    public string CalibrationDetailText => _calibration is null
-        ? "Calibrate once for absolute X/Y scale — skew and anisotropy already work without it."
-        : "Absolute X/Y scale is anchored to your scanner. Scan the coupon at this DPI.";
+    // Single status line under the step-1 header (the header already says "Calibrate scanner").
+    public string CalibrationLineText => _calibration is null
+        ? "Optional — calibrate once for absolute X/Y scale. Skew and anisotropy work without it."
+        : $"Calibrated · {_calibration.EffectiveDpi.ToString("0", CultureInfo.InvariantCulture)} dpi — absolute scale anchored to your scanner.";
 
     public string CalibrateButtonText => _calibration is null ? "Calibrate scanner" : "Recalibrate";
 
