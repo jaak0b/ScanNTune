@@ -87,7 +87,13 @@ The coding rules are strict; each is numbered for unambiguous reference:
 2. **No empty catch blocks** — a catch must log and/or return a meaningful value.
 3. **Open/closed** — a new subtype (a new CV stage, output formatter, scanner source, …) should require
    zero edits outside its own file.
-4. **Logging is via `ILogger<T>?`** (Microsoft.Extensions.Logging.Abstractions), always optional.
+4. **Logging is mandatory — a null logger is FORBIDDEN.** Every component that can throw, swallow, or
+   recover from an error must log through `ILogger<T>` (Microsoft.Extensions.Logging.Abstractions). The
+   app backs that abstraction with **Serilog**, writing to a rolling file under
+   `%LocalAppData%\ScanNTune\logs`; the desktop head wires global handlers so every unhandled/unobserved
+   exception is logged. Never pass `null` as a logger and never leave a `catch` that neither logs nor
+   returns a meaningful value (pairs with rule 2). Core stays engine-only: it depends on the
+   `ILogger<T>` abstraction, never on Serilog — the app supplies the concrete logger.
 5. **No AI attribution anywhere that touches git or GitHub** — not in commit messages, PR titles or
    descriptions, issue/PR comments, tags, or release notes. Concretely: no `Co-Authored-By` trailer,
    no "Generated with Claude Code" (or any similar "made/assisted by AI") line, and no AI tool name

@@ -2,6 +2,9 @@ using System;
 using System.Reflection;
 using Avalonia.Media.Imaging;
 using CommunityToolkit.Mvvm.ComponentModel;
+using Microsoft.Extensions.Logging;
+using Serilog;
+using Serilog.Extensions.Logging;
 using ScanNTune.Core;
 using ScanNTune.Core.Calibration;
 using ScanNTune.Core.Combining;
@@ -23,9 +26,16 @@ public partial class MainWindowViewModel : ViewModelBase
     private readonly ICorrectionFormatter _corrections;
     private readonly IScaleReferenceMeasurer _measurer;
     private readonly ICalibrationStore _calibrationStore;
+    private readonly ILoggerFactory _loggerFactory;
 
     [ObservableProperty]
     private ViewModelBase _currentPage = null!;
+
+    /// <summary>Set once a background update has been downloaded and staged for the next restart.</summary>
+    [ObservableProperty]
+    private bool _updateReady;
+
+    public string UpdateStatusText => "Update ready — restart to apply";
 
     /// <summary>Display version for the title bar, e.g. "v0.1.24" — stamped by Nerdbank.GitVersioning.</summary>
     public string AppVersion
@@ -42,9 +52,15 @@ public partial class MainWindowViewModel : ViewModelBase
         }
     }
 
+    // Design-time fallback: Serilog's Log.Logger is a silent logger until Program.Main configures it.
     public MainWindowViewModel()
+        : this(new SerilogLoggerFactory(Log.Logger))
+    {
+    }
+
+    public MainWindowViewModel(ILoggerFactory loggerFactory)
         : this(new CouponAnalyzer(), new ScannerCancellingCombiner(), new OverlayRenderer(), new CorrectionFormatter(),
-               new CardEdgeMeasurer(), new JsonCalibrationStore())
+               new CardEdgeMeasurer(), new JsonCalibrationStore(), loggerFactory)
     {
     }
 
@@ -54,7 +70,8 @@ public partial class MainWindowViewModel : ViewModelBase
         IOverlayRenderer overlayRenderer,
         ICorrectionFormatter corrections,
         IScaleReferenceMeasurer measurer,
-        ICalibrationStore calibrationStore)
+        ICalibrationStore calibrationStore,
+        ILoggerFactory loggerFactory)
     {
         _analyzer = analyzer;
         _combiner = combiner;
@@ -62,17 +79,22 @@ public partial class MainWindowViewModel : ViewModelBase
         _corrections = corrections;
         _measurer = measurer;
         _calibrationStore = calibrationStore;
+        _loggerFactory = loggerFactory;
         CurrentPage = CreateScanPage();
     }
 
+    public void MarkUpdateReady() => UpdateReady = true;
+
     private ScanPageViewModel CreateScanPage() =>
-        new(_analyzer, _combiner, _overlayRenderer, _calibrationStore, ShowResults, ShowCalibration);
+        new(_analyzer, _combiner, _overlayRenderer, _calibrationStore, ShowResults, ShowCalibration,
+            _loggerFactory.CreateLogger<ScanPageViewModel>());
 
     private void ShowResults(TwoScanResult result, CouponSpec coupon, Bitmap? overlayA, Bitmap? overlayB) =>
         CurrentPage = new ResultsPageViewModel(result, coupon, overlayA, overlayB, _corrections, StartOver);
 
     private void ShowCalibration() =>
-        CurrentPage = new CalibrationPageViewModel(_measurer, _calibrationStore, StartOver);
+        CurrentPage = new CalibrationPageViewModel(_measurer, _calibrationStore, StartOver,
+            _loggerFactory.CreateLogger<CalibrationPageViewModel>());
 
     // Rebuilding the scan page re-reads the stored calibration, so the status pill reflects a
     // just-saved calibration on return.

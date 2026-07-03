@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Threading.Tasks;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using Microsoft.Extensions.Logging;
 using ScanNTune.Core.Calibration;
 
 namespace ScanNTune.App.ViewModels;
@@ -22,6 +23,7 @@ public partial class CalibrationPageViewModel : ViewModelBase
     private readonly IScaleReferenceMeasurer _measurer;
     private readonly ICalibrationStore _store;
     private readonly Action _onDone;
+    private readonly ILogger<CalibrationPageViewModel> _logger;
     private ScaleReferenceResult? _result;
     private bool _initialized;
 
@@ -64,11 +66,13 @@ public partial class CalibrationPageViewModel : ViewModelBase
     [ObservableProperty]
     private bool _saved;
 
-    public CalibrationPageViewModel(IScaleReferenceMeasurer measurer, ICalibrationStore store, Action onDone)
+    public CalibrationPageViewModel(IScaleReferenceMeasurer measurer, ICalibrationStore store, Action onDone,
+        ILogger<CalibrationPageViewModel> logger)
     {
         _measurer = measurer;
         _store = store;
         _onDone = onDone;
+        _logger = logger;
 
         // Open "Recalibrate" on the current calibration — pre-fill the card's size and DPI and show
         // its detected result — instead of a blank form.
@@ -142,6 +146,7 @@ public partial class CalibrationPageViewModel : ViewModelBase
         }
         catch (Exception ex)
         {
+            _logger.LogError(ex, "Couldn't read the card scan {Path}.", path);
             _result = null;
             IsError = true;
             StatusText = $"Couldn't read the scan: {ex.Message}";
@@ -216,6 +221,7 @@ public partial class CalibrationPageViewModel : ViewModelBase
         }
         catch (Exception ex)
         {
+            _logger.LogError(ex, "Couldn't save the scanner calibration.");
             Saved = false;
             IsError = true;
             StatusText = $"Couldn't save the calibration: {ex.Message}";

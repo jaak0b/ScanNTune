@@ -6,8 +6,7 @@ namespace ScanNTune.Tests;
 /// Image transforms shared by the orientation tests. They warp the geometrically-perfect coupon
 /// render to fake a print imperfection (anisotropic <see cref="StretchX"/> / skew <see cref="Shear"/>),
 /// then place it on the "scanner" (mirror-<see cref="FlipY"/> + 90° <see cref="Rotate"/>). Each returns
-/// a fresh <see cref="Mat"/> the caller owns (wrap in <c>using</c>). Instance methods per the repo's
-/// no-static rule.
+/// a fresh <see cref="Mat"/> the caller owns (wrap in <c>using</c>).
 /// </summary>
 public sealed class CouponImageTransforms
 {

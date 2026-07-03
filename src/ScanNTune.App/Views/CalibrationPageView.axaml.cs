@@ -5,6 +5,7 @@ using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Markup.Xaml;
 using Avalonia.Platform.Storage;
+using Serilog;
 using ScanNTune.App.ViewModels;
 
 namespace ScanNTune.App.Views;
@@ -67,6 +68,7 @@ public partial class CalibrationPageView : UserControl
         }
         catch (Exception ex)
         {
+            Log.ForContext<CalibrationPageView>().Error(ex, "Card-scan file picker failed.");
             vm.StatusText = $"Could not open the file picker: {ex.Message}";
         }
     }

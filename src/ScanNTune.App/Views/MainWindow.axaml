@@ -74,6 +74,10 @@
                                    VerticalAlignment="Center" Foreground="{DynamicResource TextPrimaryBrush}"/>
                         <TextBlock Text="{Binding AppVersion}" FontSize="12" Margin="8,1,0,0"
                                    VerticalAlignment="Center" Foreground="{DynamicResource TextSecondaryBrush}"/>
+                        <Border IsVisible="{Binding UpdateReady}" Background="{DynamicResource PrimaryBrush}"
+                                CornerRadius="10" Padding="9,2" Margin="12,0,0,0" VerticalAlignment="Center">
+                            <TextBlock Text="{Binding UpdateStatusText}" FontSize="11" Foreground="White"/>
+                        </Border>
                     </StackPanel>
                 </Border>
 

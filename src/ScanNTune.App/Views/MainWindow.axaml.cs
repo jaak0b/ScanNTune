@@ -4,6 +4,7 @@ using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Media;
+using Serilog;
 
 namespace ScanNTune.App.Views;
 
@@ -39,8 +40,17 @@ public partial class MainWindow : Window
 
     private void OnClose(object? sender, RoutedEventArgs e) => Close();
 
-    private void OnOpenRepository(object? sender, RoutedEventArgs e)
-        => _ = Launcher.LaunchUriAsync(new Uri(RepositoryUrl));
+    private async void OnOpenRepository(object? sender, RoutedEventArgs e)
+    {
+        try
+        {
+            await Launcher.LaunchUriAsync(new Uri(RepositoryUrl));
+        }
+        catch (Exception ex)
+        {
+            Log.ForContext<MainWindow>().Error(ex, "Could not open the repository URL {Url}.", RepositoryUrl);
+        }
+    }
 
     private void ToggleMaximize()
         => WindowState = WindowState == WindowState.Maximized ? WindowState.Normal : WindowState.Maximized;

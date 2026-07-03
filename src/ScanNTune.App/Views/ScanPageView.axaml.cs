@@ -8,6 +8,7 @@ using Avalonia.Interactivity;
 using Avalonia.Markup.Xaml;
 using Avalonia.Platform;
 using Avalonia.Platform.Storage;
+using Serilog;
 using ScanNTune.App.ViewModels;
 
 namespace ScanNTune.App.Views;
@@ -70,6 +71,7 @@ public partial class ScanPageView : UserControl
         }
         catch (Exception ex)
         {
+            Log.ForContext<ScanPageView>().Error(ex, "Could not export/open the coupon STL.");
             if (DataContext is ScanPageViewModel vm)
                 vm.StatusText = $"Could not open the coupon: {ex.Message}";
         }
@@ -110,6 +112,7 @@ public partial class ScanPageView : UserControl
         }
         catch (Exception ex)
         {
+            Log.ForContext<ScanPageView>().Error(ex, "Scan file picker failed.");
             vm.StatusText = $"Could not open file picker: {ex.Message}";
         }
     }

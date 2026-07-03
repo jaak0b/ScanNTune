@@ -5,6 +5,7 @@ using System.Threading.Tasks;
 using Avalonia.Media.Imaging;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using Microsoft.Extensions.Logging;
 using ScanNTune.Core;
 using ScanNTune.Core.Calibration;
 using ScanNTune.Core.Combining;
@@ -26,6 +27,7 @@ public partial class ScanPageViewModel : ViewModelBase
     private readonly Action<TwoScanResult, CouponSpec, Bitmap?, Bitmap?> _onAnalyzed;
     private readonly Action _onCalibrate;
     private readonly ScannerCalibration? _calibration;
+    private readonly ILogger<ScanPageViewModel> _logger;
 
     [ObservableProperty]
     private string? _scan1Path;
@@ -75,7 +77,8 @@ public partial class ScanPageViewModel : ViewModelBase
         IOverlayRenderer overlayRenderer,
         ICalibrationStore calibrationStore,
         Action<TwoScanResult, CouponSpec, Bitmap?, Bitmap?> onAnalyzed,
-        Action onCalibrate)
+        Action onCalibrate,
+        ILogger<ScanPageViewModel> logger)
     {
         _analyzer = analyzer;
         _combiner = combiner;
@@ -83,6 +86,7 @@ public partial class ScanPageViewModel : ViewModelBase
         _calibrationStore = calibrationStore;
         _onAnalyzed = onAnalyzed;
         _onCalibrate = onCalibrate;
+        _logger = logger;
         _calibration = calibrationStore.Load();
     }
 
@@ -152,6 +156,7 @@ public partial class ScanPageViewModel : ViewModelBase
         }
         catch (Exception ex)
         {
+            _logger.LogError(ex, "Could not load scan image {Path}.", path);
             IsError = true;
             StatusText = $"Could not load image: {ex.Message}";
         }
@@ -199,11 +204,14 @@ public partial class ScanPageViewModel : ViewModelBase
         }
         catch (ScanAnalysisException ex)
         {
+            _logger.LogWarning("Scan analysis could not align {Which} scan ({Rings} rings): {Message}",
+                ex.IsFirst ? "first" : "second", ex.RingCount, ex.Message);
             // Show what the failing scan DID capture, in its own slot, alongside the guidance.
             ShowScanFailure(ex);
         }
         catch (Exception ex)
         {
+            _logger.LogError(ex, "Two-scan analysis failed.");
             IsError = true;
             StatusText = $"{ex.Message} — check the scan quality and that the coupon's two-solid marker is visible.";
         }
