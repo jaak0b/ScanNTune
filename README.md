@@ -57,8 +57,6 @@ from a single scan instead of by hand with a caliper.
 
 ## How it works
 
-A few design choices are what make a quick scan trustworthy:
-
 - **It measures ring centres, not walls.** The coupon is a lattice of rings, and a ring's centre doesn't
   move when the walls print fatter or thinner. So over- or under-extrusion can't shift the scale or skew it
   reports.
