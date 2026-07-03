@@ -57,19 +57,16 @@ from a single scan instead of by hand with a caliper.
 
 ## How it works
 
-- **It measures ring centres, not walls.** The coupon is a lattice of rings, and a ring's centre doesn't
-  move when the walls print fatter or thinner. So over- or under-extrusion can't shift the scale or skew it
-  reports.
-- **It cancels the scanner's own distortion.** A flatbed scanner has a small stretch and skew of its own. If
-  you scanned once, you'd bake that into the printer's numbers. Scanning flat and quarter-turned and
-  averaging the two makes the scanner's error cancel and leaves the printer's. The leftover half-difference
-  even tells you how far off your scanner is, as a free diagnostic.
-- **Absolute scale is anchored to a real object.** A scanner's stated DPI is rarely exactly true, so to
-  report shrinkage as a real percentage ScanNTune reads a standard plastic card instead (they're all the
-  same ISO/IEC 7810 ID-1 size, 85.60 by 53.98 mm, held to a tight tolerance) and works out the true
+- **Ring centres, not walls.** The coupon is a lattice of rings, and a ring's centre doesn't move when the
+  walls print fatter or thinner. Over- or under-extrusion can't shift the scale or skew.
+- **Two scans remove the scanner's distortion.** A flatbed scanner has its own slight stretch and skew.
+  Scanning the coupon flat, then again quarter-turned, and averaging the two cancels the scanner's error and
+  leaves the printer's. The leftover half-difference even tells you how far off your scanner is.
+- **Scale anchored to a real object.** A scanner's stated DPI is rarely exact, so ScanNTune measures a
+  standard plastic card instead (all cards are ISO/IEC 7810 ID-1, 85.60 by 53.98 mm) and reads the true
   pixels-per-millimetre from its edges.
-- **It reports an honest result.** The fit is robust and it shows you its residual, so a genuinely warped
-  part shows up in the number instead of being quietly smoothed over.
+- **An honest number.** The fit is robust and shows its residual, so a genuinely warped part shows up in the
+  result instead of being smoothed over.
 
 ## Building from source
 
