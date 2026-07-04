@@ -72,6 +72,18 @@ export function pickImageFile(title) {
         // the user is not offered SVG/HEIC/AVIF and the like that would just fail after upload.
         input.accept = ".png,.jpg,.jpeg,.bmp,.tif,.tiff,.webp,image/png,image/jpeg,image/bmp,image/tiff,image/webp";
 
+        // TEMPORARY on-screen diagnostic: log what the file input actually receives when tapped, so we can see
+        // on a real iPhone why the OS file dialog does not open. Remove once solved.
+        const dlog = document.createElement("div");
+        dlog.style.cssText = "background:#000;color:#6f6;font:11px/1.45 monospace;padding:8px;margin-bottom:10px;max-height:170px;overflow:auto;white-space:pre-wrap;border-radius:6px;word-break:break-word;";
+        let dn = 0;
+        const dadd = (m) => { dlog.textContent += (++dn) + ") " + m + "\n"; dlog.scrollTop = dlog.scrollHeight; };
+        dadd("tap the blue Choose file button once");
+        dadd("UA " + navigator.userAgent);
+        ["touchstart", "touchend", "pointerdown", "pointerup", "pointercancel", "click", "change"].forEach((t) =>
+            input.addEventListener(t, (e) => dadd(t + " defaultPrevented=" + e.defaultPrevented)));
+        sheet.appendChild(dlog);
+
         const cancel = document.createElement("button");
         cancel.type = "button";
         cancel.textContent = "Cancel";
