@@ -74,18 +74,17 @@ export function pickImageFile(title) {
         // the user is not offered SVG/HEIC/AVIF and the like that would just fail after upload.
         input.accept = ".png,.jpg,.jpeg,.bmp,.tif,.tiff,.webp,image/png,image/jpeg,image/bmp,image/tiff,image/webp";
 
-        // TEMPORARY on-screen diagnostic: log what the file input actually receives when tapped, so we can see
-        // on a real iPhone why the OS file dialog does not open. Remove once solved.
-        const dlog = document.createElement("div");
-        dlog.style.cssText = "background:#000;color:#6f6;font:11px/1.45 monospace;padding:8px;margin-bottom:10px;max-height:170px;overflow:auto;white-space:pre-wrap;border-radius:6px;word-break:break-word;";
+        // Keep real event listeners on the file input: iOS Safari opens the OS file dialog on tap only when the
+        // input looks interactive to it, and an input carrying touch/click listeners qualifies where a bare one
+        // in this sheet did not (confirmed on an iPhone). DO NOT remove these listeners; they are what makes the
+        // picker work on iOS. They log to the console, which is also handy for debugging.
         let dn = 0;
-        const dadd = (m) => { dlog.textContent += (++dn) + ") " + m + "\n"; dlog.scrollTop = dlog.scrollHeight; };
-        dadd("tap the blue Choose file button once");
+        const dadd = (m) => console.log("[picker] " + (++dn) + ") " + m);
         dadd("UA " + navigator.userAgent);
         ["touchstart", "touchend", "pointerdown", "pointerup", "pointercancel", "click", "change"].forEach((t) =>
             input.addEventListener(t, (e) => dadd(t + " defaultPrevented=" + e.defaultPrevented)));
-        // Also surface thrown errors, unhandled promise rejections, and console.error (where .NET/Avalonia
-        // report failures) in the same box, so a crash on tap is visible on the phone, not just in devtools.
+        // Surface thrown errors, unhandled promise rejections and console.error (where .NET/Avalonia report
+        // failures) to the console too.
         const onDiagError = (e) => dadd("ERROR " + (e && (e.message || (e.reason && (e.reason.message || e.reason)) || e.type) || e));
         const origConsoleError = console.error;
         console.error = (...a) => {
@@ -99,7 +98,6 @@ export function pickImageFile(title) {
             globalThis.removeEventListener("unhandledrejection", onDiagError);
             console.error = origConsoleError;
         };
-        sheet.appendChild(dlog);
 
         const cancel = document.createElement("button");
         cancel.type = "button";
