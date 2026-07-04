@@ -8,6 +8,11 @@
              x:Class="ScanNTune.UI.Views.ScanPageView"
              x:DataType="vm:ScanPageViewModel">
 
+    <UserControl.Resources>
+        <!-- Upload arrow over a tray: the icon on the button that opens the file picker. -->
+        <StreamGeometry x:Key="UploadIcon">M12 4 L6 10 H10 V15 H14 V10 H18 Z M6 18 H18 V20 H6 Z</StreamGeometry>
+    </UserControl.Resources>
+
     <UserControl.Styles>
         <Style Selector="Border.step">
             <Setter Property="Background" Value="{DynamicResource SurfaceAltBrush}"/>
@@ -28,8 +33,20 @@
             <Setter Property="CornerRadius" Value="12"/>
             <Setter Property="Background" Value="{DynamicResource SurfaceBrush}"/>
             <Setter Property="Padding" Value="14"/>
-            <Setter Property="Cursor" Value="Hand"/>
             <Setter Property="ClipToBounds" Value="True"/>
+        </Style>
+
+        <!-- The small "Choose file" / "Replace" button inside a slot: it opens the picker on press. Being a
+             small target, the rest of the slot stays free so a drag there scrolls the page instead of opening. -->
+        <Style Selector="Border.uploadBtn">
+            <Setter Property="Background" Value="{DynamicResource PrimaryBrush}"/>
+            <Setter Property="CornerRadius" Value="9"/>
+            <Setter Property="Padding" Value="12,8"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+        </Style>
+        <Style Selector="Border.uploadBtn:pointerover">
+            <Setter Property="Opacity" Value="0.88"/>
         </Style>
 
         <!-- The connector arrow points right between the side-by-side slots; when the layout folds to a
@@ -165,9 +182,16 @@
                                         <TextBlock Grid.Column="0" Classes="slabel" Text="First scan"/>
                                         <TextBlock Grid.Column="1" Classes="ssub" Text="as placed"/>
                                     </Grid>
-                                    <TextBlock DockPanel.Dock="Bottom" HorizontalAlignment="Center"
-                                               Foreground="{DynamicResource PrimaryBrush}" FontSize="13"
-                                               Text="Choose file or drop here"/>
+                                    <StackPanel DockPanel.Dock="Bottom" HorizontalAlignment="Center" Spacing="5">
+                                        <Border Classes="uploadBtn" HorizontalAlignment="Center" PointerPressed="OnUpload1Pressed">
+                                            <StackPanel Orientation="Horizontal" Spacing="7" VerticalAlignment="Center">
+                                                <Path Width="15" Height="15" Stretch="Uniform" Fill="White" Data="{StaticResource UploadIcon}"/>
+                                                <TextBlock Text="Choose file" Foreground="White" FontSize="13" FontWeight="Medium"/>
+                                            </StackPanel>
+                                        </Border>
+                                        <TextBlock Text="or drop here" HorizontalAlignment="Center" FontSize="11"
+                                                   Foreground="{DynamicResource TextSecondaryBrush}"/>
+                                    </StackPanel>
                                     <ctrl:CouponGlyph Width="80" Height="80"
                                                       HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                 </DockPanel>
@@ -187,8 +211,12 @@
                                                    IsVisible="{Binding Scan1Failed}"
                                                    Foreground="{DynamicResource WarningBrush}"
                                                    TextTrimming="CharacterEllipsis" Margin="6,0"/>
-                                        <TextBlock Grid.Column="2" Text="Replace" FontSize="12"
-                                                   Foreground="{DynamicResource PrimaryBrush}"/>
+                                        <Border Grid.Column="2" Classes="uploadBtn" Padding="8,5" PointerPressed="OnUpload1Pressed">
+                                            <StackPanel Orientation="Horizontal" Spacing="5" VerticalAlignment="Center">
+                                                <Path Width="12" Height="12" Stretch="Uniform" Fill="White" Data="{StaticResource UploadIcon}"/>
+                                                <TextBlock Text="Replace" Foreground="White" FontSize="12"/>
+                                            </StackPanel>
+                                        </Border>
                                     </Grid>
                                     <Image Source="{Binding Scan1Thumb}" Stretch="Uniform" Margin="0,8"/>
                                 </DockPanel>
@@ -226,9 +254,16 @@
                                         <TextBlock Grid.Column="0" Classes="slabel" Text="Second scan"/>
                                         <TextBlock Grid.Column="1" Classes="ssub" Text="quarter-turned"/>
                                     </Grid>
-                                    <TextBlock DockPanel.Dock="Bottom" HorizontalAlignment="Center"
-                                               Foreground="{DynamicResource PrimaryBrush}" FontSize="13"
-                                               Text="Choose file or drop here"/>
+                                    <StackPanel DockPanel.Dock="Bottom" HorizontalAlignment="Center" Spacing="5">
+                                        <Border Classes="uploadBtn" HorizontalAlignment="Center" PointerPressed="OnUpload2Pressed">
+                                            <StackPanel Orientation="Horizontal" Spacing="7" VerticalAlignment="Center">
+                                                <Path Width="15" Height="15" Stretch="Uniform" Fill="White" Data="{StaticResource UploadIcon}"/>
+                                                <TextBlock Text="Choose file" Foreground="White" FontSize="13" FontWeight="Medium"/>
+                                            </StackPanel>
+                                        </Border>
+                                        <TextBlock Text="or drop here" HorizontalAlignment="Center" FontSize="11"
+                                                   Foreground="{DynamicResource TextSecondaryBrush}"/>
+                                    </StackPanel>
                                     <!-- Pivots about an off-centre point so the coupon sweeps: the 0° start
                                          sits offset to the right, and the turn carries it onto the centred 90°
                                          resting frame. The left Margin shifts the layout right to re-centre 90°. -->
@@ -258,8 +293,12 @@
                                                    IsVisible="{Binding Scan2Failed}"
                                                    Foreground="{DynamicResource WarningBrush}"
                                                    TextTrimming="CharacterEllipsis" Margin="6,0"/>
-                                        <TextBlock Grid.Column="2" Text="Replace" FontSize="12"
-                                                   Foreground="{DynamicResource PrimaryBrush}"/>
+                                        <Border Grid.Column="2" Classes="uploadBtn" Padding="8,5" PointerPressed="OnUpload2Pressed">
+                                            <StackPanel Orientation="Horizontal" Spacing="5" VerticalAlignment="Center">
+                                                <Path Width="12" Height="12" Stretch="Uniform" Fill="White" Data="{StaticResource UploadIcon}"/>
+                                                <TextBlock Text="Replace" Foreground="White" FontSize="12"/>
+                                            </StackPanel>
+                                        </Border>
                                     </Grid>
                                     <Image Source="{Binding Scan2Thumb}" Stretch="Uniform" Margin="0,8"/>
                                 </DockPanel>

@@ -1,13 +1,10 @@
 using System;
-using System.Collections.Generic;
 using System.Threading.Tasks;
-using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Markup.Xaml;
 using Avalonia.Platform.Storage;
-using Avalonia.VisualTree;
 using ScanNTune.UI.Platform;
 using ScanNTune.UI.ViewModels;
 
@@ -15,46 +12,23 @@ namespace ScanNTune.UI.Views;
 
 public partial class ScanPageView : UserControl
 {
-    // A slot press counts as "open the picker" only if the finger barely moves before it lifts. A drag past
-    // this many pixels is a scroll and is left alone. Generous enough that ordinary finger jitter on a tap
-    // still opens the picker.
-    private const double TapMoveTolerance = 12;
-
     private readonly StorageFileReader _files = new();
-    private Border? _slot1;
-    private Border? _slot2;
-    // A press that landed on a slot, keyed by pointer id so several fingers never confuse each other; an entry
-    // is added on press and consumed on release.
-    private readonly Dictionary<int, (bool IsFirst, Point Origin)> _slotPresses = new();
 
     public ScanPageView()
     {
         InitializeComponent();
 
-        _slot1 = this.FindControl<Border>("Slot1");
-        _slot2 = this.FindControl<Border>("Slot2");
-
-        // Drag-and-drop has no XAML attribute for its routed events, so wire it per slot in code.
-        WireDrop(_slot1, isFirst: true);
-        WireDrop(_slot2, isFirst: false);
-
-        // Tap-to-open is detected here at the page root, not on the slots, and not via the built-in Tapped
-        // gesture (which the ScrollViewer preempts on a touch screen, so a real finger tap almost never fires).
-        // Once the ScrollViewer captures the pointer to test for a scroll, the release routes up from IT; a slot
-        // sits below the ScrollViewer so it never sees the release, but the root always does. We only observe
-        // (never capture or mark handled), so scrolling stays intact. Bubble only: a Tunnel|Bubble subscription
-        // would fire each handler twice.
-        AddHandler(InputElement.PointerPressedEvent, OnRootPointerPressed,
-            RoutingStrategies.Bubble, handledEventsToo: true);
-        AddHandler(InputElement.PointerReleasedEvent, OnRootPointerReleased,
-            RoutingStrategies.Bubble, handledEventsToo: true);
+        // Drag-and-drop has no XAML attribute for its routed events, so wire it per slot in code. The upload
+        // button that opens the picker is wired via XAML (PointerPressed).
+        WireDrop("Slot1", isFirst: true);
+        WireDrop("Slot2", isFirst: false);
     }
 
     private void InitializeComponent() => AvaloniaXamlLoader.Load(this);
 
-    private void WireDrop(Border? slot, bool isFirst)
+    private void WireDrop(string slotName, bool isFirst)
     {
-        if (slot is null)
+        if (this.FindControl<Border>(slotName) is not { } slot)
             return;
         slot.AddHandler(DragDrop.DragOverEvent, OnDragOver);
         slot.AddHandler(DragDrop.DropEvent, (_, e) => _ = HandleDropAsync(e, isFirst));
@@ -79,40 +53,17 @@ public partial class ScanPageView : UserControl
             vm.GetCouponCommand.Execute(null);
     }
 
-    private void OnRootPointerPressed(object? sender, PointerPressedEventArgs e)
-    {
-        // Record which slot the press landed on, and where. e.Source is the true target here: any capture (for
-        // a scroll) happens later, on move. Positions are relative to this UserControl, which hosts the
-        // ScrollViewer and does not itself scroll, so press and release compare in the same frame.
-        if (SlotOf(e.Source) is { } isFirst)
-            _slotPresses[e.Pointer.Id] = (isFirst, e.GetPosition(this));
-    }
+    private void OnUpload1Pressed(object? sender, PointerPressedEventArgs e) => OpenPicker(e, isFirst: true);
 
-    // A press that started on a slot and lifts having barely moved is a tap: open that slot's picker. A larger
-    // move was a scroll and is ignored. Opening on release is fine for iOS: the sheet is only DOM here, and the
-    // OS dialog opens later from its own input tap.
-    private void OnRootPointerReleased(object? sender, PointerReleasedEventArgs e)
-    {
-        if (!_slotPresses.Remove(e.Pointer.Id, out (bool IsFirst, Point Origin) press))
-            return;
-        Point released = e.GetPosition(this);
-        double dx = released.X - press.Origin.X;
-        double dy = released.Y - press.Origin.Y;
-        if (dx * dx + dy * dy <= TapMoveTolerance * TapMoveTolerance)
-            _ = PickAsync(press.IsFirst);
-    }
+    private void OnUpload2Pressed(object? sender, PointerPressedEventArgs e) => OpenPicker(e, isFirst: false);
 
-    // Which slot (if any) the pressed element sits inside: true = first, false = second, null = neither.
-    private bool? SlotOf(object? source)
+    // The upload button opens the picker on pointer press (touch-down), which always fires, so a tap opens it
+    // reliably (unlike an open-on-release, which a mobile browser can drop as a cancel when it suspects a
+    // scroll). It is a small target inside the slot, so the rest of the slot stays free to scroll the page.
+    private void OpenPicker(PointerPressedEventArgs e, bool isFirst)
     {
-        Visual? v = source as Visual;
-        while (v is not null)
-        {
-            if (ReferenceEquals(v, _slot1)) return true;
-            if (ReferenceEquals(v, _slot2)) return false;
-            v = v.GetVisualParent();
-        }
-        return null;
+        e.Handled = true; // consume the press so it isn't also read as the start of a scroll
+        _ = PickAsync(isFirst);
     }
 
     // async work is kept guarded so a failure surfaces to the status line rather than escaping to the
