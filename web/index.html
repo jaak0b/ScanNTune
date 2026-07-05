@@ -4,10 +4,57 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>ScanNTune</title>
+
+    <title>ScanNTune: 3D printer XY calibration from a flatbed scan</title>
+    <meta
+      name="description"
+      content="Auto-calibrate your 3D printer's XY shrinkage and skew from a flatbed scan of a printed calibration coupon. No calipers: get ready-to-paste Klipper, Marlin, RepRapFirmware, and slicer corrections."
+    />
+    <meta name="robots" content="index, follow" />
+    <link rel="canonical" href="https://scanntune.jaak0b.at/" />
+    <meta name="theme-color" content="#22262d" />
+
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="ScanNTune" />
+    <meta property="og:url" content="https://scanntune.jaak0b.at/" />
+    <meta property="og:title" content="ScanNTune: 3D printer XY calibration from a flatbed scan" />
+    <meta
+      property="og:description"
+      content="Auto-calibrate your 3D printer's XY shrinkage and skew from a flatbed scan of a printed calibration coupon. No calipers: get ready-to-paste firmware and slicer corrections."
+    />
+    <meta property="og:image" content="https://scanntune.jaak0b.at/og-image.png" />
+    <meta property="og:image:type" content="image/png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="ScanNTune: 3D printer calibration from a flatbed scan" />
+
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="ScanNTune: 3D printer XY calibration from a flatbed scan" />
+    <meta
+      name="twitter:description"
+      content="Auto-calibrate your 3D printer's XY shrinkage and skew from a flatbed scan of a printed calibration coupon. No calipers needed."
+    />
+    <meta name="twitter:image" content="https://scanntune.jaak0b.at/og-image.png" />
+
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "WebApplication",
+        "name": "ScanNTune",
+        "url": "https://scanntune.jaak0b.at/",
+        "applicationCategory": "UtilitiesApplication",
+        "operatingSystem": "Any (web browser)",
+        "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+        "description": "Auto-calibrate a 3D printer's XY shrinkage and skew from a flatbed scan of a printed calibration coupon, with no caliper measurements. Reads ring geometry in the browser and emits ready-to-paste Klipper, Marlin, RepRapFirmware, and slicer corrections."
+      }
+    </script>
   </head>
   <body>
     <div id="app"></div>
+    <noscript>
+      ScanNTune auto-calibrates a 3D printer's XY shrinkage and skew from a flatbed scan of a printed
+      calibration coupon. It needs JavaScript to run: enable it to load the app.
+    </noscript>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

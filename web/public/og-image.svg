@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" width="1200" height="630">
+  <rect width="1200" height="630" fill="#22262d" />
+  <g transform="translate(120 155)">
+    <rect width="320" height="320" rx="72" fill="#1a1d23" />
+    <g transform="translate(40 40)">
+      <circle cx="40" cy="40" r="37" fill="#818cf8" />
+      <circle cx="120" cy="40" r="37" fill="#818cf8" />
+      <g fill="none" stroke="#e7e9ee" stroke-width="10.6">
+        <circle cx="200" cy="40" r="37" />
+        <circle cx="40" cy="120" r="37" />
+        <circle cx="120" cy="120" r="37" />
+        <circle cx="200" cy="120" r="37" />
+        <circle cx="40" cy="200" r="37" />
+        <circle cx="120" cy="200" r="37" />
+        <circle cx="200" cy="200" r="37" />
+      </g>
+    </g>
+  </g>
+  <g transform="translate(520 240)" fill="#e7e9ee" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif">
+    <text x="0" y="0" font-size="86" font-weight="700">ScanNTune</text>
+    <text x="4" y="70" font-size="34" font-weight="500" fill="#818cf8">3D printer calibration from a scan</text>
+    <text x="4" y="132" font-size="27" fill="#aeb3bd">XY shrinkage and skew from a flatbed scan.</text>
+    <text x="4" y="170" font-size="27" fill="#aeb3bd">No calipers. Klipper, Marlin, RRF, slicer output.</text>
+  </g>
+</svg>
