@@ -8,6 +8,7 @@ import { signedFixed } from '../util/format'
 import NumericField from './NumericField.vue'
 import HowToScanDiagram from './HowToScanDiagram.vue'
 import WhatToMeasureDiagram from './WhatToMeasureDiagram.vue'
+import MetricTile from './MetricTile.vue'
 
 const app = useApp()
 const calibration = useCalibration()
@@ -215,18 +216,9 @@ watch([measuredMm, dpi], () => {
       </div>
 
       <div class="tiles">
-        <div class="tile">
-          <div class="tlab">px / mm</div>
-          <div class="tval" data-testid="pxpermm">{{ pxPerMm.toFixed(3) }}</div>
-        </div>
-        <div class="tile">
-          <div class="tlab">effective dpi</div>
-          <div class="tval">{{ effectiveDpi.toFixed(0) }}</div>
-        </div>
-        <div class="tile">
-          <div class="tlab">vs nominal</div>
-          <div class="tval">{{ signedFixed(percentVsNominal, 3) }} %</div>
-        </div>
+        <MetricTile label="px / mm" :value="pxPerMm.toFixed(3)" testid="pxpermm" />
+        <MetricTile label="effective dpi" :value="effectiveDpi.toFixed(0)" />
+        <MetricTile label="vs nominal" :value="`${signedFixed(percentVsNominal, 3)} %`" />
       </div>
 
       <p class="text-caption text-medium-emphasis mt-3 mb-1">
@@ -330,20 +322,6 @@ watch([measuredMm, dpi], () => {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   gap: 10px;
-}
-.tile {
-  background: rgb(var(--v-theme-surface-bright));
-  border-radius: 10px;
-  padding: 12px;
-}
-.tlab {
-  font-size: 12px;
-  color: rgba(var(--v-theme-on-surface), 0.6);
-}
-.tval {
-  font-size: 20px;
-  font-weight: 500;
-  font-family: 'Roboto Mono', ui-monospace, monospace;
 }
 .saved {
   display: inline-flex;

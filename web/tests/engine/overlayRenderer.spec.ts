@@ -3,13 +3,13 @@ import { describe, it, expect } from 'vitest'
 import { getCv, decodeFixtureBgr } from '../helpers/cv'
 import { analyzeCoupon } from '../../src/engine/couponAnalyzer'
 import { renderOverlayMat } from '../../src/engine/overlayRenderer'
-import { defaultCouponSpec } from '../../src/engine/types'
+import { asAligned, defaultCouponSpec } from '../../src/engine/types'
 
 describe('overlay renderer', () => {
   it('renders a cropped BGR overlay of the coupon', async () => {
     const cv = await getCv()
     const image = decodeFixtureBgr(cv, 'TestData_2solid.png')
-    const result = analyzeCoupon(cv, image, { coupon: defaultCouponSpec() })
+    const result = asAligned(analyzeCoupon(cv, image, { coupon: defaultCouponSpec() }))
     const overlay = renderOverlayMat(cv, image, result)
     try {
       expect(overlay.channels()).toBe(3)

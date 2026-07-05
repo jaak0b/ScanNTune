@@ -3,7 +3,7 @@ import { describe, it, expect } from 'vitest'
 import { getCv, decodeFixtureBgr, stretchX, rotate } from '../helpers/cv'
 import { analyzeCoupon } from '../../src/engine/couponAnalyzer'
 import { combineScans } from '../../src/engine/scanCombiner'
-import { defaultCouponSpec } from '../../src/engine/types'
+import { asAligned, defaultCouponSpec } from '../../src/engine/types'
 import type { Mat, OpenCv } from '../../src/engine/opencv'
 
 // Mirrors ScanNTune.Tests/ScanCombinerTests.cs. The scanner reads +3% along its X axis (applied to
@@ -11,7 +11,7 @@ import type { Mat, OpenCv } from '../../src/engine/opencv'
 const ScannerXStretch = 1.03
 
 function analyze(cv: OpenCv, image: Mat) {
-  return analyzeCoupon(cv, image, { coupon: defaultCouponSpec() })
+  return asAligned(analyzeCoupon(cv, image, { coupon: defaultCouponSpec() }))
 }
 
 describe('scan combiner (fixture)', () => {

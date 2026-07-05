@@ -3,8 +3,8 @@
 [![Web CI](https://github.com/jaak0b/ScanNTune/actions/workflows/web-ci.yml/badge.svg)](https://github.com/jaak0b/ScanNTune/actions/workflows/web-ci.yml)
 [![License: MIT](https://img.shields.io/github/license/jaak0b/ScanNTune)](LICENSE)
 
-**Calibrate your 3D printer's XY scale and skew by scanning a printed coupon on an ordinary office scanner.
-No calipers, no measuring, no typing numbers into a calculator.**
+**Calibrate your 3D printer's X, Y and Z scale and skew (the XY, XZ and YZ planes) by scanning printed
+coupons on an ordinary office scanner. No calipers, no measuring, no typing numbers into a calculator.**
 
 The result is a ready-to-paste correction for your firmware or slicer, worked out from a flat scan of a
 printed coupon.
@@ -24,15 +24,23 @@ printed coupon.
 > including the scanner built into an all-in-one printer. No camera photos, no special hardware, and no high
 > end machine required. Scan at 600 DPI, which any normal home or office scanner can do.
 
+> [!WARNING]
+> **XY calibration is solid. XZ and YZ are experimental**: the standing-plate scans work, but the
+> correction math for those planes hasn't seen the same real-world validation as XY yet. Sanity-check the
+> results before trusting them on your printer.
+
 ## How you use it
 
 1. **Once per scanner:** scan any plastic card (a credit, debit or loyalty card) so ScanNTune learns your
    scanner's true scale.
-2. **Print the coupon:** [`calibration_coupon.stl`](calibration_coupon.stl), laid flat on your bed.
-3. **Scan it twice:** lay it on the scanner and scan it flat, then give it a quarter turn and scan it again.
-4. **Load and paste:** open both scans in ScanNTune, then copy the snippet for your firmware or slicer.
+2. **Print the plate(s):** one plate per plane you want to check. XY prints flat; XZ and YZ print standing
+   on-edge. Print only the planes you care about.
+3. **Scan each twice:** lay a plate on the scanner and scan it flat, then give it a quarter turn and scan it
+   again. Repeat for any other plates.
+4. **Drop them all in:** open every scan in ScanNTune at once. It sorts them by plate automatically and gives
+   you the firmware or slicer snippet for X/Y/Z scale and skew.
 
-That's it. The whole thing takes a couple of minutes once the coupon is printed.
+That's it. The whole thing takes a couple of minutes once the plates are printed.
 
 ---
 

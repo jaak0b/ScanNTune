@@ -1,11 +1,11 @@
 // @vitest-environment node
 import { describe, it, expect, beforeAll } from 'vitest'
 import { analyzeFixture } from '../helpers/cv'
-import type { CalibrationResult } from '../../src/engine/types'
+import type { AlignedResult } from '../../src/engine/types'
 
 // Mirrors ScanNTune.Tests/CouponAnalyzerEndToEndTests.cs against the perfect coupon render.
-let result: CalibrationResult
-let plain: CalibrationResult
+let result: AlignedResult
+let plain: AlignedResult
 
 beforeAll(async () => {
   result = await analyzeFixture([])

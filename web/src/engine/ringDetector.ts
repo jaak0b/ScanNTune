@@ -1,42 +1,90 @@
 import type { Mat, OpenCv } from './opencv'
 import type { DetectedRing } from './types'
 import { median } from './math'
-import { borderMean } from './cvUtils'
+import { analyzeBothPolarities } from './cvUtils'
+import type { Polarity } from './cvUtils'
 
-// Thresholds the part against the background on the HSV value channel, finds the enclosed holes, and
-// keeps the ring centres (the binary area centroid, immune to over/under extrusion). Ring holes are
-// separated from the much larger square lattice cells by a size cluster (radius-median filter), so
-// circularity is only a loose gate to drop slivers (real holes are rough, circularity ~0.2 to 0.8).
+// Thresholds the image on the HSV value channel (Otsu), finds the enclosed holes, and keeps the ring
+// centres (the binary area centroid, immune to over/under extrusion). Ring holes are separated from
+// the much larger square lattice cells by a size cluster (radius-median filter), so circularity is
+// only a loose gate to drop slivers (real holes are rough, circularity ~0.2 to 0.8).
+//
+// Which side of the threshold is the part is NOT guessed here. A border statistic proved unreliable:
+// a backing sheet that stops short of the scan bed leaves bright scanner-lid margins on the image
+// border, flipping the guess and turning dust specks into the only "holes". Instead detection runs
+// under BOTH polarities and the caller validates each candidate set against the coupon's known grid
+// and orientation marker (model selection against the coupon model), keeping the one that fits.
 
-export function detectRings(
+/** Whether the part is assumed brighter or darker than what is behind it. */
+export type RingPolarity = Polarity
+
+export interface DualDetection {
+  bright: DetectedRing[]
+  dark: DetectedRing[]
+}
+
+// When `masksOut` is passed, the binary mask each polarity ran findContours on (the value channel
+// thresholded, oriented part-white, and morphologically closed) is cloned into it so the caller can
+// show the user exactly what the detector searched. The caller owns and must delete both masks.
+export function detectRingsDual(
   cv: OpenCv,
   image: Mat,
   minHoleAreaPx = 40.0,
   minCircularity = 0.2,
-): DetectedRing[] {
-  if (!image || image.empty()) throw new Error('Image is null or empty.')
+  masksOut?: { bright?: Mat; dark?: Mat },
+): DualDetection {
+  const wantMasks = masksOut !== undefined
+  try {
+    return analyzeBothPolarities(cv, image, (partWhite, polarity) => {
+      const { rings, mask } = detectOnBinary(cv, partWhite, minHoleAreaPx, minCircularity, wantMasks)
+      // Hand each mask over as soon as it exists, so the catch below can free it if the other
+      // polarity's pass throws.
+      if (masksOut && mask) masksOut[polarity] = mask
+      return rings
+    })
+  } catch (e) {
+    masksOut?.bright?.delete()
+    masksOut?.dark?.delete()
+    if (masksOut) {
+      delete masksOut.bright
+      delete masksOut.dark
+    }
+    throw e
+  }
+}
 
-  const value = extractValueChannel(cv, image)
-  const binary = new cv.Mat()
+// Runs the hole search on one part-white binary. Closes small gaps first (on a copy; the input is
+// reused for the other polarity), clones the searched mask when asked, then keeps the interior
+// contours that pass the area and circularity gates and the radius cluster. The caller owns `mask`.
+function detectOnBinary(
+  cv: OpenCv,
+  partWhite: Mat,
+  minHoleAreaPx: number,
+  minCircularity: number,
+  wantMask: boolean,
+): { rings: DetectedRing[]; mask: Mat | null } {
+  const closed = new cv.Mat()
   const contours = new cv.MatVector()
   const hierarchy = new cv.Mat()
+  let mask: Mat | null = null
   try {
-    cv.threshold(value, binary, 0, 255, cv.THRESH_BINARY + cv.THRESH_OTSU)
-
-    // Make the part white and the background black, whichever way the contrast falls.
-    if (borderMean(cv, binary) > 127.0) cv.bitwise_not(binary, binary)
-
     const kernel = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(3, 3))
-    cv.morphologyEx(binary, binary, cv.MORPH_CLOSE, kernel)
+    cv.morphologyEx(partWhite, closed, cv.MORPH_CLOSE, kernel)
     kernel.delete()
 
-    cv.findContours(binary, contours, hierarchy, cv.RETR_CCOMP, cv.CHAIN_APPROX_NONE)
+    // Capture the mask before findContours, which can mutate its input.
+    if (wantMask) mask = closed.clone()
 
-    const parents = hierarchy.data32S // [next, prev, firstChild, parent] per contour
+    // CHAIN_APPROX_SIMPLE drops only collinear boundary points, so contourArea, arcLength, and the
+    // moments (all polygon integrals) are unchanged while large lattice-cell contours shrink a lot.
+    cv.findContours(closed, contours, hierarchy, cv.RETR_CCOMP, cv.CHAIN_APPROX_SIMPLE)
+
     const candidates: DetectedRing[] = []
     const count = contours.size()
     for (let i = 0; i < count; i++) {
-      if (parents[i * 4 + 3] < 0) continue // only interior contours (holes) can be ring centres
+      // hierarchy rows are [next, prev, firstChild, parent]; read data32S per iteration, since a
+      // wasm heap growth mid-loop detaches any TypedArray view captured before it.
+      if (hierarchy.data32S[i * 4 + 3] < 0) continue // only interior contours (holes) can be ring centres
 
       const contour = contours.get(i)
       try {
@@ -63,10 +111,12 @@ export function detectRings(
       }
     }
 
-    return filterByRadius(candidates)
+    return { rings: filterByRadius(candidates), mask }
+  } catch (e) {
+    mask?.delete() // don't orphan the captured mask when the contour pass throws
+    throw e
   } finally {
-    value.delete()
-    binary.delete()
+    closed.delete()
     contours.delete()
     hierarchy.delete()
   }
@@ -79,18 +129,3 @@ function filterByRadius(candidates: DetectedRing[]): DetectedRing[] {
   return candidates.filter((c) => c.radiusPx >= med * 0.5 && c.radiusPx <= med * 1.8)
 }
 
-function extractValueChannel(cv: OpenCv, image: Mat): Mat {
-  if (image.channels() === 1) return image.clone()
-  const hsv = new cv.Mat()
-  cv.cvtColor(image, hsv, cv.COLOR_BGR2HSV)
-  const channels = new cv.MatVector()
-  cv.split(hsv, channels)
-  // MatVector.get(i) hands out a new Mat wrapper that channels.delete() does not free, so delete it
-  // explicitly after cloning the value channel (V = max(B, G, R)).
-  const channel = channels.get(2)
-  const v = channel.clone()
-  channel.delete()
-  channels.delete()
-  hsv.delete()
-  return v
-}

@@ -28,11 +28,27 @@ export async function matToImageBitmap(cv: OpenCv, bgr: Mat): Promise<ImageBitma
   const rgba = new cv.Mat()
   cv.cvtColor(bgr, rgba, cv.COLOR_BGR2RGBA)
   try {
-    const clamped = new Uint8ClampedArray(rgba.data.length)
-    clamped.set(rgba.data)
-    const imgData = new ImageData(clamped, rgba.cols, rgba.rows)
-    return await createImageBitmap(imgData)
+    return await rgbaMatToBitmap(rgba)
   } finally {
     rgba.delete()
   }
+}
+
+// Convert a single-channel Mat (e.g. the binary threshold mask the detector searches) into a
+// transferable ImageBitmap.
+export async function grayMatToImageBitmap(cv: OpenCv, gray: Mat): Promise<ImageBitmap> {
+  const rgba = new cv.Mat()
+  cv.cvtColor(gray, rgba, cv.COLOR_GRAY2RGBA)
+  try {
+    return await rgbaMatToBitmap(rgba)
+  } finally {
+    rgba.delete()
+  }
+}
+
+async function rgbaMatToBitmap(rgba: Mat): Promise<ImageBitmap> {
+  const clamped = new Uint8ClampedArray(rgba.data.length)
+  clamped.set(rgba.data)
+  const imgData = new ImageData(clamped, rgba.cols, rgba.rows)
+  return await createImageBitmap(imgData)
 }

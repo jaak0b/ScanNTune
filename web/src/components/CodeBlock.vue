@@ -18,10 +18,17 @@ async function copy(): Promise<void> {
 <template>
   <div class="mb-2">
     <div v-if="caption" class="text-caption mb-1">{{ caption }}</div>
-    <v-sheet color="grey-darken-4" rounded border class="pa-3 d-flex align-start ga-2">
+    <v-sheet color="grey-darken-4" rounded border class="pa-2 d-flex align-center ga-2">
       <pre class="code flex-grow-1">{{ code }}</pre>
-      <v-btn size="small" variant="tonal" :prepend-icon="copied ? 'mdi-check' : 'mdi-content-copy'" @click="copy">
-        {{ copied ? 'Copied' : 'Copy' }}
+      <v-btn
+        icon
+        size="x-small"
+        variant="text"
+        :title="copied ? 'Copied' : 'Copy'"
+        :aria-label="copied ? 'Copied' : 'Copy'"
+        @click="copy"
+      >
+        <v-icon size="16">{{ copied ? 'mdi-check' : 'mdi-content-copy' }}</v-icon>
       </v-btn>
     </v-sheet>
   </div>

@@ -3,43 +3,62 @@ import { loadOpenCv } from '../engine/opencv'
 import type { Mat, OpenCv } from '../engine/opencv'
 import { analyzeCoupon } from '../engine/couponAnalyzer'
 import { measureCard } from '../engine/cardEdgeMeasurer'
-import { combineScans } from '../engine/scanCombiner'
-import { renderOverlayMat, renderDetectionOverlayMat } from '../engine/overlayRenderer'
-import { ScanAnalysisError } from '../engine/types'
-import type { AnalysisOptions, CalibrationResult, ScaleReferenceResult, TwoScanResult } from '../engine/types'
-import { decodeToBgr, matToImageBitmap } from './decode'
+import { renderOverlayMat, renderDetectionOverlayMat, contentRect } from '../engine/overlayRenderer'
+import { asAligned } from '../engine/types'
+import type {
+  AlignedResult,
+  CalibrationResult,
+  CouponSpec,
+  DetectedRing,
+  Orientation,
+  ScaleReferenceResult,
+} from '../engine/types'
+import { decodeToBgr, matToImageBitmap, grayMatToImageBitmap } from './decode'
 
-// The CV pipeline runs here, off the main thread, so the UI never freezes during analysis.
+// The CV pipeline runs here, off the main thread, so the UI never freezes during analysis. The worker
+// only ever analyses ONE scan (analyzeScan): decode, detect, map, fit, and render the two card images.
+// Reconciling scans into a printer result is pure arithmetic and runs on the main thread, so there is
+// no second worker round-trip.
 
-export interface TwoScanSuccess {
-  ok: true
-  result: TwoScanResult
-  overlayA: ImageBitmap
-  overlayB: ImageBitmap
+/**
+ * The outcome of analysing one scan: the always-present CalibrationResult (its measurement is null
+ * when the scan couldn't be aligned) plus the two images the card toggles between, cropped to the
+ * same frame. Only a genuinely unreadable image rejects; a misaligned scan resolves normally.
+ */
+export interface ScanProcessing {
+  result: CalibrationResult
+  overlay: ImageBitmap
+  mask: ImageBitmap | null
 }
 
-export interface ScanFailure {
-  ok: false
-  isFirst: boolean
-  ringCount: number
-  message: string
-  overlay: ImageBitmap | null
-}
-
-export type TwoScanResponse = TwoScanSuccess | ScanFailure
-
-type OneResult = { ok: true; result: CalibrationResult } | { ok: false; error: ScanAnalysisError }
-
-function analyzeOne(cv: OpenCv, image: Mat, options: AnalysisOptions): OneResult {
+async function analyzeScan(bytes: ArrayBuffer, coupon: CouponSpec): Promise<ScanProcessing> {
+  const cv = await loadOpenCv()
+  const img = await decodeToBgr(cv, bytes)
+  const maskHolder: { mask?: Mat } = {}
   try {
-    return { ok: true, result: analyzeCoupon(cv, image, options) }
-  } catch (e) {
-    if (e instanceof ScanAnalysisError) return { ok: false, error: e }
-    throw e
+    // pxPerMm is deferred to the main-thread reconcile, so a DPI change never re-runs this CV pass.
+    const result = analyzeCoupon(cv, img, { coupon, pxPerMm: null }, undefined, maskHolder)
+    const overlay = result.aligned
+      ? await renderOverlayBitmap(cv, img, asAligned(result))
+      : await renderDetectionBitmap(cv, img, result.rings)
+    let mask: ImageBitmap | null = null
+    try {
+      mask = maskHolder.mask
+        ? await renderMaskBitmap(cv, maskHolder.mask, result.rings, result.orientation)
+        : null
+    } catch (e) {
+      overlay.close() // don't orphan the overlay if the mask render fails
+      throw e
+    }
+    const transfer: Transferable[] = mask ? [overlay, mask] : [overlay]
+    return Comlink.transfer({ result, overlay, mask }, transfer)
+  } finally {
+    maskHolder.mask?.delete()
+    img.delete()
   }
 }
 
-async function renderOverlayBitmap(cv: OpenCv, image: Mat, result: CalibrationResult): Promise<ImageBitmap> {
+async function renderOverlayBitmap(cv: OpenCv, image: Mat, result: AlignedResult): Promise<ImageBitmap> {
   const mat = renderOverlayMat(cv, image, result)
   try {
     return await matToImageBitmap(cv, mat)
@@ -48,55 +67,30 @@ async function renderOverlayBitmap(cv: OpenCv, image: Mat, result: CalibrationRe
   }
 }
 
-async function failureResponse(
-  cv: OpenCv,
-  image: Mat,
-  error: ScanAnalysisError,
-  isFirst: boolean,
-): Promise<ScanFailure> {
-  let overlay: ImageBitmap | null = null
-  if (error.detectedRings.length > 0) {
-    const mat = renderDetectionOverlayMat(cv, image, error.detectedRings)
-    try {
-      overlay = await matToImageBitmap(cv, mat)
-    } finally {
-      mat.delete()
-    }
+async function renderDetectionBitmap(cv: OpenCv, image: Mat, rings: DetectedRing[]): Promise<ImageBitmap> {
+  const mat = renderDetectionOverlayMat(cv, image, rings)
+  try {
+    return await matToImageBitmap(cv, mat)
+  } finally {
+    mat.delete()
   }
-  const response: ScanFailure = {
-    ok: false,
-    isFirst,
-    ringCount: error.detectedRings.length,
-    message: error.message,
-    overlay,
-  }
-  return overlay ? Comlink.transfer(response, [overlay]) : response
 }
 
-async function analyzeTwoScans(
-  bytes1: ArrayBuffer,
-  bytes2: ArrayBuffer,
-  options: AnalysisOptions,
-): Promise<TwoScanResponse> {
-  const cv = await loadOpenCv()
-  const img1 = await decodeToBgr(cv, bytes1)
-  // Decode the second scan inside the try so a decode failure still deletes img1.
-  let img2: Mat | null = null
+// Crop the threshold mask to the same content rectangle the overlay used, so the Scan/Threshold toggle
+// shows the same frame at the same size. With no rings the whole mask is shown.
+async function renderMaskBitmap(
+  cv: OpenCv,
+  mask: Mat,
+  rings: DetectedRing[],
+  orientation: Orientation | null,
+): Promise<ImageBitmap> {
+  if (rings.length === 0) return await grayMatToImageBitmap(cv, mask)
+  const r = contentRect(rings, orientation, mask.cols, mask.rows)
+  const roi = mask.roi(new cv.Rect(r.x, r.y, r.width, r.height))
   try {
-    img2 = await decodeToBgr(cv, bytes2)
-    const a = analyzeOne(cv, img1, options)
-    if (!a.ok) return await failureResponse(cv, img1, a.error, true)
-    const b = analyzeOne(cv, img2, options)
-    if (!b.ok) return await failureResponse(cv, img2, b.error, false)
-
-    const result = combineScans(a.result, b.result)
-    const overlayA = await renderOverlayBitmap(cv, img1, a.result)
-    const overlayB = await renderOverlayBitmap(cv, img2, b.result)
-    const response: TwoScanSuccess = { ok: true, result, overlayA, overlayB }
-    return Comlink.transfer(response, [overlayA, overlayB])
+    return await grayMatToImageBitmap(cv, roi)
   } finally {
-    img1.delete()
-    img2?.delete()
+    roi.delete()
   }
 }
 
@@ -114,7 +108,7 @@ async function measureCardScan(
   }
 }
 
-const api = { analyzeTwoScans, measureCardScan }
+const api = { analyzeScan, measureCardScan }
 export type AnalysisApi = typeof api
 
 Comlink.expose(api)

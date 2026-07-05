@@ -4,8 +4,8 @@ import { fileURLToPath } from 'node:url'
 import type { Mat, OpenCv } from '../../src/engine/opencv'
 import { rgbaToBgrMat } from '../../src/engine/imageData'
 import { analyzeCoupon } from '../../src/engine/couponAnalyzer'
-import { defaultCouponSpec } from '../../src/engine/types'
-import type { AnalysisOptions, CalibrationResult } from '../../src/engine/types'
+import { asAligned, defaultCouponSpec } from '../../src/engine/types'
+import type { AlignedResult, AnalysisOptions } from '../../src/engine/types'
 import type { AffineSolverOptions } from '../../src/engine/affineSolver'
 
 // OpenCV.js exports a Promise-valued module, which Vite/Vitest's ESM interop turns into a broken
@@ -26,8 +26,16 @@ export function getCv(): Promise<OpenCv> {
 const PNG = (nodeRequire('pngjs') as { PNG: any }).PNG
 
 export function decodeFixtureBgr(cv: OpenCv, name: string): Mat {
-  const path = fileURLToPath(new URL(`../fixtures/${name}`, import.meta.url))
-  const png = PNG.sync.read(readFileSync(path))
+  return decodePngBgr(cv, new URL(`../fixtures/${name}`, import.meta.url))
+}
+
+// The real-scan fixtures shared with the Playwright suite.
+export function decodeE2eFixtureBgr(cv: OpenCv, name: string): Mat {
+  return decodePngBgr(cv, new URL(`../../e2e/fixtures/${name}`, import.meta.url))
+}
+
+function decodePngBgr(cv: OpenCv, url: URL): Mat {
+  const png = PNG.sync.read(readFileSync(fileURLToPath(url)))
   return rgbaToBgrMat(cv, { data: png.data, width: png.width, height: png.height })
 }
 
@@ -74,12 +82,13 @@ export function rotate(cv: OpenCv, src: Mat, degrees: number): Mat {
 
 export type Transform = (cv: OpenCv, m: Mat) => Mat
 
-// Decode TestData_2solid.png, apply the transforms in order, analyze, and clean up every Mat.
+// Decode TestData_2solid.png, apply the transforms in order, analyze, and clean up every Mat. The
+// fixture always aligns, so this narrows to an AlignedResult for the tests that read its measurement.
 export async function analyzeFixture(
   transforms: Transform[],
   options?: Partial<AnalysisOptions>,
   solverOptions?: AffineSolverOptions,
-): Promise<CalibrationResult> {
+): Promise<AlignedResult> {
   const cv = await getCv()
   let mat = decodeFixtureBgr(cv, 'TestData_2solid.png')
   const created: Mat[] = [mat]
@@ -89,7 +98,7 @@ export async function analyzeFixture(
     mat = next
   }
   try {
-    return analyzeCoupon(cv, mat, { coupon: defaultCouponSpec(), ...options }, solverOptions)
+    return asAligned(analyzeCoupon(cv, mat, { coupon: defaultCouponSpec(), ...options }, solverOptions))
   } finally {
     for (const m of created) m.delete()
   }

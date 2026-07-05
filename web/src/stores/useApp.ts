@@ -1,19 +1,18 @@
 import { defineStore } from 'pinia'
 import { ref, shallowRef } from 'vue'
-import type { CouponSpec, TwoScanResult } from '../engine/types'
+import type { CouponSpec, MultiPlaneResult } from '../engine/types'
 
-export type Screen = 'scan' | 'calibration' | 'results'
+export type Screen = 'scan' | 'calibration'
 
 export interface ResultPayload {
-  result: TwoScanResult
-  overlayA: ImageBitmap | null
-  overlayB: ImageBitmap | null
+  result: MultiPlaneResult
   coupon: CouponSpec
 }
 
 export const useApp = defineStore('app', () => {
   const screen = ref<Screen>('scan')
-  // shallowRef: the payload holds ImageBitmaps and a large result object we never deep-mutate.
+  // shallowRef: the payload holds a large result object we never deep-mutate. The scan calibration
+  // page reuses each scan's annotated overlay straight from the scans store, which owns them.
   const payload = shallowRef<ResultPayload | null>(null)
 
   function goScan(): void {
@@ -22,10 +21,12 @@ export const useApp = defineStore('app', () => {
   function goCalibration(): void {
     screen.value = 'calibration'
   }
-  function showResults(p: ResultPayload): void {
+  function setResults(p: ResultPayload): void {
     payload.value = p
-    screen.value = 'results'
+  }
+  function clearResults(): void {
+    payload.value = null
   }
 
-  return { screen, payload, goScan, goCalibration, showResults }
+  return { screen, payload, goScan, goCalibration, setResults, clearResults }
 })

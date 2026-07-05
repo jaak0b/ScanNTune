@@ -2,22 +2,21 @@
 import { describe, it, expect } from 'vitest'
 import { getCv, blankBgr } from '../helpers/cv'
 import { analyzeCoupon } from '../../src/engine/couponAnalyzer'
-import { ScanAnalysisError, defaultCouponSpec } from '../../src/engine/types'
+import { defaultCouponSpec } from '../../src/engine/types'
 
-// Mirrors ScanNTune.Tests/DiagnosticFailureTests.cs.
-describe('diagnostic failure', () => {
-  it('a blank scan throws ScanAnalysisError carrying the detected rings', async () => {
+// A scan that can't be aligned is a normal outcome, not an exception: analyzeCoupon returns a result
+// with the detection carried and the measurement null, so the UI can show what it found.
+describe('unalignable scan', () => {
+  it('a blank scan returns an unaligned result, not a throw', async () => {
     const cv = await getCv()
     const blank = blankBgr(cv, 600)
     try {
-      let thrown: unknown
-      try {
-        analyzeCoupon(cv, blank, { coupon: defaultCouponSpec() })
-      } catch (e) {
-        thrown = e
-      }
-      expect(thrown).toBeInstanceOf(ScanAnalysisError)
-      expect((thrown as ScanAnalysisError).detectedRings).toBeDefined()
+      const result = analyzeCoupon(cv, blank, { coupon: defaultCouponSpec() })
+      expect(result.aligned).toBe(false)
+      expect(result.orientation).toBeNull()
+      expect(result.xScalePercent).toBeNull()
+      expect(result.rings).toBeDefined()
+      expect(result.ringsExpected).toBe(23)
     } finally {
       blank.delete()
     }

@@ -17,6 +17,8 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+        with:
+          lfs: true # the unit polarity tests read the real scan fixtures under web/e2e/fixtures
       - uses: actions/setup-node@v4
         with:
           node-version: 22

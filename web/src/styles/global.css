@@ -1,0 +1,11 @@
+/* Vuetify's default disabled state is just a slight opacity dip on the same coloured control, easy to
+   mistake for enabled at a glance. Desaturate and dim it further so "disabled" reads unmistakably. */
+.v-btn--disabled,
+.v-input--disabled .v-field,
+.v-selection-control--disabled {
+  opacity: 0.42 !important;
+  filter: saturate(0.35);
+}
+.v-btn--disabled {
+  cursor: not-allowed;
+}

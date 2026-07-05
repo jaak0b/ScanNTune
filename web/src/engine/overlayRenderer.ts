@@ -1,5 +1,5 @@
 import type { Mat, OpenCv } from './opencv'
-import type { CalibrationResult, DetectedRing, Orientation } from './types'
+import type { AlignedResult, DetectedRing, Orientation } from './types'
 import { median } from './math'
 
 const radiusMedian = (rings: DetectedRing[]): number => median(rings.map((r) => r.radiusPx))
@@ -16,7 +16,7 @@ const AXIS_COLOR = [255, 255, 0, 255] // cyan
 const SHIFT = 3
 const SCALE = 1 << SHIFT
 
-export function renderOverlayMat(cv: OpenCv, image: Mat, result: CalibrationResult): Mat {
+export function renderOverlayMat(cv: OpenCv, image: Mat, result: AlignedResult): Mat {
   const canvas = toBgr(cv, image)
   const thickness = strokeThickness(image)
   drawRings(cv, canvas, result.rings, thickness)
@@ -37,13 +37,13 @@ export function renderOverlayMat(cv: OpenCv, image: Mat, result: CalibrationResu
   cv.circle(canvas, origin, thickness * 3 * SCALE, originColor, thickness, cv.LINE_AA, SHIFT)
   cv.arrowedLine(canvas, origin, axisEnd, axisColor, thickness + 1, cv.LINE_AA, SHIFT, 0.2)
 
-  return crop(cv, canvas, result.rings, orientation, medR)
+  return crop(cv, canvas, result.rings, orientation)
 }
 
 export function renderDetectionOverlayMat(cv: OpenCv, image: Mat, rings: DetectedRing[]): Mat {
   const canvas = toBgr(cv, image)
   drawRings(cv, canvas, rings, strokeThickness(image))
-  return crop(cv, canvas, rings, null, radiusMedian(rings))
+  return crop(cv, canvas, rings, null)
 }
 
 function toBgr(cv: OpenCv, image: Mat): Mat {
@@ -71,17 +71,17 @@ function fixedPoint(cv: OpenCv, x: number, y: number) {
   return new cv.Point(Math.round(x * SCALE), Math.round(y * SCALE))
 }
 
-// Crops to the content and takes ownership of the canvas: returns either the canvas (nothing
-// detected) or a new cropped Mat, deleting the original in the latter case.
-function crop(
-  cv: OpenCv,
-  canvas: Mat,
+// The tight content rectangle (rings, plus the origin/+X arrow for a full result) in image pixels.
+// Exported so the threshold-mask view can be cropped to the exact same frame as the overlay, keeping
+// the Scan/Threshold toggle from jumping. Assumes rings is non-empty (the caller shows the full frame
+// when nothing was detected).
+export function contentRect(
   rings: DetectedRing[],
   orientation: Orientation | null,
-  medR: number,
-): Mat {
-  if (rings.length === 0) return canvas
-
+  cols: number,
+  rows: number,
+): { x: number; y: number; width: number; height: number } {
+  const medR = radiusMedian(rings)
   let minX = Number.MAX_VALUE
   let minY = Number.MAX_VALUE
   let maxX = -Number.MAX_VALUE
@@ -102,12 +102,19 @@ function crop(
   }
 
   const margin = Math.max(medR * 1.2, (maxX - minX) * 0.05)
-  const x0 = clampInt(Math.floor(minX - margin), 0, canvas.cols - 1)
-  const y0 = clampInt(Math.floor(minY - margin), 0, canvas.rows - 1)
-  const x1 = clampInt(Math.ceil(maxX + margin), x0 + 1, canvas.cols)
-  const y1 = clampInt(Math.ceil(maxY + margin), y0 + 1, canvas.rows)
+  const x0 = clampInt(Math.floor(minX - margin), 0, cols - 1)
+  const y0 = clampInt(Math.floor(minY - margin), 0, rows - 1)
+  const x1 = clampInt(Math.ceil(maxX + margin), x0 + 1, cols)
+  const y1 = clampInt(Math.ceil(maxY + margin), y0 + 1, rows)
+  return { x: x0, y: y0, width: x1 - x0, height: y1 - y0 }
+}
 
-  const roi = canvas.roi(new cv.Rect(x0, y0, x1 - x0, y1 - y0))
+// Crops to the content and takes ownership of the canvas: returns either the canvas (nothing
+// detected) or a new cropped Mat, deleting the original in the latter case.
+function crop(cv: OpenCv, canvas: Mat, rings: DetectedRing[], orientation: Orientation | null): Mat {
+  if (rings.length === 0) return canvas
+  const r = contentRect(rings, orientation, canvas.cols, canvas.rows)
+  const roi = canvas.roi(new cv.Rect(r.x, r.y, r.width, r.height))
   const cropped = roi.clone()
   roi.delete()
   canvas.delete()

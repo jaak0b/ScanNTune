@@ -1,26 +1,42 @@
 // =====================================================================
 //  Printer Auto-Calibrate  -  Scan-based shrinkage / skew coupon
 // ---------------------------------------------------------------------
-//  An open lattice of measurement RINGS held together by thin ribs.
+//  An open lattice of measurement RINGS held together by thin ribs. The
+//  ring CENTRES give true scale and skew for the plate's plane (centres
+//  are immune to over/under-extrusion: extrusion changes a ring's wall
+//  width, not its centre).
 //
-//  How it is meant to be used:
-//    1. Print this part flat on the bed (no supports, single material).
-//    2. Lay it on a flatbed scanner with a contrasting backing sheet
-//       and scan at high DPI (>= 1200). Put the BED face (the chamfered
-//       underside) down on the glass.
-//    3. OpenCV fits a circle to every ring; the *centres* give true
-//       X / Y scale and skew (immune to over/under-extrusion, because
-//       extrusion changes a ring's wall width but not its centre).
-//       The ring outer/inner diameters are read separately as a flow
-//       (over-extrusion) diagnostic.
+//  One parametric design, three plates selected by `plane`:
+//    XY  - printed FLAT on the bed, scanned face down. Measures X/Y.
+//    XZ  - the same lattice, thick and printed ON-EDGE (standing), then
+//          laid flat to scan. Measures X/Z.
+//    YZ  - as XZ, rotated. Measures Y/Z.
+//  Each is exported pre-oriented so it drops onto the slicer bed ready to
+//  print. Render one at a time, e.g.:
+//    openscad -D 'plane="XZ"' -o calibration_coupon_xz.stl calibration_coupon.scad
 //
-//  Rigidity:  the outer ribs are a thicker frame and the interior ribs
-//  are full height, so the lattice does not bow when removed from the bed.
-//  Elephant's foot:  every feature has a 45 deg chamfer on its underside,
-//  so first-layer squish expands into the relief instead of past nominal.
+//  Orientation marker: the origin-corner ring AND its +X neighbour are
+//  printed SOLID (no hole). origin -> neighbour is the plate's +X, which
+//  pins rotation and tells a mirror-flip from a rotation at any placement.
+//
+//  Plane-ID: 1/2/3 DIAGONAL ribs across the bottom-row lattice cells next to
+//  the origin marker encode the plane (XY=1, XZ=2, YZ=3). A diagonal is a
+//  full-width solid bar between two ring centres, so stringing, shadow and
+//  over-extrusion (which only ADD dark to a scan) cannot erase it, unlike the
+//  earlier drilled dots which closed up on rough on-edge prints. A positive
+//  count means "no diagonals" reads as an unknown plate rather than a silent XY.
+//
+//  On-edge holes (XZ/YZ only): a symmetric bicone funnel opens the hole
+//  toward BOTH faces (so the plate scans equally well either side down) and
+//  narrows to a short central throat, the only part that bridges when the
+//  hole prints horizontally. Symmetric about the hole axis: the centre is
+//  unmoved, and there is no "correct" side to scan.
 //
 //  Everything below is parametric - change a value and re-render.
 // =====================================================================
+
+// ---- Plate selection ------------------------------------------------
+plane = "XY";       // "XY" | "XZ" | "YZ"  (override with -D on the CLI)
 
 // ---- Grid -----------------------------------------------------------
 baseline   = 100;   // centre-to-centre span of the outermost rings (mm)
@@ -29,92 +45,151 @@ grid_n     = 5;     // rings per side  -> grid_n x grid_n rings
 // ---- Rings ----------------------------------------------------------
 ring_outer_d = 9;   // outer diameter of each ring (mm)
 ring_wall    = 2.0; // wall thickness (mm)  -> inner_d = outer_d - 2*wall
-ring_h       = 2.0; // ring height above the bed (mm)
+ring_h       = 2.0; // FLAT (XY) plate thickness above the bed (mm)
+
+// ---- On-edge plates (XZ / YZ) ---------------------------------------
+plate_thickness = 6.0;   // slab thickness of a standing plate (mm)
+wall_boost      = 1.0;   // extra ring-wall + rib material on standing plates (mm)
+                         // (the 5 mm measured hole is unchanged; only more material
+                         //  around it, so the thin vertical features print cleaner)
+funnel_depth    = 2.25;  // countersink depth from EACH face (bicone: both faces open, so the plate
+                         // scans equally well either side down)
+funnel_mouth_d  = ring_outer_d - 2 * ring_wall + 3;  // countersink mouth (mm) = inner_d + 3
+                         // central throat = plate_thickness - 2*funnel_depth (straight bore)
+base_h     = 6.0;   // solid COPLANAR skirt below the bottom ring row (mm); no lip,
+                    // so a standing plate still lies flat to scan and the lid closes
+foot_depth = 0.0;   // >0 adds a printed foot behind the plate for print stability,
+                    // but then the scanner lid can't close. Default 0 keeps the plate
+                    // a flat slab: use a peel-off slicer brim for bed adhesion instead
 
 // ---- Ribs / frame (the lattice that holds the rings together) -------
 rib_w   = 2.5;      // width of the interior ribs (mm)
 frame_w = 3.0;      // width of the four outer-edge ribs (stiff frame, mm)
-rib_h   = 2.0;      // rib height (mm) - full height for maximum rigidity
+rib_h   = 2.0;      // FLAT (XY) rib height (mm)
 
-// ---- Anti elephant's-foot chamfer (underside of the whole part) -----
+// ---- Anti elephant's-foot chamfer (FLAT XY plate underside only) ----
 chamfer   = 0.4;    // horizontal relief at the bottom edge (mm)
 chamfer_h = 0.4;    // height of the chamfer band (mm); = chamfer -> 45 deg
-                    // (keep chamfer < ring_wall/2 or the bottom wall vanishes)
 
 // ---- Orientation marker ---------------------------------------------
-// The origin corner (min-X, min-Y) ring AND its +X neighbour are printed as
-// SOLID disks (no hole). That pair sits INSIDE the grid outline - it doesn't
-// protrude, so the part stays reusable - yet the software reads it easily:
-// solid vs holed is an obvious difference. The vector from the corner solid
-// to the adjacent solid is the coupon's +X, which pins orientation at ANY
-// rotation and tells a mirror-flip apart from a rotation.
 fiducial_solid = true;   // make the two orientation rings solid disks
 
-// ---- Optional printed reference strip -------------------------------
-// NOTE: a printed reference shrinks too, so for TRUE scanner-scale
-// calibration prefer a non-printed insert (steel rule / PCB) laid in
-// the same scan. This strip is only a coarse sanity check -> off by default.
+// ---- Plane-ID diagonals ----------------------------------------------
+// Solid diagonal ribs across the bottom-row cells starting at the origin
+// marker: cell k runs from ring (k,0) up to ring (k+1,1). Additive dark
+// geometry, so a rough print can only make the code MORE visible, never
+// erase it. Count encodes the plane (XY=1, XZ=2, YZ=3). Width matches the
+// interior ribs so the code prints like the rest of the lattice.
+
+// ---- Optional printed reference strip (FLAT XY only) ----------------
 include_reference = false;
 ref_pitch = 10;     // spacing of reference dots (mm)
 ref_dot_d = 2.5;    // reference dot diameter (mm)
 
 // ---- Quality --------------------------------------------------------
-$fn = 96;           // facets per circle (higher = smoother edges)
+// The solid STL export is fine at 96. The flat scan_view projection, however, needs a
+// high facet count (pass -D '$fn=200' when rendering fixtures): at low $fn the union of
+// ribs and faceted ring walls leaves hairline slivers that break a hole's enclosure and
+// drop a ring. (A conditional $fn here does not work: OpenSCAD resolves it before the
+// scan_view override, so the CLI flag is the reliable lever.)
+$fn = 96;
+
+// ---- Test render ----------------------------------------------------
+// When true, emit a flat 2D projection of the scanned face (dark on light)
+// instead of the pre-oriented STL. Used to generate synthetic "scan" images
+// for the engine tests: the ring/hole/diagonal centres are exactly the model's, so
+// the pipeline and plane-ID can be verified against known geometry.
+scan_view = false;
+scan_rotate = 0;    // in-plane rotation (deg) of the scan_view image, for a quarter-turn pair
 
 // =====================================================================
 //  Derived values  (don't edit)
 // =====================================================================
+on_edge   = (plane != "XY");
+thickness = on_edge ? plate_thickness : ring_h;
+cf        = on_edge ? 0 : chamfer;      // no elephant-foot relief when standing
+cfh       = on_edge ? 0 : chamfer_h;
+diag_count = (plane == "XY") ? 1 : (plane == "XZ") ? 2 : 3;
+
 pitch   = baseline / (grid_n - 1);
 inner_d = ring_outer_d - 2 * ring_wall;
 half    = baseline / 2;
 
+// standing plates get thicker rings/ribs; the flat XY plate is unchanged
+ring_outer  = on_edge ? ring_outer_d + 2 * wall_boost : ring_outer_d;
+rib_w_eff   = on_edge ? rib_w + wall_boost : rib_w;
+frame_w_eff = on_edge ? frame_w + wall_boost : frame_w;
+
 function pos(i) = i * pitch - half;   // centre coordinate of index i
 
-echo(str("pitch = ", pitch, " mm,  inner_d = ", inner_d,
-         " mm,  rings = ", grid_n * grid_n,
-         ",  bottom wall = ", ring_wall - 2 * chamfer, " mm"));
+// where the plate edge falls
+edge_lo   = pos(0) - ring_outer / 2;
+edge_hi   = pos(grid_n - 1) + ring_outer / 2;
+zlift     = half + ring_outer / 2 + base_h; // lift a standing plate onto z=0
+
+echo(str("plane = ", plane, ",  pitch = ", pitch, " mm,  inner_d = ", inner_d,
+         " mm,  rings = ", grid_n * grid_n, ",  thickness = ", thickness,
+         " mm,  diagonals = ", diag_count));
 assert(inner_d > rib_w + 1,
        "inner_d too small for the rib width - increase ring_outer_d or reduce ring_wall/rib_w");
 assert(chamfer < ring_wall / 2,
        "chamfer too large - it would eat through the bottom of the ring wall");
+assert(diag_count <= grid_n - 1,
+       "not enough bottom-row cells for the plane-ID diagonals - increase grid_n");
+assert(2 * funnel_depth < plate_thickness,
+       "2*funnel_depth must leave a central throat - reduce funnel_depth below plate_thickness/2");
+assert(funnel_mouth_d > inner_d && funnel_mouth_d <= ring_outer,
+       "funnel_mouth_d must be between inner_d and the (boosted) ring outer diameter");
 
 // =====================================================================
-//  Chamfered primitives  (45 deg relief on the underside)
+//  Chamfered primitives  (45 deg relief on the underside; off when on-edge)
 // =====================================================================
 module ch_cyl(d, h) {                 // solid post, chamfered at the bottom
-    if (chamfer > 0 && chamfer_h > 0) {
-        cylinder(d1 = max(0.1, d - 2 * chamfer), d2 = d, h = chamfer_h);
-        translate([0, 0, chamfer_h]) cylinder(d = d, h = h - chamfer_h);
+    if (cf > 0 && cfh > 0) {
+        cylinder(d1 = max(0.1, d - 2 * cf), d2 = d, h = cfh);
+        translate([0, 0, cfh]) cylinder(d = d, h = h - cfh);
     } else cylinder(d = d, h = h);
 }
 
 module ch_hole(d, h) {                 // hole cutter, relieved at the bottom
-    if (chamfer > 0 && chamfer_h > 0) {
-        translate([0, 0, -0.5]) cylinder(d = d + 2 * chamfer, h = 0.5);
-        cylinder(d1 = d + 2 * chamfer, d2 = d, h = chamfer_h);
-        translate([0, 0, chamfer_h]) cylinder(d = d, h = h - chamfer_h + 0.5);
+    if (cf > 0 && cfh > 0) {
+        translate([0, 0, -0.5]) cylinder(d = d + 2 * cf, h = 0.5);
+        cylinder(d1 = d + 2 * cf, d2 = d, h = cfh);
+        translate([0, 0, cfh]) cylinder(d = d, h = h - cfh + 0.5);
     } else translate([0, 0, -0.5]) cylinder(d = d, h = h + 1);
+}
+
+module ch_hole_funnel(mouth_d, bore_d, fdepth, thick) {   // symmetric bicone: funnels from BOTH faces
+    // Opens wide at each face and narrows to a short straight throat in the middle, so the plate
+    // scans equally well from either side down; symmetric, so the hole centre is unmoved. The throat
+    // is the only part that bridges when the hole prints horizontally (on-edge).
+    land = thick - 2 * fdepth;
+    translate([0, 0, -0.5]) cylinder(d = mouth_d, h = 0.5 + 0.001);
+    cylinder(d1 = mouth_d, d2 = bore_d, h = fdepth);                                  // funnel from face 0
+    translate([0, 0, fdepth]) cylinder(d = bore_d, h = land);                         // central throat
+    translate([0, 0, fdepth + land]) cylinder(d1 = bore_d, d2 = mouth_d, h = fdepth); // funnel to far face
+    translate([0, 0, thick]) cylinder(d = mouth_d, h = 0.5 + 0.001);
 }
 
 module ch_bar_x(x0, yc, L, w, h) {     // bar along +X, chamfered long sides
     translate([x0, yc, 0])
-        if (chamfer > 0 && chamfer_h > 0) {
+        if (cf > 0 && cfh > 0) {
             hull() {
-                translate([0, -(w / 2 - chamfer), 0]) cube([L, w - 2 * chamfer, 0.01]);
-                translate([0, -w / 2, chamfer_h])     cube([L, w, 0.01]);
+                translate([0, -(w / 2 - cf), 0]) cube([L, w - 2 * cf, 0.01]);
+                translate([0, -w / 2, cfh])      cube([L, w, 0.01]);
             }
-            translate([0, -w / 2, chamfer_h]) cube([L, w, h - chamfer_h]);
+            translate([0, -w / 2, cfh]) cube([L, w, h - cfh]);
         } else translate([0, -w / 2, 0]) cube([L, w, h]);
 }
 
 module ch_bar_y(xc, y0, L, w, h) {     // bar along +Y, chamfered long sides
     translate([xc, y0, 0])
-        if (chamfer > 0 && chamfer_h > 0) {
+        if (cf > 0 && cfh > 0) {
             hull() {
-                translate([-(w / 2 - chamfer), 0, 0]) cube([w - 2 * chamfer, L, 0.01]);
-                translate([-w / 2, 0, chamfer_h])     cube([w, L, 0.01]);
+                translate([-(w / 2 - cf), 0, 0]) cube([w - 2 * cf, L, 0.01]);
+                translate([-w / 2, 0, cfh])      cube([w, L, 0.01]);
             }
-            translate([-w / 2, 0, chamfer_h]) cube([w, L, h - chamfer_h]);
+            translate([-w / 2, 0, cfh]) cube([w, L, h - cfh]);
         } else translate([-w / 2, 0, 0]) cube([w, L, h]);
 }
 
@@ -123,40 +198,70 @@ module ch_bar_y(xc, y0, L, w, h) {     // bar along +Y, chamfered long sides
 // =====================================================================
 module ribs() {
     for (j = [0 : grid_n - 1])          // rows (along X)
-        ch_bar_x(-half, pos(j), baseline,
-                 (j == 0 || j == grid_n - 1) ? frame_w : rib_w, rib_h);
-    for (i = [0 : grid_n - 1])          // columns (along Y)
+        // On a standing plate the solid base is the bottom edge, so skip the bottom frame rib: a rib
+        // just above the base would trap a thin gap that reads as spurious holes near the marker.
+        if (!(on_edge && j == 0))
+            ch_bar_x(-half, pos(j), baseline,
+                     (j == 0 || j == grid_n - 1) ? frame_w_eff : rib_w_eff, thickness);
+    for (i = [0 : grid_n - 1])          // columns (along the other axis)
         ch_bar_y(pos(i), -half, baseline,
-                 (i == 0 || i == grid_n - 1) ? frame_w : rib_w, rib_h);
+                 (i == 0 || i == grid_n - 1) ? frame_w_eff : rib_w_eff, thickness);
+}
+
+module base_block() {                   // standing-plate foundation: solid fill from the
+                                        // bottom edge up to just below the bottom-row holes
+    yb = -half - ring_outer / 2 - base_h;
+    yt = -half - inner_d / 2 - 1;       // stop 1 mm short of the bottom holes
+    translate([edge_lo, yb, 0])
+        cube([edge_hi - edge_lo, yt - yb, thickness + foot_depth]);
+}
+
+module plane_diagonals() {              // plane-ID code: solid diagonals across bottom-row cells
+    for (k = [0 : diag_count - 1])
+        hull() {
+            translate([pos(k),     pos(0), 0]) ch_cyl(rib_w_eff, thickness);
+            translate([pos(k + 1), pos(1), 0]) ch_cyl(rib_w_eff, thickness);
+        }
+}
+
+module ring_holes() {                   // punch every ring except the two solid markers
+    for (i = [0 : grid_n - 1])
+        for (j = [0 : grid_n - 1])
+            if (!(fiducial_solid && j == 0 && (i == 0 || i == 1)))
+                translate([pos(i), pos(j), 0])
+                    if (on_edge) ch_hole_funnel(funnel_mouth_d, inner_d, funnel_depth, thickness);
+                    else         ch_hole(inner_d, thickness);
 }
 
 module reference_strip() {
-    ys  = -half - ring_outer_d * 1.5;
+    ys  = -half - ring_outer * 1.5;
     cnt = floor(baseline / ref_pitch);
     for (k = [0 : cnt])
-        translate([-half + k * ref_pitch, ys, 0]) ch_cyl(ref_dot_d, ring_h);
-    ch_bar_x(-half, ys, baseline, rib_w, rib_h);                 // backbone
-    for (lx = [pos(0), pos(grid_n - 1)])                         // links up
-        ch_bar_y(lx, ys, (-half) - ys, rib_w, rib_h);
+        translate([-half + k * ref_pitch, ys, 0]) ch_cyl(ref_dot_d, thickness);
+    ch_bar_x(-half, ys, baseline, rib_w, thickness);            // backbone
+    for (lx = [pos(0), pos(grid_n - 1)])                        // links up
+        ch_bar_y(lx, ys, (-half) - ys, rib_w, thickness);
 }
 
-module coupon() {
+module plate() {
     difference() {
         union() {
             for (i = [0 : grid_n - 1])
                 for (j = [0 : grid_n - 1])
-                    translate([pos(i), pos(j), 0]) ch_cyl(ring_outer_d, ring_h);
+                    translate([pos(i), pos(j), 0]) ch_cyl(ring_outer, thickness);
             ribs();
-            if (include_reference) reference_strip();
+            plane_diagonals();
+            if (on_edge) base_block();
+            if (include_reference && !on_edge) reference_strip();
         }
-        // punch the holes AFTER the union, so ribs crossing a ring never
-        // block its centre. Skip the two solid orientation rings: the origin
-        // corner (0,0) and its +X neighbour (1,0).
-        for (i = [0 : grid_n - 1])
-            for (j = [0 : grid_n - 1])
-                if (!(fiducial_solid && j == 0 && (i == 0 || i == 1)))
-                    translate([pos(i), pos(j), 0]) ch_hole(inner_d, ring_h);
+        ring_holes();
     }
 }
 
-coupon();
+// =====================================================================
+//  Export orientation  (pre-oriented so it loads sitting on the bed)
+// =====================================================================
+if (scan_view)          rotate([0, 0, scan_rotate]) color([0.12, 0.12, 0.12]) projection(cut = false) plate();
+else if (plane == "XY") plate();
+else if (plane == "XZ") translate([0, 0, zlift]) rotate([90, 0, 0]) plate();
+else /* YZ */           rotate([0, 0, 90]) translate([0, 0, zlift]) rotate([90, 0, 0]) plate();

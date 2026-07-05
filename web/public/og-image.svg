@@ -19,7 +19,7 @@
   <g transform="translate(520 240)" fill="#e7e9ee" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif">
     <text x="0" y="0" font-size="86" font-weight="700">ScanNTune</text>
     <text x="4" y="70" font-size="34" font-weight="500" fill="#818cf8">3D printer calibration from a scan</text>
-    <text x="4" y="132" font-size="27" fill="#aeb3bd">XY shrinkage and skew from a flatbed scan.</text>
+    <text x="4" y="132" font-size="27" fill="#aeb3bd">X/Y/Z shrinkage and skew from a flatbed scan.</text>
     <text x="4" y="170" font-size="27" fill="#aeb3bd">No calipers. Klipper, Marlin, RRF, slicer output.</text>
   </g>
 </svg>

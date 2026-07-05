@@ -92,6 +92,12 @@ export function solveAffine(
     skewDegrees,
     rmsResidualPx: rms,
     pointCount: n,
+    a,
+    b,
+    c: c2,
+    d,
+    tx,
+    ty,
   }
 }
 

@@ -82,11 +82,25 @@ The measurement engine was ported 1:1 from a retired C# implementation and valid
 real scans (the card recovers ~23.6 px/mm; the two-scan flow completes on 35 MP scans without freezing).
 Do not change the ported math without re-validating those fixtures (rule 1).
 
-The coupon model source (`calibration_coupon.scad`) and its exported `calibration_coupon.stl` live at the
-repo root (the STL is also copied into `web/public/` for the in-app download). Re-render the model with
-OpenSCAD: `openscad -o calibration_coupon.stl calibration_coupon.scad` (~90s CGAL render); preview a top
-view with `openscad -o out.png --projection=ortho --camera=0,0,0,0,0,0,150 --viewall --autocenter
-calibration_coupon.scad`.
+The coupon model source (`calibration_coupon.scad`) lives at the repo root. It is one parametric design
+with a `plane` parameter that renders three pre-oriented plates: `XY` (flat), `XZ` and `YZ` (thick,
+standing on-edge, funnel-holed, with a solid base). Each is exported and copied into `web/public/` for the
+in-app download, lowercase-named: `calibration_coupon_{xy,xz,yz}.stl`. Re-render one with
+`openscad -D 'plane="XZ"' -o web/public/calibration_coupon_xz.stl calibration_coupon.scad` (~90s CGAL).
+Note: PowerShell variable names are case-insensitive, so do NOT drive the output filename from a
+`$P = $p.ToUpper()` variable in a loop; it aliases `$p` and uppercases the filename (Pages is
+case-sensitive). Preview a plate with `--projection=ortho --camera=0,0,0,0,0,0,180 --viewall --autocenter`.
+
+The engine test fixtures (`web/tests/fixtures/render_{xy,xz,yz}.png` and the six
+`web/e2e/fixtures/plate_{xy,xz,yz}_{0,90}.png`) are rendered from the same model with
+`-D scan_view=true -D '$fn=200'` (and `-D scan_rotate=90` for the quarter-turn pair): a flat 2D projection
+of the scanned face, dark on light. The high `$fn` is REQUIRED for the projection (at 96 the rib/ring
+union leaves hairline slivers that drop a ring); it must be a CLI flag, not a conditional in the .scad,
+because OpenSCAD resolves `$fn` before the `scan_view` override. Because the ring/hole/dot centres are
+exactly the model's, these verify ring detection on the new geometry AND the plane-ID read against known
+geometry. Filenames must be lowercase (Pages/CI are case-sensitive; PowerShell's case-insensitive
+variables make `$P = $p.ToUpper()` silently uppercase a filename). Re-render if the measured geometry
+changes.
 
 ## Coupon & orientation
 
@@ -119,9 +133,10 @@ shipped source, comments, or UI text: they are guidance for how to work, not doc
    `TestData_2solid.png` fixture: it must not regress there, and only then judge it on real scans.
 
 2. **No silently swallowed errors.** A `catch` must do something meaningful: surface the error to the user,
-   rethrow, or return a value the caller can act on. Never leave an empty `catch`. The engine throws typed
-   errors (`ScanAnalysisError` carries the detected rings) so the UI can explain a failed scan; keep that
-   contract.
+   rethrow, or return a value the caller can act on. Never leave an empty `catch`. A scan that cannot be
+   aligned is a normal outcome, not an exception: `analyzeCoupon` returns a `CalibrationResult` with
+   `aligned: false`, the detected rings, and a user-worded `failureReason` so the UI can explain the failed
+   scan; keep that contract. Only a genuinely unreadable image throws.
 
 3. **Keep the engine framework-agnostic and modular.** Code in `web/src/engine/` must not import Vue, Pinia,
    or touch the DOM beyond what OpenCV.js needs; the UI, the worker, and the tests all import it directly. A

@@ -8,9 +8,15 @@ function draw(): void {
   const c = canvas.value
   const b = props.bitmap
   if (!c || !b) return
-  c.width = b.width
-  c.height = b.height
-  c.getContext('2d')?.drawImage(b, 0, 0)
+  try {
+    c.width = b.width
+    c.height = b.height
+    c.getContext('2d')?.drawImage(b, 0, 0)
+  } catch (e) {
+    // A bitmap can be detached (closed) between a store update and this redraw; skip rather than
+    // throwing an uncaught InvalidStateError.
+    console.warn('Could not draw overlay bitmap', e)
+  }
 }
 
 onMounted(draw)
@@ -25,9 +31,14 @@ watch(() => props.bitmap, draw)
 </template>
 
 <style scoped>
+figure {
+  width: 100%;
+  height: 100%;
+}
 .overlay {
   width: 100%;
-  height: auto;
+  height: 100%;
+  object-fit: contain;
   display: block;
   border-radius: 6px;
 }

@@ -1,9 +1,9 @@
 import * as Comlink from 'comlink'
-import type { AnalysisApi, TwoScanResponse } from './worker/analysis.worker'
-import type { AnalysisOptions, ScaleReferenceResult } from './engine/types'
+import type { AnalysisApi, ScanProcessing } from './worker/analysis.worker'
+import type { CouponSpec, ScaleReferenceResult } from './engine/types'
 
-// Lazily create the analysis worker (which pulls in OpenCV.js) only when the user first analyzes, so
-// the wasm is not loaded on the initial page paint.
+// Lazily create the analysis worker (which pulls in OpenCV.js) only when the user first analyzes a
+// scan, so the wasm is not loaded on the initial page paint.
 let api: Comlink.Remote<AnalysisApi> | null = null
 
 function getApi(): Comlink.Remote<AnalysisApi> {
@@ -16,18 +16,12 @@ function getApi(): Comlink.Remote<AnalysisApi> {
   return api
 }
 
-export async function analyzeTwoScans(
-  bytes1: Uint8Array,
-  bytes2: Uint8Array,
-  options: AnalysisOptions,
-): Promise<TwoScanResponse> {
-  const b1 = bytes1.slice().buffer
-  const b2 = bytes2.slice().buffer
-  return getApi().analyzeTwoScans(
-    Comlink.transfer(b1, [b1]),
-    Comlink.transfer(b2, [b2]),
-    options,
-  )
+// Analyse one scan the moment it is uploaded: detect rings, map the grid, fit the affine, and render
+// the overlay + threshold mask. Reference-free; the pxPerMm reference is applied on the main thread
+// when the results are reconciled.
+export async function analyzeScan(bytes: Uint8Array, coupon: CouponSpec): Promise<ScanProcessing> {
+  const b = bytes.slice().buffer
+  return getApi().analyzeScan(Comlink.transfer(b, [b]), coupon)
 }
 
 export async function measureCardScan(
@@ -39,4 +33,4 @@ export async function measureCardScan(
   return getApi().measureCardScan(Comlink.transfer(b, [b]), knownLongSideMm, nominalDpi)
 }
 
-export type { TwoScanResponse }
+export type { ScanProcessing }

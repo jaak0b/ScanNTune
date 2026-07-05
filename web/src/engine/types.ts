@@ -10,10 +10,12 @@ export interface CouponSpec {
   gridN: number
   ringOuterDiameterMm: number
   ringWallMm: number
+  /** Width of the lattice ribs, including the plane-ID diagonals (mm, flat-plate nominal). */
+  ribWidthMm: number
 }
 
 export function defaultCouponSpec(): CouponSpec {
-  return { baselineMm: 100, gridN: 5, ringOuterDiameterMm: 9, ringWallMm: 2 }
+  return { baselineMm: 100, gridN: 5, ringOuterDiameterMm: 9, ringWallMm: 2, ribWidthMm: 2.5 }
 }
 
 /** Centre-to-centre distance between neighbouring rings. */
@@ -23,6 +25,18 @@ export function couponPitchMm(s: CouponSpec): number {
 
 export function couponInnerDiameterMm(s: CouponSpec): number {
   return s.ringOuterDiameterMm - 2 * s.ringWallMm
+}
+
+/**
+ * Which pair of printer axes a coupon plate measures. XY is the flat plate; XZ and YZ are the
+ * standing plates. The plate's first in-plane axis (the marker's +X) maps to the first letter and
+ * the perpendicular to the second: XY -> (X, Y), XZ -> (X, Z), YZ -> (Y, Z).
+ */
+export type Plane = 'XY' | 'XZ' | 'YZ'
+
+/** The two physical axes a plane measures, first = marker +X, second = perpendicular. */
+export function planeAxes(p: Plane): ['X' | 'Y' | 'Z', 'X' | 'Y' | 'Z'] {
+  return p === 'XY' ? ['X', 'Y'] : p === 'XZ' ? ['X', 'Z'] : ['Y', 'Z']
 }
 
 /** A ring located in the scan; the sub-pixel centre drives scale/skew (extrusion-immune). */
@@ -53,6 +67,19 @@ export interface AffineModel {
   skewDegrees: number
   rmsResidualPx: number
   pointCount: number
+  // The fitted transform itself (px = a*mmX + b*mmY + tx, py = c*mmX + d*mmY + ty), so callers can
+  // project nominal coupon positions into the image (e.g. where a missing hole should have been).
+  a: number
+  b: number
+  c: number
+  d: number
+  tx: number
+  ty: number
+}
+
+/** Projects a nominal coupon position (mm) into the image (px) through the fitted transform. */
+export function projectMmToPx(m: AffineModel, mmX: number, mmY: number): { x: number; y: number } {
+  return { x: m.a * mmX + m.b * mmY + m.tx, y: m.c * mmX + m.d * mmY + m.ty }
 }
 
 /** One ring matched to its nominal grid place. Col runs along +X, row along +Y. */
@@ -74,17 +101,54 @@ export interface GridMapping {
   flipped: boolean
 }
 
+/**
+ * The complete outcome of analysing one scan. Always produced (analyzeCoupon never throws for a scan
+ * it merely can't align): the detection fields are always set, and the measurement fields are null
+ * until the coupon aligns. `aligned` is the discriminator; `asAligned` narrows to a result whose
+ * measurement is guaranteed present, which is all the combine math ever receives (the Analyze button
+ * only lets aligned scans through).
+ */
 export interface CalibrationResult {
-  xScalePercent: number
-  yScalePercent: number
-  skewDegrees: number
+  // Detection: always present, even on a scan that could not be aligned.
+  rings: DetectedRing[]
   ringsDetected: number
+  ringsExpected: number
+  clippedSides: ClipSide[]
+  aligned: boolean
+  /** Why the scan could not be aligned, worded for the user; null when aligned. */
+  failureReason: string | null
+  // Measurement: null unless the coupon aligned.
+  orientation: Orientation | null
+  /** The plate's plane from the diagonal-rib code; null when not aligned or the code wasn't read. */
+  plane: Plane | null
+  measuredPxPerMmX: number | null
+  measuredPxPerMmY: number | null
+  skewDegrees: number | null
+  rmsResidualPx: number | null
+  xScalePercent: number | null
+  yScalePercent: number | null
+}
+
+/** A CalibrationResult whose measurement is present. The combine math operates on these only. */
+export interface AlignedResult extends CalibrationResult {
+  aligned: true
+  failureReason: null
+  orientation: Orientation
   measuredPxPerMmX: number
   measuredPxPerMmY: number
+  skewDegrees: number
   rmsResidualPx: number
-  rings: DetectedRing[]
-  orientation: Orientation
+  xScalePercent: number
+  yScalePercent: number
 }
+
+export function asAligned(result: CalibrationResult): AlignedResult {
+  if (!result.aligned) throw new Error('Expected an aligned calibration result.')
+  return result as AlignedResult
+}
+
+export type RingSeverity = 'ok' | 'warning' | 'error'
+export type ClipSide = 'left' | 'right' | 'top' | 'bottom'
 
 export interface ScannerDiagnostic {
   anisotropyPercent: number
@@ -92,13 +156,40 @@ export interface ScannerDiagnostic {
 }
 
 export interface TwoScanResult {
-  combined: CalibrationResult
+  combined: AlignedResult
   scanner: ScannerDiagnostic
-  scanA: CalibrationResult
-  scanB: CalibrationResult
+  scanA: AlignedResult
+  scanB: AlignedResult
   relativeRotationDegrees: number
   rotationLooksValid: boolean
   flipMismatch: boolean
+}
+
+/** One plane's finished two-scan analysis, tagged with which plane it measures. */
+export interface PlaneAnalysis {
+  plane: Plane
+  twoScan: TwoScanResult
+}
+
+/** A physical-axis scale error, reconciled across the plates that measured it. */
+export interface AxisScale {
+  axis: 'X' | 'Y' | 'Z'
+  scalePercent: number
+  /** The plane(s) whose measurement was averaged into this figure. */
+  sources: Plane[]
+}
+
+/** One plane's skew (the corner-angle error, degrees). */
+export interface PlaneSkew {
+  plane: Plane
+  skewDegrees: number
+}
+
+/** The whole-printer result: every uploaded plane, its skew, and the reconciled per-axis scales. */
+export interface MultiPlaneResult {
+  planes: PlaneAnalysis[]
+  skews: PlaneSkew[]
+  scales: AxisScale[]
 }
 
 export interface AnalysisOptions {
@@ -145,17 +236,4 @@ export interface Correction {
   primaryCaption?: string | null
   secondaryCaption?: string | null
   secondaryCode?: string | null
-}
-
-/**
- * Thrown when a scan is detected but cannot be resolved into a calibration (marker not found, too
- * few rings). Carries whatever rings the detector found so the UI can still show them.
- */
-export class ScanAnalysisError extends Error {
-  readonly detectedRings: DetectedRing[]
-  constructor(message: string, detectedRings: DetectedRing[]) {
-    super(message)
-    this.name = 'ScanAnalysisError'
-    this.detectedRings = detectedRings
-  }
 }
