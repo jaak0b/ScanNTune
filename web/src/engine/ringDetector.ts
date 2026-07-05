@@ -1,7 +1,8 @@
 import type { Mat, OpenCv } from './opencv'
 import type { DetectedRing } from './types'
 import { median } from './math'
-import { valueChannel } from './cvUtils'
+import { analyzeBothPolarities } from './cvUtils'
+import type { Polarity } from './cvUtils'
 
 // Thresholds the image on the HSV value channel (Otsu), finds the enclosed holes, and keeps the ring
 // centres (the binary area centroid, immune to over/under extrusion). Ring holes are separated from
@@ -15,7 +16,7 @@ import { valueChannel } from './cvUtils'
 // and orientation marker (model selection against the coupon model), keeping the one that fits.
 
 /** Whether the part is assumed brighter or darker than what is behind it. */
-export type RingPolarity = 'bright' | 'dark'
+export type RingPolarity = Polarity
 
 export interface DualDetection {
   bright: DetectedRing[]
@@ -32,24 +33,16 @@ export function detectRingsDual(
   minCircularity = 0.2,
   masksOut?: { bright?: Mat; dark?: Mat },
 ): DualDetection {
-  if (!image || image.empty()) throw new Error('Image is null or empty.')
-
-  // A single-channel image is used directly (no copy); only a colour image allocates a new channel.
-  const value = image.channels() === 1 ? image : valueChannel(cv, image)
-  const binary = new cv.Mat()
+  const wantMasks = masksOut !== undefined
   try {
-    cv.threshold(value, binary, 0, 255, cv.THRESH_BINARY + cv.THRESH_OTSU)
-
-    // 'bright' takes the above-threshold pixels as the part; 'dark' the inverse.
-    const wantMasks = masksOut !== undefined
-    const bright = detectOnBinary(cv, binary, minHoleAreaPx, minCircularity, wantMasks)
-    if (masksOut && bright.mask) masksOut.bright = bright.mask
-    cv.bitwise_not(binary, binary)
-    const dark = detectOnBinary(cv, binary, minHoleAreaPx, minCircularity, wantMasks)
-    if (masksOut && dark.mask) masksOut.dark = dark.mask
-    return { bright: bright.rings, dark: dark.rings }
+    return analyzeBothPolarities(cv, image, (partWhite, polarity) => {
+      const { rings, mask } = detectOnBinary(cv, partWhite, minHoleAreaPx, minCircularity, wantMasks)
+      // Hand each mask over as soon as it exists, so the catch below can free it if the other
+      // polarity's pass throws.
+      if (masksOut && mask) masksOut[polarity] = mask
+      return rings
+    })
   } catch (e) {
-    // Don't orphan an already-captured mask when the other polarity's pass throws.
     masksOut?.bright?.delete()
     masksOut?.dark?.delete()
     if (masksOut) {
@@ -57,9 +50,6 @@ export function detectRingsDual(
       delete masksOut.dark
     }
     throw e
-  } finally {
-    if (value !== image) value.delete()
-    binary.delete()
   }
 }
 

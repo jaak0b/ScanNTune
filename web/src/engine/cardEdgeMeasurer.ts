@@ -1,12 +1,13 @@
 import type { Mat, OpenCv } from './opencv'
 import type { ScaleReferenceResult } from './types'
 import { median } from './math'
-import { borderMean } from './cvUtils'
+import { analyzeThresholdBands } from './cvUtils'
 
-// Measures a reference card's long side to sub-pixel precision: locates the card as the largest
-// object contrasting with the background, fits each long edge as a straight line from sub-pixel
-// gradient-peak edge points (one per scan row), and takes the perpendicular distance between the two
-// lines. The long side is measured in a frame where it runs horizontally (portrait is transposed).
+// Measures a reference card's long side to sub-pixel precision: locates the card by validating both
+// threshold polarities against the ISO/IEC 7810 ID-1 shape, fits each long edge as a straight line
+// from sub-pixel gradient-peak edge points (one per scan row), and takes the perpendicular distance
+// between the two lines. The long side is measured in a frame where it runs horizontally (portrait
+// is transposed).
 
 interface Rect {
   x: number
@@ -34,7 +35,7 @@ export function measureCard(
   const gray = toGray(cv, image)
   let transposed: Mat | null = null
   try {
-    const found = tryFindCardBox(cv, gray)
+    const found = tryFindCardBox(cv, image)
     if (!found.ok) return fail(found.error)
     const box = found.box
 
@@ -96,47 +97,91 @@ function toGray(cv: OpenCv, image: Mat): Mat {
   return gray
 }
 
-// Finds the card as the largest external contour after an Otsu threshold, with polarity chosen from
-// the border so it works whether the card is darker or brighter than the background.
-function tryFindCardBox(cv: OpenCv, gray: Mat): { ok: true; box: Rect } | { ok: false; error: string } {
-  const binary = new cv.Mat()
+// The ISO/IEC 7810 ID-1 card is 85.60 x 53.98 mm; its side ratio identifies it among the other
+// rectangles a scan can contain (backing sheet, lid margin). The 5% bound is generous cover for
+// scanner anisotropy (below 1%), the sub-pixel raggedness of a thresholded outline, and worn card
+// edges; the nearest competing rectangle, an ISO 216 paper sheet at ratio sqrt(2) ~ 1.414, sits
+// about 11% away, so the bound separates the two cleanly.
+const CARD_SIDE_RATIO = 85.6 / 53.98
+const CARD_RATIO_TOLERANCE = 0.05
+
+// Finds the card by hypothesis testing: no threshold or polarity is guessed. Every threshold-band
+// hypothesis is searched for the largest card-shaped rectangle (minAreaRect side ratio matching
+// ID-1, so a slight rotation doesn't distort the test). The same physical card resurfaces in
+// several hypotheses, so candidates are merged by overlap; exactly one distinct rectangle makes it
+// the card. None means no card is in view; several distinct ones mean the scene is ambiguous.
+function tryFindCardBox(cv: OpenCv, image: Mat): { ok: true; box: Rect } | { ok: false; error: string } {
+  const candidates = analyzeThresholdBands(cv, image, (objectWhite) =>
+    cardCandidate(cv, objectWhite),
+  ).filter((c) => c !== null)
+
+  const distinct: Rect[] = []
+  for (const c of candidates) {
+    if (!distinct.some((d) => sameObject(d, c))) distinct.push(c)
+  }
+
+  if (distinct.length === 0)
+    return {
+      ok: false,
+      error:
+        'No card-shaped object was found. Place the card flat on the glass; a pale card needs a dark sheet behind it.',
+    }
+  if (distinct.length > 1)
+    return {
+      ok: false,
+      error:
+        'More than one card-shaped object was found, so the card could not be told from the background. Rescan with only the card on a plain backing.',
+    }
+  return { ok: true, box: distinct[0] }
+}
+
+// Whether two boxes describe the same physical object: intersection-over-union above 0.8. Refinds
+// of one card across threshold hypotheses differ only by the thresholded outline's few-pixel drift,
+// so their IoU is near 1; genuinely different rectangles in a scan overlap far less or not at all.
+function sameObject(a: Rect, b: Rect): boolean {
+  const ix = Math.max(0, Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x))
+  const iy = Math.max(0, Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y))
+  const inter = ix * iy
+  const union = a.width * a.height + b.width * b.height - inter
+  return union > 0 && inter / union > 0.8
+}
+
+// The largest card-shaped external contour in one part-white binary, as its upright bounding box
+// (the edge tracer works on the upright box), or null when nothing card-shaped is present.
+function cardCandidate(cv: OpenCv, objectWhite: Mat): Rect | null {
+  const closed = new cv.Mat()
   const contours = new cv.MatVector()
   const hierarchy = new cv.Mat()
   try {
-    cv.threshold(gray, binary, 0, 255, cv.THRESH_BINARY + cv.THRESH_OTSU)
-    if (borderMean(cv, binary) > 127.0) cv.bitwise_not(binary, binary)
-
     const kernel = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(5, 5))
-    cv.morphologyEx(binary, binary, cv.MORPH_CLOSE, kernel)
+    cv.morphologyEx(objectWhite, closed, cv.MORPH_CLOSE, kernel)
     kernel.delete()
 
-    cv.findContours(binary, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE)
+    cv.findContours(closed, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE)
 
     let bestArea = 0
-    let best: Rect = { x: 0, y: 0, width: 0, height: 0 }
+    let best: Rect | null = null
     const count = contours.size()
     for (let i = 0; i < count; i++) {
       const contour = contours.get(i)
-      const r = cv.boundingRect(contour) as Rect
-      contour.delete()
-      const area = r.width * r.height
-      if (area > bestArea) {
-        bestArea = area
-        best = r
+      try {
+        const rot = cv.minAreaRect(contour)
+        const long = Math.max(rot.size.width, rot.size.height)
+        const short = Math.min(rot.size.width, rot.size.height)
+        if (short < 120) continue // too small to trace sub-pixel edges on
+        if (Math.abs(long / short - CARD_SIDE_RATIO) / CARD_SIDE_RATIO > CARD_RATIO_TOLERANCE) continue
+        const area = long * short
+        if (area > bestArea) {
+          bestArea = area
+          best = cv.boundingRect(contour) as Rect
+        }
+      } finally {
+        contour.delete()
       }
     }
-
-    if (bestArea <= 0) return { ok: false, error: 'No object found in the scan.' }
-    if (best.width < 120 || best.height < 120)
-      return { ok: false, error: 'The detected object is too small. Is the card in the scan?' }
-    if (bestArea / (gray.cols * gray.rows) > 0.92)
-      return {
-        ok: false,
-        error: "Couldn't separate the card from the background. A pale card needs a dark sheet behind it.",
-      }
-    return { ok: true, box: best }
+    return best
   } finally {
-    binary.delete()
+    closed.delete()
     contours.delete()
     hierarchy.delete()
   }
