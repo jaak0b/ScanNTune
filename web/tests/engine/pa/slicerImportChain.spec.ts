@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { importSlicerConfigs } from '../../../src/engine/pa/slicerImport'
+import { isVendorWord } from '../../../src/engine/pa/slicerImportChain'
 
 const fixturesDir = join(__dirname, '../../fixtures/slicer')
 function readFixture(name: string): string {
@@ -82,10 +83,28 @@ describe('importSlicerConfigs: multi-file Orca inherits resolution', () => {
     expect(result.unresolvedParents).toEqual([])
   })
 
-  it('renders a placeholder pathHint when the missing parent name starts non-alphabetically', () => {
+  it('falls back to the referencing child name when the missing parent name starts non-alphabetically', () => {
     const preset = JSON.stringify({
       type: 'machine',
       name: 'Weird Child',
+      inherits: '0.4 Generic Nozzle',
+      printable_area: ['0x0', '100x0', '100x100', '0x100'],
+      gcode_flavor: 'klipper',
+    })
+    const result = importSlicerConfigs([{ fileName: 'weird_name.json', content: preset }])
+    expect(result.unresolvedParents).toEqual([
+      {
+        presetName: '0.4 Generic Nozzle',
+        pathHint: 'OrcaSlicer\\resources\\profiles\\Weird\\machine\\0.4 Generic Nozzle.json',
+        fileName: 'weird_name.json',
+      },
+    ])
+  })
+
+  it('renders a placeholder pathHint when neither the parent nor any candidate name has a vendor word', () => {
+    const preset = JSON.stringify({
+      type: 'machine',
+      name: '0.4 nozzle child',
       inherits: '0.4 Generic Nozzle',
       printable_area: ['0x0', '100x0', '100x100', '0x100'],
       gcode_flavor: 'klipper',
@@ -234,5 +253,58 @@ describe('importSlicerConfigs: multi-file Orca inherits resolution', () => {
     const percentIni = 'retract_length = 75%\nbed_shape = 0x0,10x0,10x10,0x10\n'
     const result = importSlicerConfigs([{ fileName: 'weird.ini', content: percentIni }])
     expect(result.warnings.some((w) => w.startsWith('weird.ini:'))).toBe(true)
+  })
+
+  it('falls back to the referencing child name when the missing parent name has no vendor word', () => {
+    const child = JSON.stringify({
+      type: 'machine',
+      name: 'Voron X 0.4 nozzle',
+      inherits: 'fdm_klipper_common',
+      printable_area: ['0x0', '300x0', '300x300', '0x300'],
+      gcode_flavor: 'klipper',
+    })
+    const result = importSlicerConfigs([{ fileName: 'voron_x.json', content: child }])
+    const parent = result.unresolvedParents?.find((p) => p.presetName === 'fdm_klipper_common')
+    expect(parent?.pathHint).toBe(
+      'OrcaSlicer\\resources\\profiles\\Voron\\machine\\fdm_klipper_common.json',
+    )
+  })
+
+  it('falls back to the referencing child name with an install path given', () => {
+    const child = JSON.stringify({
+      type: 'machine',
+      name: 'Voron X 0.4 nozzle',
+      inherits: 'fdm_klipper_common',
+      printable_area: ['0x0', '300x0', '300x300', '0x300'],
+      gcode_flavor: 'klipper',
+    })
+    const result = importSlicerConfigs(
+      [{ fileName: 'voron_x.json', content: child }],
+      [],
+      'C:\\Program Files\\OrcaSlicer\\',
+    )
+    const parent = result.unresolvedParents?.find((p) => p.presetName === 'fdm_klipper_common')
+    expect(parent?.pathHint).toBe(
+      'C:\\Program Files\\OrcaSlicer\\resources\\profiles\\Voron\\machine\\fdm_klipper_common.json',
+    )
+  })
+})
+
+describe('isVendorWord', () => {
+  it('accepts a plausible vendor word', () => {
+    expect(isVendorWord('Voron')).toBe(true)
+    expect(isVendorWord('Generic')).toBe(true)
+  })
+
+  it('rejects an underscore-joined base preset name', () => {
+    expect(isVendorWord('fdm_klipper_common')).toBe(false)
+  })
+
+  it('rejects an empty name', () => {
+    expect(isVendorWord('')).toBe(false)
+  })
+
+  it('rejects a name starting with a number', () => {
+    expect(isVendorWord('0.4')).toBe(false)
   })
 })

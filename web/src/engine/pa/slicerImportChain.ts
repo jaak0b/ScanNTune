@@ -180,35 +180,53 @@ function importOrcaChain(
   } else if (chain.unresolvedParent !== undefined) {
     const kind = orcaPresetKind(preset)
     result.warnings.push(unresolvedInheritsWarning(chain.unresolvedParent, kind))
+    const rootName = orcaPresetName(preset)
+    const vendorCandidates = [chain.unresolvedParent, chain.lastResolvedChild, rootName].filter(
+      (name): name is string => name !== undefined,
+    )
     result.unresolvedParents.push({
       presetName: chain.unresolvedParent,
-      pathHint: parentPathHint(chain.unresolvedParent, kind, installPath),
+      pathHint: parentPathHint(chain.unresolvedParent, kind, installPath, vendorCandidates),
       fileName: file.fileName,
     })
   }
   return result
 }
 
+/** True when a preset name's first whitespace-separated word plausibly identifies an OrcaSlicer
+ *  vendor folder: alphabetic characters only (no digits, underscores, or symbols) and at least two
+ *  characters long. Common vendor-less bases like "fdm_klipper_common" fail this (underscore), as
+ *  do nozzle-size-prefixed names like "0.4 Generic Nozzle" (leading digit). */
+export function isVendorWord(name: string): boolean {
+  const firstWord = name.trim().split(/\s+/)[0] ?? ''
+  return /^[A-Za-z]{2,}$/.test(firstWord)
+}
+
 /**
- * Guesses the OrcaSlicer vendor profile folder from a missing parent preset's name: the first
- * whitespace-separated word, if it looks like a vendor name (alphabetic). Presets that start with
- * a number or symbol (e.g. a nozzle-size prefix) don't identify a vendor, so callers show the
- * placeholder "<vendor>" hint as plain text instead of a copyable path. The subfolder matches the
- * child preset's own kind (filament/process/machine), since that's what the missing parent is too.
- * Orca stores each preset as "<preset name>.json" in that folder, so the hint names the exact file.
+ * Guesses the OrcaSlicer vendor profile folder for a missing parent preset, from the first
+ * candidate name (in priority order) whose first whitespace-separated word plausibly identifies a
+ * vendor, per {@link isVendorWord}. Callers pass candidates most-specific first: typically the
+ * missing parent's own name, then the uploaded preset that inherits from it directly (whose name
+ * usually does carry the vendor, e.g. "Voron 2.4 300 0.4 nozzle" for a missing "fdm_klipper_common"
+ * base), then the chain root. When none qualify, the caller shows the placeholder "<vendor>" hint
+ * as plain text instead of a copyable path. The subfolder matches the child preset's own kind
+ * (filament/process/machine), since that's what the missing parent is too. Orca stores each preset
+ * as "<preset name>.json" in that folder, so the hint names the exact file.
  */
 function parentPathHint(
   presetName: string,
   kind: OrcaPresetKind,
   installPath: string | null,
+  vendorCandidates: string[],
 ): string | null {
-  const firstWord = presetName.trim().split(/\s+/)[0] ?? ''
-  if (firstWord === '' || !/^[A-Za-z]+$/.test(firstWord)) return null
+  const vendorSource = vendorCandidates.find(isVendorWord)
+  if (vendorSource === undefined) return null
+  const vendor = vendorSource.trim().split(/\s+/)[0]
   const base =
     installPath !== null && installPath.trim() !== ''
       ? installPath.trim().replace(/[\\/]+$/, '')
       : 'OrcaSlicer'
-  return `${base}\\resources\\profiles\\${firstWord}\\${kind}\\${presetName}.json`
+  return `${base}\\resources\\profiles\\${vendor}\\${kind}\\${presetName}.json`
 }
 
 interface ChainResolution {
@@ -220,6 +238,11 @@ interface ChainResolution {
   /** Names of uploaded presets consumed as a parent while walking this chain (excludes the
    *  starting preset itself), for {@link findParentNames} to read instead of re-walking. */
   parentNamesVisited: string[]
+  /** Name of the last successfully resolved preset in the chain before the unresolved parent was
+   *  hit, i.e. the preset whose own "inherits" names it. Undefined when the chain's starting
+   *  preset itself is the one with the unresolved parent. Used as a vendor-name fallback in
+   *  {@link parentPathHint} when the missing parent's own name doesn't carry one. */
+  lastResolvedChild: string | undefined
 }
 
 /** Walks "inherits" parent-to-parent across the uploaded set, merging child-over-parent. */
@@ -234,16 +257,34 @@ function resolveChain(
   for (;;) {
     const inherits = orcaPresetInherits(current)
     if (inherits === undefined) {
-      return { merged, unresolvedParent: undefined, cycle: false, parentNamesVisited }
+      return {
+        merged,
+        unresolvedParent: undefined,
+        cycle: false,
+        parentNamesVisited,
+        lastResolvedChild: undefined,
+      }
     }
     const name = orcaPresetName(current)
     if (name !== undefined) visited.add(name)
     if (visited.has(inherits)) {
-      return { merged, unresolvedParent: undefined, cycle: true, parentNamesVisited }
+      return {
+        merged,
+        unresolvedParent: undefined,
+        cycle: true,
+        parentNamesVisited,
+        lastResolvedChild: undefined,
+      }
     }
     const parent = orcaByName.get(inherits)
     if (parent === undefined) {
-      return { merged, unresolvedParent: inherits, cycle: false, parentNamesVisited }
+      return {
+        merged,
+        unresolvedParent: inherits,
+        cycle: false,
+        parentNamesVisited,
+        lastResolvedChild: name,
+      }
     }
     parentNamesVisited.push(inherits)
     merged = { ...parent, ...merged }
