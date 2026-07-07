@@ -118,6 +118,27 @@ there is deliberately no rotation-only fallback).
 cluster** (radius-median filter), NOT by circularity: a strict threshold silently drops nearly every ring on
 a real scan.
 
+## Pressure advance calibration
+
+A second, independent calibration flow lives under `web/src/engine/pa/`: it estimates linear
+pressure advance (Klipper `PRESSURE_ADVANCE`, Marlin `M900 K`, RepRapFirmware `M572 S`) from a single
+scan of a printed test coupon, instead of the eyeballed "prints" the usual tools produce. The coupon
+is a two-layer base (a solid first layer, then a contrasting-color second layer for edge contrast) with
+16 straight test lines, each printed at a different stepped PA value and each containing a slow to fast
+to slow speed change so a PA mismatch bulges or starves the line at the two speed transitions. Three
+corner holes are fiducials; the fourth corner is left solid, so the missing hole marks the origin the
+same way the XYZ coupon's marker does. Measurement: `fiducialAligner` solves the affine from the three
+holes, `lineMeasurer` profiles each line's width to sub-pixel precision perpendicular to the line, and
+`paAnalyzer` scores each line by the RMS width deviation inside a window around each speed transition,
+then refines the discrete best line to a continuous PA value by parabolic minimum of the score curve.
+The G-code for the coupon is generated in-app per printer profile (firmware, speeds, temperatures,
+filament swap pause), stored in the localStorage-backed `usePrinterProfiles` Pinia store, mirroring
+`useCalibration`'s pattern. Validation contract: `web/tests/helpers/paRender.ts` is a synthetic renderer
+that draws a coupon image from known ground-truth PA and geometry; it is the ground-truth fixture for
+this pipeline the same way `TestData_2solid.png` is for the XY/XZ/YZ engine. Do not change the PA
+measurement math (alignment, width profiling, transition scoring, parabolic refinement) without keeping
+the render-recovery tests green (rule 1).
+
 ## Conventions
 
 The coding rules are strict; each is numbered for unambiguous reference. Do not cite these rule numbers in
