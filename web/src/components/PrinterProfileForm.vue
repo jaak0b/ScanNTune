@@ -130,22 +130,33 @@ async function onImportFiles(event: Event): Promise<void> {
   importSummary.value = { importedCount: importedFields.size, missing, warnings }
 }
 
-const osOrder = computed<string[]>(() => {
-  const ua = `${navigator.platform ?? ''} ${navigator.userAgent ?? ''}`.toLowerCase()
-  if (ua.includes('mac')) return ['macOS', 'Windows', 'Linux']
-  if (ua.includes('linux') && !ua.includes('android')) return ['Linux', 'Windows', 'macOS']
-  return ['Windows', 'macOS', 'Linux']
-})
+type Os = 'Windows' | 'macOS' | 'Linux'
+type Slicer = 'PrusaSlicer' | 'OrcaSlicer'
 
-const prusaPaths: Record<string, string> = {
-  Windows: '%APPDATA%\\PrusaSlicer\\',
-  macOS: '~/Library/Application Support/PrusaSlicer/',
-  Linux: '~/.config/PrusaSlicer/',
+function detectOs(): Os {
+  const ua = `${navigator.platform ?? ''} ${navigator.userAgent ?? ''}`.toLowerCase()
+  if (ua.includes('mac')) return 'macOS'
+  if (ua.includes('linux') && !ua.includes('android')) return 'Linux'
+  return 'Windows'
 }
-const orcaPaths: Record<string, string> = {
-  Windows: '%APPDATA%\\OrcaSlicer\\user\\default\\machine\\ and filament\\',
-  macOS: '~/Library/Application Support/OrcaSlicer/user/default/machine/ and filament/',
-  Linux: '~/.config/OrcaSlicer/user/default/machine/ and filament/',
+
+const helpOs = ref<Os>(detectOs())
+const helpSlicer = ref<Slicer>('PrusaSlicer')
+
+const prusaPresetPaths: Record<Os, string> = {
+  Windows: '%APPDATA%\\PrusaSlicer\\printer\\',
+  macOS: '~/Library/Application Support/PrusaSlicer/printer/',
+  Linux: '~/.config/PrusaSlicer/printer/',
+}
+const orcaMachinePaths: Record<Os, string> = {
+  Windows: '%APPDATA%\\OrcaSlicer\\user\\default\\machine\\',
+  macOS: '~/Library/Application Support/OrcaSlicer/user/default/machine/',
+  Linux: '~/.config/OrcaSlicer/user/default/machine/',
+}
+const orcaFilamentPaths: Record<Os, string> = {
+  Windows: '%APPDATA%\\OrcaSlicer\\user\\default\\filament\\',
+  macOS: '~/Library/Application Support/OrcaSlicer/user/default/filament/',
+  Linux: '~/.config/OrcaSlicer/user/default/filament/',
 }
 
 async function copyPath(path: string): Promise<void> {
@@ -245,26 +256,56 @@ function save(): void {
             Where is my config?
           </v-btn>
           <div v-if="showImportHelp" class="import-help mt-2">
-            <p class="mb-1">
-              PrusaSlicer: use File &gt; Export &gt; Export Config, or pick the preset .ini from the
-              settings folder. OrcaSlicer: import the machine .json first, then optionally a
-              filament .json. Click a path to copy it.
-            </p>
-            <div v-for="os in osOrder" :key="os" class="mb-1">
-              <strong>{{ os }}</strong>
-              <div>
-                PrusaSlicer:
-                <code class="copy-path" :title="'Copy'" @click="copyPath(prusaPaths[os])">{{
-                  prusaPaths[os]
-                }}</code>
-                <span v-if="copiedPath === prusaPaths[os]" class="text-success ml-1">copied</span>
+            <div class="d-flex ga-2 mb-2">
+              <v-btn-toggle v-model="helpOs" density="compact" color="primary" mandatory divided>
+                <v-btn value="Windows" size="small">Windows</v-btn>
+                <v-btn value="macOS" size="small">macOS</v-btn>
+                <v-btn value="Linux" size="small">Linux</v-btn>
+              </v-btn-toggle>
+              <v-btn-toggle v-model="helpSlicer" density="compact" color="primary" mandatory divided>
+                <v-btn value="PrusaSlicer" size="small">PrusaSlicer</v-btn>
+                <v-btn value="OrcaSlicer" size="small">OrcaSlicer</v-btn>
+              </v-btn-toggle>
+            </div>
+            <div v-if="helpSlicer === 'PrusaSlicer'">
+              <p class="mb-1">Easiest: File, Export, Export Config. Or pick a preset from:</p>
+              <div class="d-flex align-center ga-1">
+                <code class="copy-path">{{ prusaPresetPaths[helpOs] }}</code>
+                <v-btn
+                  icon="mdi-content-copy"
+                  size="x-small"
+                  variant="text"
+                  :title="'Copy'"
+                  @click="copyPath(prusaPresetPaths[helpOs])"
+                />
+                <span v-if="copiedPath === prusaPresetPaths[helpOs]" class="text-success">copied</span>
               </div>
-              <div>
-                OrcaSlicer:
-                <code class="copy-path" :title="'Copy'" @click="copyPath(orcaPaths[os])">{{
-                  orcaPaths[os]
-                }}</code>
-                <span v-if="copiedPath === orcaPaths[os]" class="text-success ml-1">copied</span>
+            </div>
+            <div v-else>
+              <p class="mb-1">
+                Import the machine .json first, then optionally a filament .json.
+              </p>
+              <div class="d-flex align-center ga-1">
+                <code class="copy-path">{{ orcaMachinePaths[helpOs] }}</code>
+                <v-btn
+                  icon="mdi-content-copy"
+                  size="x-small"
+                  variant="text"
+                  :title="'Copy'"
+                  @click="copyPath(orcaMachinePaths[helpOs])"
+                />
+                <span v-if="copiedPath === orcaMachinePaths[helpOs]" class="text-success">copied</span>
+              </div>
+              <div class="d-flex align-center ga-1 mt-1">
+                <code class="copy-path">{{ orcaFilamentPaths[helpOs] }}</code>
+                <v-btn
+                  icon="mdi-content-copy"
+                  size="x-small"
+                  variant="text"
+                  :title="'Copy'"
+                  @click="copyPath(orcaFilamentPaths[helpOs])"
+                />
+                <span v-if="copiedPath === orcaFilamentPaths[helpOs]" class="text-success">copied</span>
               </div>
             </div>
           </div>
@@ -431,7 +472,7 @@ function save(): void {
   line-height: 1.5;
 }
 .copy-path {
-  cursor: pointer;
+  font-family: 'Roboto Mono', ui-monospace, monospace;
   user-select: all;
   background: rgba(128, 128, 128, 0.15);
   border-radius: 4px;
