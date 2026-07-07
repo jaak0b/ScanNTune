@@ -29,6 +29,7 @@
     "happy-dom": "^20.10.6",
     "pngjs": "^7.0.0",
     "sass": "^1.101.0",
+    "tsx": "^4.23.0",
     "typescript": "^6.0.3",
     "vite": "^8.1.3",
     "vite-plugin-vuetify": "^2.1.3",
