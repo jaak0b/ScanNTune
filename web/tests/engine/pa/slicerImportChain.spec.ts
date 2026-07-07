@@ -51,6 +51,20 @@ describe('importSlicerConfigs: multi-file Orca inherits resolution', () => {
     expect(result.presetName).toBe('Chubechanger')
   })
 
+  it('trims surrounding whitespace from the leaf preset name', () => {
+    const spaced = JSON.stringify({
+      type: 'machine',
+      name: '  Spaced Name  ',
+      from: 'User',
+      version: '2.3.1.10',
+      printable_area: ['0x0', '300x0', '300x300', '0x300'],
+      gcode_flavor: 'klipper',
+      nozzle_diameter: ['0.4'],
+    })
+    const result = importSlicerConfigs([{ fileName: 'spaced.json', content: spaced }])
+    expect(result.presetName).toBe('Spaced Name')
+  })
+
   it('has no unresolved-inherits warning once the parent is uploaded', () => {
     const result = importSlicerConfigs([
       { fileName: 'orca_machine_chubechanger.json', content: chubechanger },

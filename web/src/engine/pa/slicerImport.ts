@@ -406,7 +406,7 @@ export function tryParseOrcaPreset(content: string): Record<string, unknown> | n
 /** The preset's "name" field, used as the chain-resolution lookup key. */
 export function orcaPresetName(preset: Record<string, unknown>): string | undefined {
   const name = preset.name
-  return typeof name === 'string' && name.trim() !== '' ? name : undefined
+  return typeof name === 'string' && name.trim() !== '' ? name.trim() : undefined
 }
 
 /** The preset "kind" markers, used to place unresolved-parent path hints under the matching
