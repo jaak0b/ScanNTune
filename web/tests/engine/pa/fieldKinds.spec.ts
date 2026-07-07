@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { FIELD_KINDS } from '../../../src/engine/pa/slicerImport'
-import { defaultPrinterProfile } from '../../../src/engine/pa/types'
+import { defaultFilamentProfile, defaultPrinterProfile } from '../../../src/engine/pa/types'
 
 const PRINTER_FIELDS = new Set([
   'firmware',
@@ -27,11 +27,14 @@ const FILAMENT_FIELDS = new Set([
 ])
 
 describe('FIELD_KINDS', () => {
-  it('classifies every mapped printer-profile field as printer or filament', () => {
-    // id and name aren't slicer-import targets; every other PrinterProfile key must be classified.
-    const mappedKeys = Object.keys(defaultPrinterProfile()).filter(
-      (k) => k !== 'id' && k !== 'name',
-    )
+  it('classifies every mapped printer and filament field', () => {
+    // id, name, and the filament list itself aren't slicer-import targets; every other
+    // PrinterProfile and FilamentProfile key must be classified.
+    const skip = new Set(['id', 'name', 'filaments', 'selectedFilamentId'])
+    const mappedKeys = [
+      ...Object.keys(defaultPrinterProfile()),
+      ...Object.keys(defaultFilamentProfile()),
+    ].filter((k) => !skip.has(k))
     for (const key of mappedKeys) {
       expect(FIELD_KINDS).toHaveProperty(key)
     }

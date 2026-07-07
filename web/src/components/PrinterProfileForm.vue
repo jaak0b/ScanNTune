@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import type { Firmware, PrinterProfile } from '../engine/pa/types'
-import { defaultPrinterProfile } from '../engine/pa/types'
-import { importSlicerConfigs } from '../engine/pa/slicerImport'
+import type { FilamentProfile, Firmware, PrinterProfile } from '../engine/pa/types'
+import { defaultFilamentProfile, defaultPrinterProfile } from '../engine/pa/types'
+import { FIELD_KINDS, importSlicerConfigs } from '../engine/pa/slicerImport'
+import type { ImportedFilamentFields, ImportedPrinterFields } from '../engine/pa/slicerImport'
 import NumericField from './NumericField.vue'
 
 const props = defineProps<{
@@ -25,11 +26,6 @@ const firmware = ref<Firmware>('Klipper')
 const bedWidthMm = ref<number | null>(null)
 const bedDepthMm = ref<number | null>(null)
 const nozzleDiameterMm = ref<number | null>(null)
-const filamentDiameterMm = ref<number | null>(null)
-const nozzleTempC = ref<number | null>(null)
-const bedTempC = ref<number | null>(null)
-const chamberTempC = ref<number | null>(null)
-const filamentType = ref('')
 const travelSpeedMmS = ref<number | null>(null)
 const printAccelMmS2 = ref<number | null>(null)
 const squareCornerVelocityMmS = ref<number | null>(null)
@@ -40,6 +36,25 @@ const startGcode = ref('')
 const pauseGcode = ref('')
 const endGcode = ref('')
 
+/** A filament being edited: numbers nullable while the stepper field is cleared. */
+interface EditableFilament {
+  id: string
+  name: string
+  filamentType: string
+  filamentDiameterMm: number | null
+  nozzleTempC: number | null
+  bedTempC: number | null
+  chamberTempC: number | null
+}
+
+const filaments = ref<EditableFilament[]>([])
+const filamentIndex = ref(0)
+const currentFilament = computed<EditableFilament>(() => filaments.value[filamentIndex.value])
+
+function editableFilament(f: FilamentProfile): EditableFilament {
+  return { ...f }
+}
+
 function loadFrom(p: PrinterProfile): void {
   id.value = p.id
   name.value = p.name
@@ -47,11 +62,6 @@ function loadFrom(p: PrinterProfile): void {
   bedWidthMm.value = p.bedWidthMm
   bedDepthMm.value = p.bedDepthMm
   nozzleDiameterMm.value = p.nozzleDiameterMm
-  filamentDiameterMm.value = p.filamentDiameterMm
-  nozzleTempC.value = p.nozzleTempC
-  bedTempC.value = p.bedTempC
-  chamberTempC.value = p.chamberTempC
-  filamentType.value = p.filamentType
   travelSpeedMmS.value = p.travelSpeedMmS
   printAccelMmS2.value = p.printAccelMmS2
   squareCornerVelocityMmS.value = p.squareCornerVelocityMmS
@@ -61,6 +71,9 @@ function loadFrom(p: PrinterProfile): void {
   startGcode.value = p.startGcode
   pauseGcode.value = p.pauseGcode
   endGcode.value = p.endGcode
+  filaments.value = p.filaments.map(editableFilament)
+  const selectedAt = p.filaments.findIndex((f) => f.id === p.selectedFilamentId)
+  filamentIndex.value = selectedAt === -1 ? 0 : selectedAt
 }
 
 watch(
@@ -74,27 +87,49 @@ watch(
   },
 )
 
-// --- Slicer config import -------------------------------------------------
+// --- Filament list management ----------------------------------------------
 
-const fileInput = ref<HTMLInputElement | null>(null)
+const filamentItems = computed(() =>
+  filaments.value.map((f, i) => ({ title: f.name.trim() || `Filament ${i + 1}`, value: i })),
+)
+
+function addFilament(): void {
+  // The id is generated here so the dialog's own selection can reference the new filament
+  // before the store ever sees it.
+  filaments.value = [
+    ...filaments.value,
+    { ...defaultFilamentProfile(), id: crypto.randomUUID(), name: 'New filament' },
+  ]
+  filamentIndex.value = filaments.value.length - 1
+}
+
+function removeFilament(): void {
+  if (filaments.value.length <= 1) return
+  filaments.value = filaments.value.filter((_, i) => i !== filamentIndex.value)
+  filamentIndex.value = Math.min(filamentIndex.value, filaments.value.length - 1)
+}
+
+// --- Slicer config import ---------------------------------------------------
+
+type ImportKind = 'printer' | 'filament'
+
+const printerFileInput = ref<HTMLInputElement | null>(null)
+const filamentFileInput = ref<HTMLInputElement | null>(null)
 const importSummary = ref<{
+  kind: ImportKind
   importedCount: number
   missing: string[]
   warnings: string[]
+  wrongKind: string | null
 } | null>(null)
 const showImportHelp = ref(false)
 const copiedPath = ref('')
 
-function applyImported(fields: Partial<PrinterProfile>): void {
+function applyPrinterFields(fields: ImportedPrinterFields): void {
   if (fields.firmware !== undefined) firmware.value = fields.firmware
   if (fields.bedWidthMm !== undefined) bedWidthMm.value = fields.bedWidthMm
   if (fields.bedDepthMm !== undefined) bedDepthMm.value = fields.bedDepthMm
   if (fields.nozzleDiameterMm !== undefined) nozzleDiameterMm.value = fields.nozzleDiameterMm
-  if (fields.filamentDiameterMm !== undefined) filamentDiameterMm.value = fields.filamentDiameterMm
-  if (fields.nozzleTempC !== undefined) nozzleTempC.value = fields.nozzleTempC
-  if (fields.bedTempC !== undefined) bedTempC.value = fields.bedTempC
-  if (fields.chamberTempC !== undefined) chamberTempC.value = fields.chamberTempC
-  if (fields.filamentType !== undefined) filamentType.value = fields.filamentType
   if (fields.travelSpeedMmS !== undefined) travelSpeedMmS.value = fields.travelSpeedMmS
   if (fields.printAccelMmS2 !== undefined) printAccelMmS2.value = fields.printAccelMmS2
   if (fields.squareCornerVelocityMmS !== undefined)
@@ -107,7 +142,37 @@ function applyImported(fields: Partial<PrinterProfile>): void {
   if (fields.endGcode !== undefined) endGcode.value = fields.endGcode
 }
 
-async function onImportFiles(event: Event): Promise<void> {
+function applyFilamentFields(target: EditableFilament, fields: ImportedFilamentFields): void {
+  if (fields.filamentType !== undefined) target.filamentType = fields.filamentType
+  if (fields.filamentDiameterMm !== undefined) target.filamentDiameterMm = fields.filamentDiameterMm
+  if (fields.nozzleTempC !== undefined) target.nozzleTempC = fields.nozzleTempC
+  if (fields.bedTempC !== undefined) target.bedTempC = fields.bedTempC
+  if (fields.chamberTempC !== undefined) target.chamberTempC = fields.chamberTempC
+}
+
+/** Appends one new filament per named bundle section and selects the first of them. */
+function addBundleFilaments(sections: { name: string; fields: ImportedFilamentFields }[]): number {
+  const firstNewIndex = filaments.value.length
+  const added = sections.map((section) => {
+    const filament: EditableFilament = {
+      ...defaultFilamentProfile(),
+      id: crypto.randomUUID(),
+      name: section.name,
+    }
+    applyFilamentFields(filament, section.fields)
+    return filament
+  })
+  filaments.value = [...filaments.value, ...added]
+  filamentIndex.value = firstNewIndex
+  return added.reduce((count, _f, i) => count + Object.keys(sections[i].fields).length, 0)
+}
+
+const WRONG_KIND_MESSAGES: Record<ImportKind, string> = {
+  printer: 'This looks like a filament preset. Use the import button in the Filament section.',
+  filament: 'This looks like a printer preset. Use the import button in the Printer section.',
+}
+
+async function onImportFiles(event: Event, kind: ImportKind): Promise<void> {
   const input = event.target as HTMLInputElement
   const files = Array.from(input.files ?? [])
   input.value = ''
@@ -122,13 +187,41 @@ async function onImportFiles(event: Event): Promise<void> {
     }
   }
   const result = importSlicerConfigs(slicerFiles)
-  applyImported(result.fields)
   warnings.push(...result.warnings)
-  importSummary.value = {
-    importedCount: result.imported.length,
-    missing: result.missing,
-    warnings,
+
+  const printerCount = Object.keys(result.fields.printer).length
+  const filamentCount = Object.keys(result.fields.filament).length
+  const otherKindCount = kind === 'printer' ? filamentCount : printerCount
+  const ownKindCount = kind === 'printer' ? printerCount : filamentCount
+  const wrongKind =
+    ownKindCount === 0 && result.filaments.length === 0 && otherKindCount > 0
+      ? WRONG_KIND_MESSAGES[kind]
+      : null
+
+  let importedCount = 0
+  if (wrongKind === null) {
+    if (kind === 'printer') {
+      applyPrinterFields(result.fields.printer)
+      importedCount = printerCount
+    } else if (result.filaments.length > 0) {
+      importedCount = addBundleFilaments(result.filaments)
+    } else {
+      applyFilamentFields(currentFilament.value, result.fields.filament)
+      importedCount = filamentCount
+    }
   }
+  importSummary.value = {
+    kind,
+    importedCount,
+    missing: result.missing.filter((f) => kindOfMissing(f) === kind),
+    warnings,
+    wrongKind,
+  }
+}
+
+/** Kind of a missing-field name reported by the importer, for kind-scoped summaries. */
+function kindOfMissing(field: string): ImportKind {
+  return FIELD_KINDS[field as keyof typeof FIELD_KINDS]
 }
 
 /**
@@ -180,14 +273,10 @@ async function copyPath(path: string): Promise<void> {
   }
 }
 
-const numbers = computed(() => [
+const printerNumbers = computed(() => [
   bedWidthMm.value,
   bedDepthMm.value,
   nozzleDiameterMm.value,
-  filamentDiameterMm.value,
-  nozzleTempC.value,
-  bedTempC.value,
-  chamberTempC.value,
   travelSpeedMmS.value,
   printAccelMmS2.value,
   squareCornerVelocityMmS.value,
@@ -195,16 +284,42 @@ const numbers = computed(() => [
   retractMm.value,
   retractSpeedMmS.value,
 ])
+const filamentsValid = computed(() =>
+  filaments.value.every(
+    (f) =>
+      f.name.trim() !== '' &&
+      [f.filamentDiameterMm, f.nozzleTempC, f.bedTempC, f.chamberTempC].every(
+        (n) => n !== null && Number.isFinite(n),
+      ),
+  ),
+)
 const canSave = computed(
-  () => name.value.trim() !== '' && numbers.value.every((n) => n !== null && Number.isFinite(n)),
+  () =>
+    name.value.trim() !== '' &&
+    printerNumbers.value.every((n) => n !== null && Number.isFinite(n)) &&
+    filaments.value.length > 0 &&
+    filamentsValid.value,
 )
 
 function close(): void {
   emit('update:modelValue', false)
 }
 
+function toFilamentProfile(f: EditableFilament): FilamentProfile {
+  return {
+    id: f.id,
+    name: f.name.trim(),
+    filamentType: f.filamentType.trim() || defaultFilamentProfile().filamentType,
+    filamentDiameterMm: f.filamentDiameterMm!,
+    nozzleTempC: f.nozzleTempC!,
+    bedTempC: f.bedTempC!,
+    chamberTempC: f.chamberTempC!,
+  }
+}
+
 function save(): void {
   if (!canSave.value) return
+  const savedFilaments = filaments.value.map(toFilamentProfile)
   emit('save', {
     id: id.value,
     name: name.value.trim(),
@@ -212,11 +327,8 @@ function save(): void {
     bedWidthMm: bedWidthMm.value!,
     bedDepthMm: bedDepthMm.value!,
     nozzleDiameterMm: nozzleDiameterMm.value!,
-    filamentDiameterMm: filamentDiameterMm.value!,
-    nozzleTempC: nozzleTempC.value!,
-    bedTempC: bedTempC.value!,
-    chamberTempC: chamberTempC.value!,
-    filamentType: filamentType.value.trim() || defaultPrinterProfile().filamentType,
+    filaments: savedFilaments,
+    selectedFilamentId: savedFilaments[filamentIndex.value]?.id || null,
     travelSpeedMmS: travelSpeedMmS.value!,
     printAccelMmS2: printAccelMmS2.value!,
     squareCornerVelocityMmS: squareCornerVelocityMmS.value!,
@@ -241,30 +353,7 @@ function save(): void {
     <v-card :title="profile ? 'Edit printer profile' : 'New printer profile'">
       <v-card-text>
         <div class="mb-3">
-          <input
-            ref="fileInput"
-            type="file"
-            accept=".ini,.json,.cfg,.txt"
-            multiple
-            class="d-none"
-            data-testid="import-file-input"
-            @change="onImportFiles"
-          />
-          <v-btn
-            variant="tonal"
-            size="small"
-            prepend-icon="mdi-import"
-            data-testid="import-slicer"
-            @click="fileInput?.click()"
-          >
-            Import from slicer
-          </v-btn>
-          <v-btn
-            variant="text"
-            size="small"
-            class="ml-2"
-            @click="showImportHelp = !showImportHelp"
-          >
+          <v-btn variant="text" size="small" @click="showImportHelp = !showImportHelp">
             Where is my config?
           </v-btn>
           <div v-if="showImportHelp" class="import-help mt-2">
@@ -295,7 +384,8 @@ function save(): void {
             </div>
             <div v-else>
               <p class="mb-1">
-                Import the machine .json first, then optionally a filament .json.
+                Import the machine .json in the Printer section and a filament .json in the
+                Filament section.
               </p>
               <div class="d-flex align-center ga-1">
                 <code class="copy-path">{{ orcaMachinePaths[helpOs] }}</code>
@@ -322,13 +412,22 @@ function save(): void {
             </div>
           </div>
           <div v-if="importSummary" class="mt-2" data-testid="import-summary">
-            <div class="text-body-2">
+            <v-alert
+              v-if="importSummary.wrongKind"
+              type="warning"
+              density="compact"
+              variant="tonal"
+              class="mb-1 text-body-2"
+              :text="importSummary.wrongKind"
+              data-testid="import-wrong-kind"
+            />
+            <div v-else class="text-body-2">
               Filled {{ importSummary.importedCount }}
               {{ importSummary.importedCount === 1 ? 'field' : 'fields' }} from the imported
               config.
             </div>
             <div
-              v-if="importSummary.missing.length > 0"
+              v-if="!importSummary.wrongKind && importSummary.missing.length > 0"
               class="text-caption text-medium-emphasis"
             >
               Not in the file (kept as-is): {{ importSummary.missing.join(', ') }}
@@ -356,110 +455,224 @@ function save(): void {
             </v-alert>
           </div>
         </div>
-        <div class="fields mb-2">
-          <v-text-field
-            v-model="name"
-            label="Profile name"
-            density="comfortable"
-            data-testid="profile-name"
-            class="wide"
-          />
-          <v-select
-            v-model="firmware"
-            :items="firmwares"
-            label="Firmware"
-            density="comfortable"
-            data-testid="profile-firmware"
-          />
-        </div>
-        <div class="fields mb-2">
-          <NumericField v-model="bedWidthMm" label="Bed width (mm)" :step="10" :min="10" />
-          <NumericField v-model="bedDepthMm" label="Bed depth (mm)" :step="10" :min="10" />
-          <NumericField v-model="nozzleTempC" label="Nozzle temp (°C)" :step="5" :min="0" />
-          <NumericField v-model="bedTempC" label="Bed temp (°C)" :step="5" :min="0" />
-        </div>
-        <div class="fields mb-2">
-          <NumericField v-model="chamberTempC" label="Chamber temp (°C)" :step="5" :min="0" />
-          <v-text-field
-            v-model="filamentType"
-            label="Filament type"
-            density="comfortable"
-            data-testid="profile-filament-type"
-          />
-        </div>
-        <div class="fields mb-2">
-          <NumericField
-            v-model="nozzleDiameterMm"
-            label="Nozzle diameter (mm)"
-            :step="0.1"
-            :min="0.1"
-            :precision="2"
-          />
-          <NumericField
-            v-model="filamentDiameterMm"
-            label="Filament diameter (mm)"
-            :step="0.05"
-            :min="0.5"
-            :precision="2"
-          />
-          <NumericField
-            v-model="layerHeightMm"
-            label="Layer height (mm)"
-            :step="0.05"
-            :min="0.05"
-            :precision="2"
-          />
-        </div>
-        <div class="fields mb-2">
-          <NumericField
-            v-model="retractMm"
-            label="Retraction (mm)"
-            :step="0.1"
-            :min="0"
-            :precision="2"
-          />
-          <NumericField
-            v-model="retractSpeedMmS"
-            label="Retract speed (mm/s)"
-            :step="5"
-            :min="1"
-          />
-          <NumericField
-            v-model="travelSpeedMmS"
-            label="Travel speed (mm/s)"
-            :step="10"
-            :min="10"
-          />
-        </div>
-        <div class="fields mb-2">
-          <NumericField
-            v-model="printAccelMmS2"
-            label="Acceleration (mm/s2)"
-            :step="500"
-            :min="100"
-          />
-          <NumericField
-            v-model="squareCornerVelocityMmS"
-            label="Square corner velocity (mm/s)"
-            :step="1"
-            :min="1"
-          />
-        </div>
-        <v-textarea
-          v-model="startGcode"
-          label="Start G-code"
-          rows="3"
-          density="comfortable"
-          class="mono mb-2"
-        />
-        <v-textarea
-          v-model="pauseGcode"
-          label="Pause G-code (filament change)"
-          rows="2"
-          density="comfortable"
-          class="mono mb-2"
-        />
-        <v-textarea v-model="endGcode" label="End G-code" rows="3" density="comfortable" class="mono" />
+
+        <v-card variant="outlined" class="section mb-4">
+          <v-card-item>
+            <v-card-subtitle>Printer</v-card-subtitle>
+          </v-card-item>
+          <v-card-text>
+            <div class="mb-3">
+              <input
+                ref="printerFileInput"
+                type="file"
+                accept=".ini,.json,.cfg,.txt"
+                multiple
+                class="d-none"
+                data-testid="import-printer-input"
+                @change="onImportFiles($event, 'printer')"
+              />
+              <v-btn
+                variant="tonal"
+                size="small"
+                prepend-icon="mdi-import"
+                data-testid="import-printer"
+                @click="printerFileInput?.click()"
+              >
+                Import printer settings
+              </v-btn>
+            </div>
+            <div class="fields mb-2">
+              <v-text-field
+                v-model="name"
+                label="Profile name"
+                density="comfortable"
+                data-testid="profile-name"
+                class="wide"
+              />
+              <v-select
+                v-model="firmware"
+                :items="firmwares"
+                label="Firmware"
+                density="comfortable"
+                data-testid="profile-firmware"
+              />
+            </div>
+            <div class="fields mb-2">
+              <NumericField v-model="bedWidthMm" label="Bed width (mm)" :step="10" :min="10" />
+              <NumericField v-model="bedDepthMm" label="Bed depth (mm)" :step="10" :min="10" />
+              <NumericField
+                v-model="nozzleDiameterMm"
+                label="Nozzle diameter (mm)"
+                :step="0.1"
+                :min="0.1"
+                :precision="2"
+              />
+              <NumericField
+                v-model="layerHeightMm"
+                label="Layer height (mm)"
+                :step="0.05"
+                :min="0.05"
+                :precision="2"
+              />
+            </div>
+            <div class="fields mb-2">
+              <NumericField
+                v-model="retractMm"
+                label="Retraction (mm)"
+                :step="0.1"
+                :min="0"
+                :precision="2"
+              />
+              <NumericField
+                v-model="retractSpeedMmS"
+                label="Retract speed (mm/s)"
+                :step="5"
+                :min="1"
+              />
+              <NumericField
+                v-model="travelSpeedMmS"
+                label="Travel speed (mm/s)"
+                :step="10"
+                :min="10"
+              />
+            </div>
+            <div class="fields mb-2">
+              <NumericField
+                v-model="printAccelMmS2"
+                label="Acceleration (mm/s2)"
+                :step="500"
+                :min="100"
+              />
+              <NumericField
+                v-model="squareCornerVelocityMmS"
+                label="Square corner velocity (mm/s)"
+                :step="1"
+                :min="1"
+              />
+            </div>
+            <v-textarea
+              v-model="startGcode"
+              label="Start G-code"
+              rows="3"
+              density="comfortable"
+              class="mono mb-2"
+            />
+            <v-textarea
+              v-model="pauseGcode"
+              label="Pause G-code (filament change)"
+              rows="2"
+              density="comfortable"
+              class="mono mb-2"
+            />
+            <v-textarea
+              v-model="endGcode"
+              label="End G-code"
+              rows="3"
+              density="comfortable"
+              class="mono"
+            />
+          </v-card-text>
+        </v-card>
+
+        <v-card variant="outlined" class="section">
+          <v-card-item>
+            <v-card-subtitle>Filament</v-card-subtitle>
+          </v-card-item>
+          <v-card-text>
+            <div class="filament-row mb-3">
+              <v-select
+                v-model="filamentIndex"
+                :items="filamentItems"
+                label="Filament"
+                density="comfortable"
+                hide-details
+                class="filament-select"
+                data-testid="filament-select"
+              />
+              <v-btn
+                variant="tonal"
+                size="small"
+                prepend-icon="mdi-plus"
+                data-testid="filament-add"
+                @click="addFilament"
+              >
+                Add
+              </v-btn>
+              <v-btn
+                variant="text"
+                size="small"
+                icon="mdi-delete-outline"
+                :disabled="filaments.length <= 1"
+                data-testid="filament-delete"
+                @click="removeFilament"
+              />
+            </div>
+            <div class="mb-3">
+              <input
+                ref="filamentFileInput"
+                type="file"
+                accept=".ini,.json,.cfg,.txt"
+                multiple
+                class="d-none"
+                data-testid="import-filament-input"
+                @change="onImportFiles($event, 'filament')"
+              />
+              <v-btn
+                variant="tonal"
+                size="small"
+                prepend-icon="mdi-import"
+                data-testid="import-filament"
+                @click="filamentFileInput?.click()"
+              >
+                Import filament
+              </v-btn>
+            </div>
+            <template v-if="currentFilament">
+              <div class="fields mb-2">
+                <v-text-field
+                  v-model="currentFilament.name"
+                  label="Filament name"
+                  density="comfortable"
+                  data-testid="filament-name"
+                  class="wide"
+                />
+                <v-text-field
+                  v-model="currentFilament.filamentType"
+                  label="Filament type"
+                  density="comfortable"
+                  data-testid="profile-filament-type"
+                />
+              </div>
+              <div class="fields mb-2">
+                <NumericField
+                  v-model="currentFilament.filamentDiameterMm"
+                  label="Filament diameter (mm)"
+                  :step="0.05"
+                  :min="0.5"
+                  :precision="2"
+                />
+                <NumericField
+                  v-model="currentFilament.nozzleTempC"
+                  label="Nozzle temp (°C)"
+                  :step="5"
+                  :min="0"
+                />
+                <NumericField
+                  v-model="currentFilament.bedTempC"
+                  label="Bed temp (°C)"
+                  :step="5"
+                  :min="0"
+                />
+                <NumericField
+                  v-model="currentFilament.chamberTempC"
+                  label="Chamber temp (°C)"
+                  :step="5"
+                  :min="0"
+                />
+              </div>
+            </template>
+          </v-card-text>
+        </v-card>
       </v-card-text>
       <v-card-actions>
         <v-spacer />
@@ -479,6 +692,9 @@ function save(): void {
 </template>
 
 <style scoped>
+.section {
+  border-radius: 12px;
+}
 .fields {
   display: flex;
   flex-wrap: wrap;
@@ -489,6 +705,15 @@ function save(): void {
 }
 .fields > .wide {
   flex: 2 1 220px;
+}
+.filament-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.filament-select {
+  flex: 1 1 200px;
 }
 .import-help {
   font-size: 0.8rem;

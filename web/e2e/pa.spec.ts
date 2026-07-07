@@ -27,6 +27,10 @@ test('pressure advance flow: profile, G-code download, scan analysis', async ({ 
   await page.getByTestId('profile-save').click()
   await expect(page.getByTestId('generate-btn')).toBeEnabled()
 
+  // The saved profile exposes its default filament in the filament select.
+  await expect(page.getByTestId('pa-filament-select')).toBeVisible()
+  await expect(page.getByTestId('pa-filament-select')).toContainText('Default')
+
   // Generating must fire a .gcode download.
   const downloadPromise = page.waitForEvent('download')
   await page.getByTestId('generate-btn').click()

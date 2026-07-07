@@ -1,10 +1,23 @@
-import type { Firmware, PrinterProfile } from './types'
+import type { FilamentProfile, Firmware, PrinterProfile } from './types'
 
 export { importSlicerConfigs } from './slicerImportChain'
 export type { SlicerFile } from './slicerImportChain'
 
+/** Printer-kind fields an import can fill (identity and filament list excluded). */
+export type ImportedPrinterFields = Partial<
+  Omit<PrinterProfile, 'id' | 'name' | 'filaments' | 'selectedFilamentId'>
+>
+/** Filament-kind fields an import can fill (identity excluded). */
+export type ImportedFilamentFields = Partial<Omit<FilamentProfile, 'id' | 'name'>>
+
+/** All fields an import can fill, before the printer/filament split in finish(). */
+type ImportedFields = ImportedPrinterFields & ImportedFilamentFields
+
 export interface SlicerImportResult {
-  fields: Partial<PrinterProfile>
+  fields: { printer: ImportedPrinterFields; filament: ImportedFilamentFields }
+  /** One entry per named [filament:...] section in a PrusaSlicer config bundle, in file order;
+   *  empty for flat single-filament sources. */
+  filaments: { name: string; fields: ImportedFilamentFields }[]
   imported: string[]
   missing: string[]
   warnings: string[]
@@ -30,9 +43,9 @@ const MAPPED_FIELDS_LIST = [
   'startGcode',
   'pauseGcode',
   'endGcode',
-] as const satisfies readonly (keyof PrinterProfile)[]
+] as const satisfies readonly (keyof ImportedFields)[]
 
-const MAPPED_FIELDS: (keyof PrinterProfile)[] = [...MAPPED_FIELDS_LIST]
+const MAPPED_FIELDS: (keyof ImportedFields)[] = [...MAPPED_FIELDS_LIST]
 
 const FLAVOR_TO_FIRMWARE: Record<string, Firmware> = {
   klipper: 'Klipper',
@@ -57,8 +70,8 @@ export function importSlicerConfig(fileName: string, content: string): SlicerImp
   )
 }
 
-/** Field-kind classification for every {@link MAPPED_FIELDS} entry (Task 18 will use this to
- *  filter what a machine vs. filament import applies). */
+/** Field-kind classification for every {@link MAPPED_FIELDS} entry: which side of the
+ *  printer/filament split each imported field lands on. */
 export const FIELD_KINDS: Record<(typeof MAPPED_FIELDS_LIST)[number], 'printer' | 'filament'> = {
   firmware: 'printer',
   bedWidthMm: 'printer',
@@ -81,16 +94,35 @@ export const FIELD_KINDS: Record<(typeof MAPPED_FIELDS_LIST)[number], 'printer' 
 }
 
 interface Ctx {
-  fields: Partial<PrinterProfile>
+  fields: ImportedFields
   warnings: string[]
   /** Raw config value lookup; returns undefined when absent. */
   get: (key: string) => string | undefined
 }
 
-function finish(ctx: Ctx): SlicerImportResult {
+/** Splits the flat imported fields into the printer and filament sides via FIELD_KINDS. */
+function splitFields(fields: ImportedFields): SlicerImportResult['fields'] {
+  const printer: Record<string, unknown> = {}
+  const filament: Record<string, unknown> = {}
+  for (const field of MAPPED_FIELDS) {
+    const value = fields[field]
+    if (value === undefined) continue
+    const target = FIELD_KINDS[field] === 'printer' ? printer : filament
+    target[field] = value
+  }
+  return {
+    printer: printer as ImportedPrinterFields,
+    filament: filament as ImportedFilamentFields,
+  }
+}
+
+function finish(
+  ctx: Ctx,
+  filaments: SlicerImportResult['filaments'] = [],
+): SlicerImportResult {
   const imported = MAPPED_FIELDS.filter((f) => ctx.fields[f] !== undefined)
   const missing = MAPPED_FIELDS.filter((f) => ctx.fields[f] === undefined)
-  return { fields: ctx.fields, imported, missing, warnings: ctx.warnings }
+  return { fields: splitFields(ctx.fields), filaments, imported, missing, warnings: ctx.warnings }
 }
 
 /** Parses "123", "123,456" (index 0), rejecting percent values with a warning. */
@@ -118,7 +150,7 @@ function firstNumber(ctx: Ctx, keys: string[]): number | undefined {
   return undefined
 }
 
-function setNum(ctx: Ctx, field: keyof PrinterProfile, value: number | undefined): void {
+function setNum(ctx: Ctx, field: keyof ImportedFields, value: number | undefined): void {
   if (value !== undefined) (ctx.fields as Record<string, unknown>)[field] = value
 }
 
@@ -181,10 +213,7 @@ function applyCommon(
     }
   }
   setNum(ctx, 'nozzleDiameterMm', numberFrom(ctx, 'nozzle_diameter'))
-  setNum(ctx, 'filamentDiameterMm', numberFrom(ctx, 'filament_diameter'))
-  setNum(ctx, 'nozzleTempC', firstNumber(ctx, keys.nozzleTemp))
-  setNum(ctx, 'bedTempC', firstNumber(ctx, keys.bedTemp))
-  setNum(ctx, 'chamberTempC', firstNumber(ctx, keys.chamberTemp))
+  applyFilamentKeys(ctx, keys)
   setNum(ctx, 'layerHeightMm', firstNumber(ctx, ['layer_height']))
   setNum(ctx, 'retractMm', firstNumber(ctx, keys.retractLength))
   setNum(ctx, 'retractSpeedMmS', firstNumber(ctx, keys.retractSpeed))
@@ -198,10 +227,6 @@ function applyCommon(
       : firstNumber(ctx, ['machine_max_acceleration_extruding', 'machine_max_acceleration_x']),
   )
   setNum(ctx, 'squareCornerVelocityMmS', numberFrom(ctx, 'machine_max_jerk_x'))
-  const filamentType = ctx.get('filament_type')
-  if (filamentType !== undefined && filamentType.trim() !== '') {
-    ctx.fields.filamentType = filamentType.split(',')[0].trim()
-  }
   const start = ctx.get(keys.startGcode)
   if (start !== undefined) ctx.fields.startGcode = keys.gcodeTransform(start)
   const end = ctx.get(keys.endGcode)
@@ -216,12 +241,38 @@ function applyCommon(
   applyFirmware(ctx)
 }
 
+/** Filament-kind key sets, shared by both formats. */
+interface FilamentKeys {
+  nozzleTemp: string[]
+  bedTemp: string[]
+  chamberTemp: string[]
+}
+
+/** Fills the filament-kind fields (diameter, temps, type) from a key map. */
+function applyFilamentKeys(ctx: Ctx, keys: FilamentKeys): void {
+  setNum(ctx, 'filamentDiameterMm', numberFrom(ctx, 'filament_diameter'))
+  setNum(ctx, 'nozzleTempC', firstNumber(ctx, keys.nozzleTemp))
+  setNum(ctx, 'bedTempC', firstNumber(ctx, keys.bedTemp))
+  setNum(ctx, 'chamberTempC', firstNumber(ctx, keys.chamberTemp))
+  const filamentType = ctx.get('filament_type')
+  if (filamentType !== undefined && filamentType.trim() !== '') {
+    ctx.fields.filamentType = filamentType.split(',')[0].trim()
+  }
+}
+
 // ---------------------------------------------------------------------------
 // PrusaSlicer .ini
 // ---------------------------------------------------------------------------
 
-/** Returns a key map, or null when the content has no key = value lines at all. */
-function tryParseIni(content: string): Map<string, string> | null {
+/** A parsed PrusaSlicer .ini: the merged key map plus any named filament bundle sections. */
+interface ParsedIni {
+  keys: Map<string, string>
+  /** Named (non-hidden) [filament:...] sections in file order; empty for flat exports. */
+  filamentSections: { name: string; keys: Map<string, string> }[]
+}
+
+/** Returns the parsed ini, or null when the content has no key = value lines at all. */
+function tryParseIni(content: string): ParsedIni | null {
   const sections = new Map<string, Map<string, string>>()
   const flat = new Map<string, string>()
   let current: Map<string, string> = flat
@@ -241,8 +292,14 @@ function tryParseIni(content: string): Map<string, string> | null {
     sawAssignment = true
   }
   if (!sawAssignment) return null
-  if (sections.size === 0) return flat
-  return mergeBundle(sections)
+  if (sections.size === 0) return { keys: flat, filamentSections: [] }
+  const filamentSections: ParsedIni['filamentSections'] = []
+  for (const [name, keys] of sections) {
+    if (name.startsWith('filament:') && !name.slice('filament:'.length).startsWith('*')) {
+      filamentSections.push({ name: name.slice('filament:'.length), keys })
+    }
+  }
+  return { keys: mergeBundle(sections), filamentSections }
 }
 
 /** Merges a config-bundle's chosen print/filament/printer presets into one key map. */
@@ -268,21 +325,36 @@ function mergeBundle(sections: Map<string, Map<string, string>>): Map<string, st
   return merged
 }
 
-function importPrusa(keys: Map<string, string>): SlicerImportResult {
+const PRUSA_FILAMENT_KEYS: FilamentKeys = {
+  nozzleTemp: ['first_layer_temperature', 'temperature'],
+  bedTemp: ['first_layer_bed_temperature', 'bed_temperature'],
+  chamberTemp: ['chamber_temperature', 'chamber_minimal_temperature'],
+}
+
+function importPrusa(ini: ParsedIni): SlicerImportResult {
+  const { keys } = ini
   const ctx: Ctx = { fields: {}, warnings: [], get: (key) => keys.get(key) }
   applyCommon(ctx, {
     bedPoints: () => keys.get('bed_shape')?.split(','),
-    nozzleTemp: ['first_layer_temperature', 'temperature'],
-    bedTemp: ['first_layer_bed_temperature', 'bed_temperature'],
+    ...PRUSA_FILAMENT_KEYS,
     retractLength: ['retract_length'],
     retractSpeed: ['retract_speed'],
     startGcode: 'start_gcode',
     endGcode: 'end_gcode',
     pauseGcode: ['pause_print_gcode'],
-    chamberTemp: ['chamber_temperature', 'chamber_minimal_temperature'],
     gcodeTransform: (raw) => raw.replace(/\\n/g, '\n'),
   })
-  return finish(ctx)
+  return finish(ctx, ini.filamentSections.map((s) => prusaBundleFilament(s, ctx.warnings)))
+}
+
+/** Extracts one bundle [filament:...] section's filament-kind fields under its section name. */
+function prusaBundleFilament(
+  section: { name: string; keys: Map<string, string> },
+  warnings: string[],
+): SlicerImportResult['filaments'][number] {
+  const ctx: Ctx = { fields: {}, warnings, get: (key) => section.keys.get(key) }
+  applyFilamentKeys(ctx, PRUSA_FILAMENT_KEYS)
+  return { name: section.name, fields: splitFields(ctx.fields).filament }
 }
 
 // ---------------------------------------------------------------------------

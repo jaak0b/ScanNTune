@@ -1,4 +1,4 @@
-import type { PrinterProfile, PaTestSpec } from './types'
+import type { FilamentProfile, PrinterProfile, PaTestSpec } from './types'
 import { couponGeometry, paValueForLine } from './types'
 import { substituteSlicerVariables } from './slicerVariables'
 
@@ -32,9 +32,17 @@ function travel(e: Emitter, p: PrinterProfile, x: number, y: number): void {
   e.y = y
 }
 
-function extrude(e: Emitter, p: PrinterProfile, spec: PaTestSpec, x: number, y: number, speedMmS: number): void {
+function extrude(
+  e: Emitter,
+  p: PrinterProfile,
+  f: FilamentProfile,
+  spec: PaTestSpec,
+  x: number,
+  y: number,
+  speedMmS: number,
+): void {
   const len = Math.hypot(x - e.x, y - e.y)
-  const eAmt = extrusionMm(len, spec.lineWidthMm, p.layerHeightMm, p.filamentDiameterMm)
+  const eAmt = extrusionMm(len, spec.lineWidthMm, p.layerHeightMm, f.filamentDiameterMm)
   e.lines.push(
     `G1 X${x.toFixed(3)} Y${y.toFixed(3)} E${eAmt.toFixed(5)} F${Math.round(speedMmS * 60)}`,
   )
@@ -95,6 +103,7 @@ const RASTER_SPEED_FACTOR = 1 / 3
 function rasterBase(
   e: Emitter,
   p: PrinterProfile,
+  f: FilamentProfile,
   spec: PaTestSpec,
   x0: number,
   y0: number,
@@ -148,13 +157,17 @@ function rasterBase(
     for (const [a, b] of ranges) {
       if (b - a < spec.lineWidthMm) continue
       travel(e, p, bx + a * ux, by + a * uy)
-      extrude(e, p, spec, bx + b * ux, by + b * uy, p.travelSpeedMmS * RASTER_SPEED_FACTOR)
+      extrude(e, p, f, spec, bx + b * ux, by + b * uy, p.travelSpeedMmS * RASTER_SPEED_FACTOR)
     }
   }
 }
 
-export function generatePaGcode(profile: PrinterProfile, spec: PaTestSpec): string {
-  return generatePaGcodeWithReport(profile, spec).gcode
+export function generatePaGcode(
+  profile: PrinterProfile,
+  filament: FilamentProfile,
+  spec: PaTestSpec,
+): string {
+  return generatePaGcodeWithReport(profile, filament, spec).gcode
 }
 
 /** Firmware-specific print acceleration and corner velocity (jerk) limit commands. */
@@ -177,14 +190,15 @@ function motionLimitCommands(profile: PrinterProfile): string[] {
  */
 export function generatePaGcodeWithReport(
   profile: PrinterProfile,
+  filament: FilamentProfile,
   spec: PaTestSpec,
 ): { gcode: string; unknownVariables: string[] } {
   if (spec.fastSpeedMmS <= spec.slowSpeedMmS) {
     throw new Error('Fast speed must exceed slow speed')
   }
-  const start = substituteSlicerVariables(profile.startGcode, profile)
-  const pause = substituteSlicerVariables(profile.pauseGcode, profile)
-  const end = substituteSlicerVariables(profile.endGcode, profile)
+  const start = substituteSlicerVariables(profile.startGcode, profile, filament)
+  const pause = substituteSlicerVariables(profile.pauseGcode, profile, filament)
+  const end = substituteSlicerVariables(profile.endGcode, profile, filament)
   const substituted: PrinterProfile = {
     ...profile,
     startGcode: start.gcode,
@@ -192,10 +206,10 @@ export function generatePaGcodeWithReport(
     endGcode: end.gcode,
   }
   const unknownVariables = [...new Set([...start.unknown, ...pause.unknown, ...end.unknown])]
-  return { gcode: emitPaGcode(substituted, spec), unknownVariables }
+  return { gcode: emitPaGcode(substituted, filament, spec), unknownVariables }
 }
 
-function emitPaGcode(profile: PrinterProfile, spec: PaTestSpec): string {
+function emitPaGcode(profile: PrinterProfile, filament: FilamentProfile, spec: PaTestSpec): string {
   const g = couponGeometry(spec)
   // Center the coupon on the bed.
   const ox = (profile.bedWidthMm - g.baseWidthMm) / 2
@@ -214,10 +228,10 @@ function emitPaGcode(profile: PrinterProfile, spec: PaTestSpec): string {
   const L = e.lines
   L.push('; ScanNTune pressure advance test')
   L.push('; fiducial holes preserved')
-  L.push(`M140 S${profile.bedTempC}`)
-  L.push(`M104 S${profile.nozzleTempC}`)
-  L.push(`M190 S${profile.bedTempC}`)
-  L.push(`M109 S${profile.nozzleTempC}`)
+  L.push(`M140 S${filament.bedTempC}`)
+  L.push(`M104 S${filament.nozzleTempC}`)
+  L.push(`M190 S${filament.bedTempC}`)
+  L.push(`M109 S${filament.nozzleTempC}`)
   L.push(...profile.startGcode.split('\n'))
   L.push('M83') // relative extrusion, restated in case start gcode changed it
   L.push('G90')
@@ -227,7 +241,7 @@ function emitPaGcode(profile: PrinterProfile, spec: PaTestSpec): string {
   for (let layer = 0; layer < BASE_LAYERS; layer++) {
     const z = profile.layerHeightMm * (layer + 1)
     L.push(`G1 Z${z.toFixed(3)} F600`)
-    rasterBase(e, profile, spec, ox, oy, g.baseWidthMm, g.baseHeightMm, layer === 0, holes)
+    rasterBase(e, profile, filament, spec, ox, oy, g.baseWidthMm, g.baseHeightMm, layer === 0, holes)
   }
 
   // Filament change to the contrasting color.
@@ -243,7 +257,7 @@ function emitPaGcode(profile: PrinterProfile, spec: PaTestSpec): string {
   L.push(`G1 Z${z3.toFixed(3)} F600`)
   L.push(paCommand(profile.firmware, 0))
   travel(e, profile, ox + 2, oy + 1.5)
-  extrude(e, profile, spec, ox + g.baseWidthMm - 2, oy + 1.5, spec.slowSpeedMmS)
+  extrude(e, profile, filament, spec, ox + g.baseWidthMm - 2, oy + 1.5, spec.slowSpeedMmS)
 
   // Test lines.
   for (let i = 0; i < spec.lineCount; i++) {
@@ -253,9 +267,9 @@ function emitPaGcode(profile: PrinterProfile, spec: PaTestSpec): string {
     retract(e, profile, 1)
     travel(e, profile, x0, y)
     retract(e, profile, -1)
-    extrude(e, profile, spec, x0 + spec.slowSegmentMm, y, spec.slowSpeedMmS)
-    extrude(e, profile, spec, x0 + spec.slowSegmentMm + spec.fastSegmentMm, y, spec.fastSpeedMmS)
-    extrude(e, profile, spec, x0 + 2 * spec.slowSegmentMm + spec.fastSegmentMm, y, spec.slowSpeedMmS)
+    extrude(e, profile, filament, spec, x0 + spec.slowSegmentMm, y, spec.slowSpeedMmS)
+    extrude(e, profile, filament, spec, x0 + spec.slowSegmentMm + spec.fastSegmentMm, y, spec.fastSpeedMmS)
+    extrude(e, profile, filament, spec, x0 + 2 * spec.slowSegmentMm + spec.fastSegmentMm, y, spec.slowSpeedMmS)
   }
 
   retract(e, profile, 1)

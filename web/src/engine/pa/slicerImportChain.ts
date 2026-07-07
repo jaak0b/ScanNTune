@@ -84,7 +84,8 @@ function importSingleFile(file: ParsedFile): SlicerImportResult {
     return importSlicerConfig(file.fileName, file.content)
   } catch (e) {
     return {
-      fields: {},
+      fields: { printer: {}, filament: {} },
+      filaments: [],
       imported: [],
       missing: [],
       warnings: [e instanceof Error ? e.message : String(e)],
@@ -182,15 +183,18 @@ function unresolvedInheritsWarning(parentName: string): string {
 
 /** later-file-wins merge across files, matching the existing form loop's behavior. */
 function mergeResults(imports: SlicerImportResult[]): SlicerImportResult {
-  const fields: SlicerImportResult['fields'] = {}
+  const fields: SlicerImportResult['fields'] = { printer: {}, filament: {} }
+  const filaments: SlicerImportResult['filaments'] = []
   const importedFields = new Set<string>()
   const warnings: string[] = []
   let missing: string[] = []
   for (const result of imports) {
-    Object.assign(fields, result.fields)
+    Object.assign(fields.printer, result.fields.printer)
+    Object.assign(fields.filament, result.fields.filament)
+    filaments.push(...result.filaments)
     for (const f of result.imported) importedFields.add(f)
     missing = result.missing.filter((f) => !importedFields.has(f))
     warnings.push(...result.warnings)
   }
-  return { fields, imported: [...importedFields], missing, warnings }
+  return { fields, filaments, imported: [...importedFields], missing, warnings }
 }

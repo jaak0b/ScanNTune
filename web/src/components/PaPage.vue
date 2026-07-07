@@ -57,13 +57,21 @@ function confirmDelete(): void {
   deleteOpen.value = false
 }
 
+const filamentItems = computed(() =>
+  (store.selected?.filaments ?? []).map((f) => ({ title: f.name, value: f.id })),
+)
+function onSelectFilament(filamentId: string | null): void {
+  if (store.selected && filamentId) store.selectFilament(store.selected.id, filamentId)
+}
+
 const summaryChips = computed(() => {
   const p = store.selected
-  if (!p) return []
+  const f = store.selectedFilament
+  if (!p || !f) return []
   const chips = [
     `${p.firmware} · ${p.nozzleDiameterMm} mm nozzle`,
     `${p.bedWidthMm} × ${p.bedDepthMm} mm bed`,
-    `${p.nozzleTempC} °C / ${p.bedTempC} °C`,
+    `${f.filamentType} · ${f.nozzleTempC} °C / ${f.bedTempC} °C`,
   ]
   const d = defaultPrinterProfile()
   if (p.startGcode !== d.startGcode || p.pauseGcode !== d.pauseGcode || p.endGcode !== d.endGcode) {
@@ -107,7 +115,7 @@ const maxLinesForA4 = computed(() => maxLineCountForHeight(spec.value, A4_LONG_M
 
 const generateError = ref('')
 const unknownVariables = ref<string[]>([])
-const canGenerate = computed(() => store.selected !== null)
+const canGenerate = computed(() => store.selected !== null && store.selectedFilament !== null)
 
 function sanitizeName(name: string): string {
   return name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || 'printer'
@@ -127,12 +135,13 @@ const printTimeText = computed(() => {
 
 function generate(): void {
   const profile = store.selected
-  if (!profile) return
+  const filament = store.selectedFilament
+  if (!profile || !filament) return
   generateError.value = ''
   unknownVariables.value = []
   let gcode: string
   try {
-    const report = generatePaGcodeWithReport(profile, spec.value)
+    const report = generatePaGcodeWithReport(profile, filament, spec.value)
     gcode = report.gcode
     unknownVariables.value = report.unknownVariables
   } catch (e) {
@@ -237,6 +246,17 @@ function applyShift(): void {
           class="profile-select"
           data-testid="profile-select"
           @update:model-value="onSelect"
+        />
+        <v-select
+          v-if="store.selected"
+          :model-value="store.selectedFilament?.id ?? null"
+          :items="filamentItems"
+          label="Filament"
+          density="comfortable"
+          hide-details
+          class="filament-select"
+          data-testid="pa-filament-select"
+          @update:model-value="onSelectFilament"
         />
         <v-btn
           variant="tonal"
@@ -490,6 +510,9 @@ function applyShift(): void {
 }
 .profile-select {
   flex: 1 1 220px;
+}
+.filament-select {
+  flex: 1 1 160px;
 }
 .chips {
   display: flex;

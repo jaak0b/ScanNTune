@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import { usePrinterProfiles } from '../../src/stores/usePrinterProfiles'
-import { defaultPrinterProfile } from '../../src/engine/pa/types'
+import { defaultFilamentProfile, defaultPrinterProfile } from '../../src/engine/pa/types'
 
 describe('usePrinterProfiles', () => {
   beforeEach(() => {
@@ -43,23 +43,69 @@ describe('usePrinterProfiles', () => {
     expect(store.selectedId).toBeNull()
   })
 
-  it('keeps a legacy profile missing later-added fields, filling defaults', () => {
-    const legacy: Record<string, unknown> = { ...defaultPrinterProfile(), id: 'legacy-1' }
-    delete legacy.filamentType
-    delete legacy.chamberTempC
-    delete legacy.printAccelMmS2
-    delete legacy.squareCornerVelocityMmS
+  it('fills empty filament ids on upsert and selects the first filament', () => {
+    const store = usePrinterProfiles()
+    const id = store.upsert({ ...defaultPrinterProfile(), name: 'Voron' })
+    store.select(id)
+    const saved = store.profiles[0]
+    expect(saved.filaments).toHaveLength(1)
+    expect(saved.filaments[0].id).not.toBe('')
+    expect(saved.selectedFilamentId).toBe(saved.filaments[0].id)
+    expect(store.selectedFilament?.id).toBe(saved.filaments[0].id)
+  })
+
+  it('selectFilament switches the selected filament and persists it', () => {
+    const store = usePrinterProfiles()
+    const profile = {
+      ...defaultPrinterProfile(),
+      name: 'Multi',
+      filaments: [
+        { ...defaultFilamentProfile(), name: 'PLA' },
+        { ...defaultFilamentProfile(), name: 'PETG', filamentType: 'PETG' },
+      ],
+    }
+    const id = store.upsert(profile)
+    store.select(id)
+    const petg = store.profiles[0].filaments[1]
+    store.selectFilament(id, petg.id)
+    expect(store.selectedFilament?.name).toBe('PETG')
+    setActivePinia(createPinia())
+    const reloaded = usePrinterProfiles()
+    expect(reloaded.profiles[0].selectedFilamentId).toBe(petg.id)
+  })
+
+  it('ignores selectFilament for a filament id the printer does not have', () => {
+    const store = usePrinterProfiles()
+    const id = store.upsert({ ...defaultPrinterProfile(), name: 'Voron' })
+    store.select(id)
+    const before = store.profiles[0].selectedFilamentId
+    store.selectFilament(id, 'not-a-filament')
+    expect(store.profiles[0].selectedFilamentId).toBe(before)
+  })
+
+  it('drops a stored profile without a valid filaments array', () => {
+    const invalid = { ...defaultPrinterProfile(), id: 'p1', filaments: [] }
     localStorage.setItem(
       'scanntune.printerProfiles',
-      JSON.stringify({ profiles: [legacy], selectedId: 'legacy-1' }),
+      JSON.stringify({ profiles: [invalid], selectedId: 'p1' }),
     )
     const store = usePrinterProfiles()
-    expect(store.profiles).toHaveLength(1)
-    expect(store.profiles[0].filamentType).toBe('PLA')
-    expect(store.profiles[0].chamberTempC).toBe(0)
-    expect(store.profiles[0].printAccelMmS2).toBe(3000)
-    expect(store.profiles[0].squareCornerVelocityMmS).toBe(5)
-    expect(store.selected?.id).toBe('legacy-1')
+    expect(store.profiles).toHaveLength(0)
+  })
+
+  it('repoints a dangling selectedFilamentId at the first filament on load', () => {
+    const stored = {
+      ...defaultPrinterProfile(),
+      id: 'p1',
+      filaments: [{ ...defaultFilamentProfile(), id: 'f1' }],
+      selectedFilamentId: 'gone',
+    }
+    localStorage.setItem(
+      'scanntune.printerProfiles',
+      JSON.stringify({ profiles: [stored], selectedId: 'p1' }),
+    )
+    const store = usePrinterProfiles()
+    expect(store.profiles[0].selectedFilamentId).toBe('f1')
   })
 
   it('drops corrupt storage without throwing', () => {

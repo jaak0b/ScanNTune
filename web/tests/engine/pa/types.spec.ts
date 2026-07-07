@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  defaultFilamentProfile,
   defaultPrinterProfile,
   defaultPaTestSpec,
   paValueForLine,
@@ -37,12 +38,24 @@ describe('pa types', () => {
     expect(g.transitionXsMm).toEqual([spec.slowSegmentMm, spec.slowSegmentMm + spec.fastSegmentMm])
   })
 
-  it('provides sane printer defaults', () => {
+  it('provides sane printer defaults with one default filament', () => {
     const p = defaultPrinterProfile()
     expect(p.firmware).toBe('Klipper')
     expect(p.nozzleDiameterMm).toBeCloseTo(0.4)
-    expect(p.filamentDiameterMm).toBeCloseTo(1.75)
     expect(p.bedWidthMm).toBeGreaterThan(100)
+    expect(p.filaments).toHaveLength(1)
+    expect(p.selectedFilamentId).toBeNull()
+    expect(p.filaments[0]).toEqual(defaultFilamentProfile())
+  })
+
+  it('provides sane filament defaults', () => {
+    const f = defaultFilamentProfile()
+    expect(f.name).toBe('Default')
+    expect(f.filamentType).toBe('PLA')
+    expect(f.filamentDiameterMm).toBeCloseTo(1.75)
+    expect(f.nozzleTempC).toBe(210)
+    expect(f.bedTempC).toBe(60)
+    expect(f.chamberTempC).toBe(0)
   })
 
   describe('edgeShiftRange', () => {

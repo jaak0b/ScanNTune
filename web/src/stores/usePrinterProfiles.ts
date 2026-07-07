@@ -1,76 +1,71 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
-import type { PrinterProfile } from '../engine/pa/types'
-import { defaultPrinterProfile } from '../engine/pa/types'
+import type { FilamentProfile, PrinterProfile } from '../engine/pa/types'
 
 const STORAGE_KEY = 'scanntune.printerProfiles'
 
-const NUMERIC_FIELDS = [
+const PRINTER_NUMERIC_FIELDS = [
   'bedWidthMm',
   'bedDepthMm',
   'nozzleDiameterMm',
-  'filamentDiameterMm',
-  'nozzleTempC',
-  'bedTempC',
   'travelSpeedMmS',
   'layerHeightMm',
   'retractMm',
   'retractSpeedMmS',
-  'chamberTempC',
   'printAccelMmS2',
   'squareCornerVelocityMmS',
 ] as const
 
-const STRING_FIELDS = [
+const PRINTER_STRING_FIELDS = [
   'id',
   'name',
   'firmware',
   'startGcode',
   'pauseGcode',
   'endGcode',
-  'filamentType',
 ] as const
 
-// Fields added after the first release: profiles saved before they existed are still valid and
-// get the default value filled in on load.
-const OPTIONAL_NUMERIC_FIELDS: readonly (typeof NUMERIC_FIELDS)[number][] = [
+const FILAMENT_NUMERIC_FIELDS = [
+  'filamentDiameterMm',
+  'nozzleTempC',
+  'bedTempC',
   'chamberTempC',
-  'printAccelMmS2',
-  'squareCornerVelocityMmS',
-]
-const OPTIONAL_STRING_FIELDS: readonly (typeof STRING_FIELDS)[number][] = ['filamentType']
+] as const
 
-type LaterAddedField = 'chamberTempC' | 'filamentType' | 'printAccelMmS2' | 'squareCornerVelocityMmS'
+const FILAMENT_STRING_FIELDS = ['id', 'name', 'filamentType'] as const
 
-/** A stored profile from an older release: fields added later may be absent. */
-type StoredProfile = Omit<PrinterProfile, LaterAddedField> &
-  Partial<Pick<PrinterProfile, LaterAddedField>>
-
-function isValidProfile(value: unknown): value is StoredProfile {
-  if (typeof value !== 'object' || value === null) return false
-  const record = value as Record<string, unknown>
-  const numbersOk = NUMERIC_FIELDS.every(
-    (k) =>
-      (typeof record[k] === 'number' && Number.isFinite(record[k])) ||
-      (OPTIONAL_NUMERIC_FIELDS.includes(k) && record[k] === undefined),
-  )
-  const stringsOk = STRING_FIELDS.every(
-    (k) =>
-      typeof record[k] === 'string' ||
-      (OPTIONAL_STRING_FIELDS.includes(k) && record[k] === undefined),
-  )
-  return numbersOk && stringsOk
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value)
 }
 
-function withDefaults(profile: StoredProfile): PrinterProfile {
-  const defaults = defaultPrinterProfile()
-  return {
-    chamberTempC: defaults.chamberTempC,
-    filamentType: defaults.filamentType,
-    printAccelMmS2: defaults.printAccelMmS2,
-    squareCornerVelocityMmS: defaults.squareCornerVelocityMmS,
-    ...profile,
-  }
+function isValidFilament(value: unknown): value is FilamentProfile {
+  if (typeof value !== 'object' || value === null) return false
+  const record = value as Record<string, unknown>
+  return (
+    FILAMENT_NUMERIC_FIELDS.every((k) => isFiniteNumber(record[k])) &&
+    FILAMENT_STRING_FIELDS.every((k) => typeof record[k] === 'string')
+  )
+}
+
+function isValidProfile(value: unknown): value is PrinterProfile {
+  if (typeof value !== 'object' || value === null) return false
+  const record = value as Record<string, unknown>
+  const numbersOk = PRINTER_NUMERIC_FIELDS.every((k) => isFiniteNumber(record[k]))
+  const stringsOk = PRINTER_STRING_FIELDS.every((k) => typeof record[k] === 'string')
+  const filamentsOk =
+    Array.isArray(record.filaments) &&
+    record.filaments.length > 0 &&
+    record.filaments.every(isValidFilament)
+  const selectedOk =
+    record.selectedFilamentId === null || typeof record.selectedFilamentId === 'string'
+  return numbersOk && stringsOk && filamentsOk && selectedOk
+}
+
+/** Points selectedFilamentId at an existing filament, falling back to the first one. */
+function withResolvedFilamentSelection(profile: PrinterProfile): PrinterProfile {
+  const exists = profile.filaments.some((f) => f.id === profile.selectedFilamentId)
+  if (exists) return profile
+  return { ...profile, selectedFilamentId: profile.filaments[0].id }
 }
 
 interface StoredState {
@@ -92,7 +87,7 @@ function loadFromStorage(): StoredState {
         console.warn('Dropping invalid stored printer profile', p)
         return false
       })
-      .map(withDefaults)
+      .map(withResolvedFilamentSelection)
     const selectedId = typeof record.selectedId === 'string' ? record.selectedId : null
     return { profiles, selectedId }
   } catch (e) {
@@ -110,6 +105,12 @@ export const usePrinterProfiles = defineStore('printerProfiles', () => {
     () => profiles.value.find((p) => p.id === selectedId.value) ?? null,
   )
 
+  const selectedFilament = computed<FilamentProfile | null>(() => {
+    const p = selected.value
+    if (!p) return null
+    return p.filaments.find((f) => f.id === p.selectedFilamentId) ?? p.filaments[0] ?? null
+  })
+
   function persist(): void {
     try {
       localStorage.setItem(
@@ -123,7 +124,10 @@ export const usePrinterProfiles = defineStore('printerProfiles', () => {
 
   function upsert(profile: PrinterProfile): string {
     const id = profile.id === '' ? crypto.randomUUID() : profile.id
-    const withId = { ...profile, id }
+    const filaments = profile.filaments.map((f) =>
+      f.id === '' ? { ...f, id: crypto.randomUUID() } : f,
+    )
+    const withId = withResolvedFilamentSelection({ ...profile, id, filaments })
     const index = profiles.value.findIndex((p) => p.id === id)
     if (index === -1) {
       profiles.value = [...profiles.value, withId]
@@ -147,5 +151,14 @@ export const usePrinterProfiles = defineStore('printerProfiles', () => {
     persist()
   }
 
-  return { profiles, selectedId, selected, upsert, remove, select }
+  function selectFilament(printerId: string, filamentId: string): void {
+    profiles.value = profiles.value.map((p) => {
+      if (p.id !== printerId) return p
+      if (!p.filaments.some((f) => f.id === filamentId)) return p
+      return { ...p, selectedFilamentId: filamentId }
+    })
+    persist()
+  }
+
+  return { profiles, selectedId, selected, selectedFilament, upsert, remove, select, selectFilament }
 })

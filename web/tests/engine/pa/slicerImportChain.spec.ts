@@ -35,11 +35,11 @@ describe('importSlicerConfigs: multi-file Orca inherits resolution', () => {
       { fileName: 'orca_machine_chubechanger.json', content: chubechanger },
     ])
     expect(orderA.fields).toEqual(orderB.fields)
-    expect(orderA.fields.bedWidthMm).toBe(300)
-    expect(orderA.fields.bedDepthMm).toBe(300)
-    expect(orderA.fields.firmware).toBe('Klipper')
+    expect(orderA.fields.printer.bedWidthMm).toBe(300)
+    expect(orderA.fields.printer.bedDepthMm).toBe(300)
+    expect(orderA.fields.printer.firmware).toBe('Klipper')
     // Child's own retraction_length (0.8) wins over the parent's (0.6).
-    expect(orderA.fields.retractMm).toBe(0.8)
+    expect(orderA.fields.printer.retractMm).toBe(0.8)
   })
 
   it('has no unresolved-inherits warning once the parent is uploaded', () => {
@@ -86,8 +86,8 @@ describe('importSlicerConfigs: multi-file Orca inherits resolution', () => {
     const result = importSlicerConfigs([
       { fileName: 'orca_machine_chubechanger.json', content: chubechanger },
     ])
-    expect(result.fields.nozzleDiameterMm).toBe(0.4)
-    expect(result.fields.retractMm).toBe(0.8)
+    expect(result.fields.printer.nozzleDiameterMm).toBe(0.4)
+    expect(result.fields.printer.retractMm).toBe(0.8)
   })
 
   it('prefixes generic per-file warnings with the source file name', () => {

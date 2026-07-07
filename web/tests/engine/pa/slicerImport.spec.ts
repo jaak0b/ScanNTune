@@ -105,43 +105,43 @@ describe('importSlicerConfig with a flat PrusaSlicer export', () => {
   const result = importSlicerConfig('config.ini', prusaFlat)
 
   it('reads the bed size from the bed_shape polygon bounding box', () => {
-    expect(result.fields.bedWidthMm).toBe(300)
-    expect(result.fields.bedDepthMm).toBe(300)
+    expect(result.fields.printer.bedWidthMm).toBe(300)
+    expect(result.fields.printer.bedDepthMm).toBe(300)
   })
 
   it('takes index 0 of per-extruder comma lists', () => {
-    expect(result.fields.nozzleDiameterMm).toBe(0.4)
-    expect(result.fields.retractMm).toBe(0.8)
-    expect(result.fields.retractSpeedMmS).toBe(35)
+    expect(result.fields.printer.nozzleDiameterMm).toBe(0.4)
+    expect(result.fields.printer.retractMm).toBe(0.8)
+    expect(result.fields.printer.retractSpeedMmS).toBe(35)
   })
 
   it('prefers first-layer temperatures', () => {
-    expect(result.fields.nozzleTempC).toBe(215)
-    expect(result.fields.bedTempC).toBe(65)
+    expect(result.fields.filament.nozzleTempC).toBe(215)
+    expect(result.fields.filament.bedTempC).toBe(65)
   })
 
   it('reads the plain scalar keys', () => {
-    expect(result.fields.filamentDiameterMm).toBe(1.75)
-    expect(result.fields.layerHeightMm).toBe(0.2)
-    expect(result.fields.travelSpeedMmS).toBe(180)
-    expect(result.fields.filamentType).toBe('PETG')
+    expect(result.fields.filament.filamentDiameterMm).toBe(1.75)
+    expect(result.fields.printer.layerHeightMm).toBe(0.2)
+    expect(result.fields.printer.travelSpeedMmS).toBe(180)
+    expect(result.fields.filament.filamentType).toBe('PETG')
   })
 
   it('falls back to machine_max_acceleration_extruding when default_acceleration is 0, taking the normal value of a dual pair', () => {
-    expect(result.fields.printAccelMmS2).toBe(1500)
+    expect(result.fields.printer.printAccelMmS2).toBe(1500)
   })
 
   it('maps machine_max_jerk_x to square corner velocity', () => {
-    expect(result.fields.squareCornerVelocityMmS).toBe(8)
+    expect(result.fields.printer.squareCornerVelocityMmS).toBe(8)
   })
 
   it('unescapes literal backslash-n in gcode', () => {
-    expect(result.fields.startGcode).toBe('G28 ; home all\nG90\nM83')
-    expect(result.fields.endGcode).toBe('M104 S0\nM84')
+    expect(result.fields.printer.startGcode).toBe('G28 ; home all\nG90\nM83')
+    expect(result.fields.printer.endGcode).toBe('M104 S0\nM84')
   })
 
   it('maps klipper gcode_flavor to Klipper firmware', () => {
-    expect(result.fields.firmware).toBe('Klipper')
+    expect(result.fields.printer.firmware).toBe('Klipper')
   })
 
   it('reports imported and missing field lists', () => {
@@ -158,23 +158,23 @@ describe('importSlicerConfig with a flat PrusaSlicer export', () => {
 describe('importSlicerConfig Prusa edge cases', () => {
   it('skips percent values with a warning', () => {
     const result = importSlicerConfig('config.ini', 'layer_height = 75%\ntravel_speed = 150\n')
-    expect(result.fields.layerHeightMm).toBeUndefined()
+    expect(result.fields.printer.layerHeightMm).toBeUndefined()
     expect(result.missing).toContain('layerHeightMm')
     expect(result.warnings.some((w) => w.includes('75%'))).toBe(true)
-    expect(result.fields.travelSpeedMmS).toBe(150)
+    expect(result.fields.printer.travelSpeedMmS).toBe(150)
   })
 
   it('warns on an unknown gcode_flavor and leaves firmware unset', () => {
     const result = importSlicerConfig('config.ini', 'gcode_flavor = sailfish\n')
-    expect(result.fields.firmware).toBeUndefined()
+    expect(result.fields.printer.firmware).toBeUndefined()
     expect(result.missing).toContain('firmware')
     expect(result.warnings.some((w) => w.includes('sailfish'))).toBe(true)
   })
 
   it('falls back to non-first-layer temperatures', () => {
     const result = importSlicerConfig('config.ini', 'temperature = 240\nbed_temperature = 85\n')
-    expect(result.fields.nozzleTempC).toBe(240)
-    expect(result.fields.bedTempC).toBe(85)
+    expect(result.fields.filament.nozzleTempC).toBe(240)
+    expect(result.fields.filament.bedTempC).toBe(85)
   })
 
   it('uses default_acceleration when it is nonzero', () => {
@@ -182,7 +182,7 @@ describe('importSlicerConfig Prusa edge cases', () => {
       'config.ini',
       'default_acceleration = 2000\nmachine_max_acceleration_extruding = 7000\n',
     )
-    expect(result.fields.printAccelMmS2).toBe(2000)
+    expect(result.fields.printer.printAccelMmS2).toBe(2000)
   })
 })
 
@@ -190,29 +190,48 @@ describe('importSlicerConfig with a PrusaSlicer bundle', () => {
   const result = importSlicerConfig('bundle.ini', prusaBundle)
 
   it('uses the presets named in [presets], not hidden *common* presets', () => {
-    expect(result.fields.layerHeightMm).toBe(0.2)
-    expect(result.fields.travelSpeedMmS).toBe(150)
+    expect(result.fields.printer.layerHeightMm).toBe(0.2)
+    expect(result.fields.printer.travelSpeedMmS).toBe(150)
   })
 
   it('merges printer, filament, and print sections', () => {
-    expect(result.fields.bedWidthMm).toBe(250)
-    expect(result.fields.bedDepthMm).toBe(210)
-    expect(result.fields.nozzleTempC).toBe(220)
-    expect(result.fields.filamentType).toBe('PLA')
-    expect(result.fields.retractMm).toBe(0.7)
-    expect(result.fields.printAccelMmS2).toBe(1250)
-    expect(result.fields.startGcode).toBe('G28\nG1 Z5')
+    expect(result.fields.printer.bedWidthMm).toBe(250)
+    expect(result.fields.printer.bedDepthMm).toBe(210)
+    expect(result.fields.filament.nozzleTempC).toBe(220)
+    expect(result.fields.filament.filamentType).toBe('PLA')
+    expect(result.fields.printer.retractMm).toBe(0.7)
+    expect(result.fields.printer.printAccelMmS2).toBe(1250)
+    expect(result.fields.printer.startGcode).toBe('G28\nG1 Z5')
   })
 
   it('maps marlin2 to Marlin', () => {
-    expect(result.fields.firmware).toBe('Marlin')
+    expect(result.fields.printer.firmware).toBe('Marlin')
+  })
+
+  it('lists one named filament per non-hidden [filament:...] section', () => {
+    const twoFilaments =
+      prusaBundle +
+      '\n[filament:*template*]\nfilament_type = TPU\n' +
+      '\n[filament:Extrudr PETG]\nfilament_type = PETG\ntemperature = 240\nfirst_layer_bed_temperature = 85\nfilament_diameter = 1.75\n'
+    const r = importSlicerConfig('bundle.ini', twoFilaments)
+    expect(r.filaments.map((f) => f.name)).toEqual(['Prusament PLA', 'Extrudr PETG'])
+    expect(r.filaments[0].fields.nozzleTempC).toBe(220)
+    expect(r.filaments[0].fields.filamentType).toBe('PLA')
+    expect(r.filaments[1].fields.nozzleTempC).toBe(240)
+    expect(r.filaments[1].fields.bedTempC).toBe(85)
+    expect(r.filaments[1].fields.filamentType).toBe('PETG')
+  })
+
+  it('reports no bundle filaments for a flat export', () => {
+    const r = importSlicerConfig('config.ini', prusaFlat)
+    expect(r.filaments).toEqual([])
   })
 
   it('falls back to the first non-hidden preset per section when [presets] is absent', () => {
     const noPresets = prusaBundle.replace(/\[presets\][\s\S]*$/, '')
     const r = importSlicerConfig('bundle.ini', noPresets)
-    expect(r.fields.layerHeightMm).toBe(0.2)
-    expect(r.fields.bedWidthMm).toBe(250)
+    expect(r.fields.printer.layerHeightMm).toBe(0.2)
+    expect(r.fields.printer.bedWidthMm).toBe(250)
   })
 })
 
@@ -220,26 +239,26 @@ describe('importSlicerConfig with an OrcaSlicer machine preset', () => {
   const result = importSlicerConfig('My Voron 0.4 nozzle.json', orcaMachine)
 
   it('reads the bed size from the printable_area polygon', () => {
-    expect(result.fields.bedWidthMm).toBe(350)
-    expect(result.fields.bedDepthMm).toBe(350)
+    expect(result.fields.printer.bedWidthMm).toBe(350)
+    expect(result.fields.printer.bedDepthMm).toBe(350)
   })
 
   it('takes element 0 of string arrays', () => {
-    expect(result.fields.nozzleDiameterMm).toBe(0.4)
-    expect(result.fields.retractMm).toBe(0.5)
-    expect(result.fields.retractSpeedMmS).toBe(40)
-    expect(result.fields.printAccelMmS2).toBe(7000)
-    expect(result.fields.squareCornerVelocityMmS).toBe(9)
+    expect(result.fields.printer.nozzleDiameterMm).toBe(0.4)
+    expect(result.fields.printer.retractMm).toBe(0.5)
+    expect(result.fields.printer.retractSpeedMmS).toBe(40)
+    expect(result.fields.printer.printAccelMmS2).toBe(7000)
+    expect(result.fields.printer.squareCornerVelocityMmS).toBe(9)
   })
 
   it('reads machine gcode with real newlines and the pause gcode', () => {
-    expect(result.fields.startGcode).toBe('PRINT_START\nG28')
-    expect(result.fields.endGcode).toBe('PRINT_END')
-    expect(result.fields.pauseGcode).toBe('PAUSE')
+    expect(result.fields.printer.startGcode).toBe('PRINT_START\nG28')
+    expect(result.fields.printer.endGcode).toBe('PRINT_END')
+    expect(result.fields.printer.pauseGcode).toBe('PAUSE')
   })
 
   it('maps the firmware and reports filament fields as missing', () => {
-    expect(result.fields.firmware).toBe('Klipper')
+    expect(result.fields.printer.firmware).toBe('Klipper')
     expect(result.missing).toContain('filamentDiameterMm')
     expect(result.missing).toContain('nozzleTempC')
     expect(result.missing).toContain('filamentType')
@@ -251,21 +270,21 @@ describe('importSlicerConfig with an OrcaSlicer filament preset', () => {
   const result = importSlicerConfig('PLA Basic.json', orcaFilament)
 
   it('prefers the initial-layer nozzle temperature', () => {
-    expect(result.fields.nozzleTempC).toBe(215)
+    expect(result.fields.filament.nozzleTempC).toBe(215)
   })
 
   it('prefers the hot plate initial-layer temperature for the bed', () => {
-    expect(result.fields.bedTempC).toBe(65)
+    expect(result.fields.filament.bedTempC).toBe(65)
   })
 
   it('reads chamber temperature, filament type, and diameter', () => {
-    expect(result.fields.chamberTempC).toBe(0)
-    expect(result.fields.filamentType).toBe('PLA')
-    expect(result.fields.filamentDiameterMm).toBe(1.75)
+    expect(result.fields.filament.chamberTempC).toBe(0)
+    expect(result.fields.filament.filamentType).toBe('PLA')
+    expect(result.fields.filament.filamentDiameterMm).toBe(1.75)
   })
 
   it('treats "nil" entries as absent', () => {
-    expect(result.fields.retractMm).toBeUndefined()
+    expect(result.fields.printer.retractMm).toBeUndefined()
     expect(result.missing).toContain('retractMm')
   })
 
@@ -283,7 +302,7 @@ describe('importSlicerConfig with a sparse Orca preset that inherits', () => {
       layer_height: '0.2',
     })
     const result = importSlicerConfig('process.json', sparse)
-    expect(result.fields.layerHeightMm).toBe(0.2)
+    expect(result.fields.printer.layerHeightMm).toBe(0.2)
     expect(result.imported).toEqual(['layerHeightMm'])
     expect(result.warnings.some((w) => w.toLowerCase().includes('inherit'))).toBe(true)
   })
@@ -304,31 +323,31 @@ describe('importSlicerConfig with real-world fixtures', () => {
     const result = importSlicerConfig('prusa_printer_tridentbert.ini', content)
 
     it('reads the bed size from bed_shape = 0x0,300x0,300x300,0x300', () => {
-      expect(result.fields.bedWidthMm).toBe(300)
-      expect(result.fields.bedDepthMm).toBe(300)
+      expect(result.fields.printer.bedWidthMm).toBe(300)
+      expect(result.fields.printer.bedDepthMm).toBe(300)
     })
 
     it('reads nozzle diameter, retraction, and jerk', () => {
-      expect(result.fields.nozzleDiameterMm).toBe(0.4)
-      expect(result.fields.retractMm).toBe(0.75)
-      expect(result.fields.retractSpeedMmS).toBe(50)
-      expect(result.fields.squareCornerVelocityMmS).toBe(10)
+      expect(result.fields.printer.nozzleDiameterMm).toBe(0.4)
+      expect(result.fields.printer.retractMm).toBe(0.75)
+      expect(result.fields.printer.retractSpeedMmS).toBe(50)
+      expect(result.fields.printer.squareCornerVelocityMmS).toBe(10)
     })
 
     it('falls back to machine_max_acceleration_extruding since default_acceleration is absent', () => {
-      expect(result.fields.printAccelMmS2).toBe(1500)
+      expect(result.fields.printer.printAccelMmS2).toBe(1500)
     })
 
     it('maps the klipper gcode_flavor to Klipper firmware', () => {
-      expect(result.fields.firmware).toBe('Klipper')
+      expect(result.fields.printer.firmware).toBe('Klipper')
     })
 
     it('reads the end gcode containing the print_end macro call', () => {
-      expect(result.fields.endGcode).toContain('print_end')
+      expect(result.fields.printer.endGcode).toContain('print_end')
     })
 
     it('reads the pause_print_gcode', () => {
-      expect(result.fields.pauseGcode).toBe('M601')
+      expect(result.fields.printer.pauseGcode).toBe('M601')
     })
 
     it('reports fields this printer-only ini cannot fill as missing, consistent with imported', () => {
@@ -349,26 +368,26 @@ describe('importSlicerConfig with real-world fixtures', () => {
     const result = importSlicerConfig('orca_machine_tridentbert.json', content)
 
     it('is still recognized as an Orca preset via printer_settings_id, not "type"', () => {
-      expect(result.fields.bedWidthMm).toBeDefined()
+      expect(result.fields.printer.bedWidthMm).toBeDefined()
     })
 
     it('reads the bed size from printable_area 0x0,300x0,300x240,0x240', () => {
-      expect(result.fields.bedWidthMm).toBe(300)
-      expect(result.fields.bedDepthMm).toBe(240)
+      expect(result.fields.printer.bedWidthMm).toBe(300)
+      expect(result.fields.printer.bedDepthMm).toBe(240)
     })
 
     it('reads retraction_length and takes element 0 of the dual acceleration/jerk arrays', () => {
-      expect(result.fields.retractMm).toBe(0.6)
-      expect(result.fields.printAccelMmS2).toBe(45000)
-      expect(result.fields.squareCornerVelocityMmS).toBe(40)
+      expect(result.fields.printer.retractMm).toBe(0.6)
+      expect(result.fields.printer.printAccelMmS2).toBe(45000)
+      expect(result.fields.printer.squareCornerVelocityMmS).toBe(40)
     })
 
     it('reads the machine_start_gcode', () => {
-      expect(result.fields.startGcode).toContain('PRINT_START')
+      expect(result.fields.printer.startGcode).toContain('PRINT_START')
     })
 
     it('falls back to change_filament_gcode for the pause gcode', () => {
-      expect(result.fields.pauseGcode).toBe('PAUSE')
+      expect(result.fields.printer.pauseGcode).toBe('PAUSE')
     })
 
     it('warns about the "Voron Trident 300 0.4 nozzle" inherits parent', () => {
@@ -388,11 +407,11 @@ describe('importSlicerConfig with real-world fixtures', () => {
     const result = importSlicerConfig('orca_filament_extruder_pla.json', content)
 
     it('reads the hot_plate_temp_initial_layer as bed temperature', () => {
-      expect(result.fields.bedTempC).toBe(60)
+      expect(result.fields.filament.bedTempC).toBe(60)
     })
 
     it('has no nozzle_temperature key in this preset, so nozzleTempC is missing', () => {
-      expect(result.fields.nozzleTempC).toBeUndefined()
+      expect(result.fields.filament.nozzleTempC).toBeUndefined()
       expect(result.missing).toContain('nozzleTempC')
     })
 
@@ -411,11 +430,11 @@ describe('importSlicerConfig with real-world fixtures', () => {
     const result = importSlicerConfig('orca_filament_elegoo_petg.json', content)
 
     it('prefers nozzle_temperature_initial_layer for nozzle temperature', () => {
-      expect(result.fields.nozzleTempC).toBe(260)
+      expect(result.fields.filament.nozzleTempC).toBe(260)
     })
 
     it('has no hot_plate_temp key in this preset, so bedTempC is missing', () => {
-      expect(result.fields.bedTempC).toBeUndefined()
+      expect(result.fields.filament.bedTempC).toBeUndefined()
       expect(result.missing).toContain('bedTempC')
     })
 
@@ -434,17 +453,17 @@ describe('importSlicerConfig with real-world fixtures', () => {
     const result = importSlicerConfig('orca_machine_chubechanger.json', content)
 
     it('is recognized as an Orca preset via printer_settings_id', () => {
-      expect(result.fields.nozzleDiameterMm).toBeDefined()
+      expect(result.fields.printer.nozzleDiameterMm).toBeDefined()
     })
 
     it('reads nozzle diameter and retraction from the dual-extruder arrays (element 0)', () => {
-      expect(result.fields.nozzleDiameterMm).toBe(0.4)
-      expect(result.fields.retractMm).toBe(0.8)
-      expect(result.fields.retractSpeedMmS).toBe(30)
+      expect(result.fields.printer.nozzleDiameterMm).toBe(0.4)
+      expect(result.fields.printer.retractMm).toBe(0.8)
+      expect(result.fields.printer.retractSpeedMmS).toBe(30)
     })
 
     it('reads the machine_start_gcode', () => {
-      expect(result.fields.startGcode).toContain('PRINT_START')
+      expect(result.fields.printer.startGcode).toContain('PRINT_START')
     })
 
     it('warns about the "Voron 2.4 300 0.4 nozzle" inherits parent', () => {
@@ -452,8 +471,8 @@ describe('importSlicerConfig with real-world fixtures', () => {
     })
 
     it('has no printable_area key in this preset, so bed size is missing', () => {
-      expect(result.fields.bedWidthMm).toBeUndefined()
-      expect(result.fields.bedDepthMm).toBeUndefined()
+      expect(result.fields.printer.bedWidthMm).toBeUndefined()
+      expect(result.fields.printer.bedDepthMm).toBeUndefined()
       expect(result.missing).toContain('bedWidthMm')
       expect(result.missing).toContain('bedDepthMm')
     })

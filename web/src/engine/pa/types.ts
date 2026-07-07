@@ -1,5 +1,15 @@
 export type Firmware = 'Klipper' | 'Marlin' | 'RepRapFirmware'
 
+export interface FilamentProfile {
+  id: string
+  name: string
+  filamentType: string
+  filamentDiameterMm: number
+  nozzleTempC: number
+  bedTempC: number
+  chamberTempC: number
+}
+
 export interface PrinterProfile {
   id: string
   name: string
@@ -7,11 +17,8 @@ export interface PrinterProfile {
   bedWidthMm: number
   bedDepthMm: number
   nozzleDiameterMm: number
-  filamentDiameterMm: number
-  nozzleTempC: number
-  bedTempC: number
-  chamberTempC: number
-  filamentType: string
+  filaments: FilamentProfile[]
+  selectedFilamentId: string | null
   travelSpeedMmS: number
   printAccelMmS2: number
   /** Klipper square corner velocity, Marlin XY jerk, in mm/s. */
@@ -76,6 +83,18 @@ export interface PaResult {
   rotationQuarterTurns: number
 }
 
+export function defaultFilamentProfile(): FilamentProfile {
+  return {
+    id: '',
+    name: 'Default',
+    filamentType: 'PLA',
+    filamentDiameterMm: 1.75,
+    nozzleTempC: 210,
+    bedTempC: 60,
+    chamberTempC: 0,
+  }
+}
+
 export function defaultPrinterProfile(): PrinterProfile {
   return {
     id: '',
@@ -84,11 +103,8 @@ export function defaultPrinterProfile(): PrinterProfile {
     bedWidthMm: 220,
     bedDepthMm: 220,
     nozzleDiameterMm: 0.4,
-    filamentDiameterMm: 1.75,
-    nozzleTempC: 210,
-    bedTempC: 60,
-    chamberTempC: 0,
-    filamentType: 'PLA',
+    filaments: [defaultFilamentProfile()],
+    selectedFilamentId: null,
     travelSpeedMmS: 150,
     printAccelMmS2: 3000,
     squareCornerVelocityMmS: 5,

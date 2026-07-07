@@ -5,7 +5,7 @@ import {
   extrusionMm,
   estimatePaPrintSeconds,
 } from '../../../src/engine/pa/gcodeGenerator'
-import { defaultPrinterProfile, defaultPaTestSpec, paValueForLine, couponGeometry } from '../../../src/engine/pa/types'
+import { defaultFilamentProfile, defaultPrinterProfile, defaultPaTestSpec, paValueForLine, couponGeometry } from '../../../src/engine/pa/types'
 
 describe('extrusionMm', () => {
   it('computes E from the standard volumetric flow formula', () => {
@@ -17,10 +17,11 @@ describe('extrusionMm', () => {
 
 describe('generatePaGcode', () => {
   const profile = defaultPrinterProfile()
+  const filament = defaultFilamentProfile()
   const spec = defaultPaTestSpec()
 
   it('emits temps, start gcode, and relative extrusion', () => {
-    const g = generatePaGcode(profile, spec)
+    const g = generatePaGcode(profile, filament, spec)
     expect(g).toContain('M104 S210')
     expect(g).toContain('M140 S60')
     expect(g).toContain('M190 S60')
@@ -30,7 +31,7 @@ describe('generatePaGcode', () => {
   })
 
   it('emits one PA command per line with the stepped value', () => {
-    const g = generatePaGcode(profile, spec)
+    const g = generatePaGcode(profile, filament, spec)
     for (let i = 0; i < spec.lineCount; i++) {
       const v = paValueForLine(spec, i)
       expect(g).toContain(`SET_PRESSURE_ADVANCE ADVANCE=${v.toFixed(4)}`)
@@ -38,21 +39,21 @@ describe('generatePaGcode', () => {
   })
 
   it('uses M900 for Marlin and M572 for RepRap', () => {
-    const marlin = generatePaGcode({ ...profile, firmware: 'Marlin' }, spec)
+    const marlin = generatePaGcode({ ...profile, firmware: 'Marlin' }, filament, spec)
     expect(marlin).toContain('M900 K0.0000')
-    const rrf = generatePaGcode({ ...profile, firmware: 'RepRapFirmware' }, spec)
+    const rrf = generatePaGcode({ ...profile, firmware: 'RepRapFirmware' }, filament, spec)
     expect(rrf).toContain('M572 D0 S0.0000')
   })
 
   it('resets PA to 0 after the filament swap, before the prime line and before the first stepped PA command', () => {
-    const g = generatePaGcode(profile, spec)
+    const g = generatePaGcode(profile, filament, spec)
     const zeroPaAt = g.indexOf('SET_PRESSURE_ADVANCE ADVANCE=0.0000')
     expect(zeroPaAt).toBeGreaterThan(0)
     const primeLineAt = g.indexOf(`E${extrusionMm(
       couponGeometry(spec).baseWidthMm - 4,
       spec.lineWidthMm,
       profile.layerHeightMm,
-      profile.filamentDiameterMm,
+      filament.filamentDiameterMm,
     ).toFixed(5)}`)
     expect(primeLineAt).toBeGreaterThan(0)
     expect(zeroPaAt).toBeLessThan(primeLineAt)
@@ -64,7 +65,7 @@ describe('generatePaGcode', () => {
   })
 
   it('emits the pause gcode exactly once, between base and lines', () => {
-    const g = generatePaGcode(profile, spec)
+    const g = generatePaGcode(profile, filament, spec)
     const pauseAt = g.indexOf('\nPAUSE\n')
     expect(pauseAt).toBeGreaterThan(0)
     const firstPa = g.indexOf('SET_PRESSURE_ADVANCE')
@@ -73,7 +74,7 @@ describe('generatePaGcode', () => {
   })
 
   it('keeps all XY moves on the bed', () => {
-    const g = generatePaGcode(profile, spec)
+    const g = generatePaGcode(profile, filament, spec)
     for (const line of g.split('\n')) {
       const mx = /X(-?\d+(?:\.\d+)?)/.exec(line)
       const my = /Y(-?\d+(?:\.\d+)?)/.exec(line)
@@ -89,7 +90,7 @@ describe('generatePaGcode', () => {
   })
 
   it('never extrudes across a fiducial hole on base layers', () => {
-    const g = generatePaGcode(profile, spec)
+    const g = generatePaGcode(profile, filament, spec)
     const geo = couponGeometry(spec)
     const ox = (profile.bedWidthMm - geo.baseWidthMm) / 2
     const oy = (profile.bedDepthMm - geo.baseHeightMm) / 2
@@ -126,7 +127,7 @@ describe('generatePaGcode', () => {
   })
 
   it('ends with the end gcode', () => {
-    const g = generatePaGcode(profile, spec)
+    const g = generatePaGcode(profile, filament, spec)
     expect(g.trimEnd().endsWith('M84')).toBe(true)
   })
 
@@ -136,7 +137,7 @@ describe('generatePaGcode', () => {
       startGcode:
         'M117\nPRINT_START BED=[first_layer_bed_temperature] HOTEND=[first_layer_temperature] FILAMENT_TYPE=[filament_type] CHAMBER_TEMP=[chamber_temperature]',
     }
-    const g = generatePaGcode(p, spec)
+    const g = generatePaGcode(p, defaultFilamentProfile(), spec)
     expect(g).toContain('PRINT_START BED=60 HOTEND=210 FILAMENT_TYPE=PLA CHAMBER_TEMP=0')
   })
 })
@@ -145,7 +146,7 @@ describe('motion limits', () => {
   const spec = defaultPaTestSpec()
 
   function linesOf(firmware: 'Klipper' | 'Marlin' | 'RepRapFirmware'): string[] {
-    return generatePaGcode({ ...defaultPrinterProfile(), firmware }, spec).split('\n')
+    return generatePaGcode({ ...defaultPrinterProfile(), firmware }, defaultFilamentProfile(), spec).split('\n')
   }
 
   function assertAfterStartBeforeFirstMove(lines: string[], expected: string[]): void {
@@ -177,7 +178,7 @@ describe('motion limits', () => {
 
   it('uses the profile values, not constants', () => {
     const p = { ...defaultPrinterProfile(), printAccelMmS2: 1500, squareCornerVelocityMmS: 8 }
-    const g = generatePaGcode(p, spec)
+    const g = generatePaGcode(p, defaultFilamentProfile(), spec)
     expect(g).toContain('SET_VELOCITY_LIMIT ACCEL=1500 SQUARE_CORNER_VELOCITY=8')
   })
 })
@@ -186,9 +187,9 @@ describe('generatePaGcodeWithReport', () => {
   it('throws when fast speed does not exceed slow speed', () => {
     const p = defaultPrinterProfile()
     const bad = { ...defaultPaTestSpec(), slowSpeedMmS: 50, fastSpeedMmS: 50 }
-    expect(() => generatePaGcodeWithReport(p, bad)).toThrow('Fast speed must exceed slow speed')
+    expect(() => generatePaGcodeWithReport(p, defaultFilamentProfile(), bad)).toThrow('Fast speed must exceed slow speed')
     const worse = { ...defaultPaTestSpec(), slowSpeedMmS: 60, fastSpeedMmS: 40 }
-    expect(() => generatePaGcodeWithReport(p, worse)).toThrow('Fast speed must exceed slow speed')
+    expect(() => generatePaGcodeWithReport(p, defaultFilamentProfile(), worse)).toThrow('Fast speed must exceed slow speed')
   })
 
   it('reports unknown variables across start, pause, and end gcode, deduplicated', () => {
@@ -198,7 +199,7 @@ describe('generatePaGcodeWithReport', () => {
       pauseGcode: 'PAUSE {mystery_var} {other_var}',
       endGcode: 'M104 S{temperature}\nM84',
     }
-    const r = generatePaGcodeWithReport(p, defaultPaTestSpec())
+    const r = generatePaGcodeWithReport(p, defaultFilamentProfile(), defaultPaTestSpec())
     expect(r.unknownVariables).toEqual(['mystery_var', 'other_var'])
     expect(r.gcode).toContain('START [mystery_var]')
     expect(r.gcode).toContain('M104 S210')
@@ -206,9 +207,9 @@ describe('generatePaGcodeWithReport', () => {
 
   it('reports nothing for the default profile and matches generatePaGcode', () => {
     const p = defaultPrinterProfile()
-    const r = generatePaGcodeWithReport(p, defaultPaTestSpec())
+    const r = generatePaGcodeWithReport(p, defaultFilamentProfile(), defaultPaTestSpec())
     expect(r.unknownVariables).toEqual([])
-    expect(r.gcode).toBe(generatePaGcode(p, defaultPaTestSpec()))
+    expect(r.gcode).toBe(generatePaGcode(p, defaultFilamentProfile(), defaultPaTestSpec()))
   })
 })
 

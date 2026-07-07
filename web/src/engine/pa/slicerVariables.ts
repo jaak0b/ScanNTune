@@ -1,23 +1,26 @@
-import type { PrinterProfile } from './types'
+import type { FilamentProfile, PrinterProfile } from './types'
 
 // PrusaSlicer and OrcaSlicer placeholder names mapped onto profile fields. Case-sensitive,
 // matching the slicers' own variable names. The optional [n] index suffix (multi-extruder
 // vectors) is accepted and ignored: the PA coupon is a single-extruder print.
-const VARIABLE_MAP: Record<string, (p: PrinterProfile) => string | number> = {
-  first_layer_temperature: (p) => p.nozzleTempC,
-  temperature: (p) => p.nozzleTempC,
-  nozzle_temperature: (p) => p.nozzleTempC,
-  first_layer_nozzle_temperature: (p) => p.nozzleTempC,
-  first_layer_bed_temperature: (p) => p.bedTempC,
-  bed_temperature: (p) => p.bedTempC,
-  first_layer_bed_temp: (p) => p.bedTempC,
-  chamber_temperature: (p) => p.chamberTempC,
-  chamber_temp: (p) => p.chamberTempC,
-  filament_type: (p) => p.filamentType,
+const VARIABLE_MAP: Record<
+  string,
+  (p: PrinterProfile, f: FilamentProfile) => string | number
+> = {
+  first_layer_temperature: (_p, f) => f.nozzleTempC,
+  temperature: (_p, f) => f.nozzleTempC,
+  nozzle_temperature: (_p, f) => f.nozzleTempC,
+  first_layer_nozzle_temperature: (_p, f) => f.nozzleTempC,
+  first_layer_bed_temperature: (_p, f) => f.bedTempC,
+  bed_temperature: (_p, f) => f.bedTempC,
+  first_layer_bed_temp: (_p, f) => f.bedTempC,
+  chamber_temperature: (_p, f) => f.chamberTempC,
+  chamber_temp: (_p, f) => f.chamberTempC,
+  filament_type: (_p, f) => f.filamentType,
+  filament_diameter: (_p, f) => f.filamentDiameterMm,
   layer_height: (p) => p.layerHeightMm,
   first_layer_height: (p) => p.layerHeightMm,
   nozzle_diameter: (p) => p.nozzleDiameterMm,
-  filament_diameter: (p) => p.filamentDiameterMm,
   travel_speed: (p) => p.travelSpeedMmS,
 }
 
@@ -29,12 +32,14 @@ const PLACEHOLDER = /\[([A-Za-z_][A-Za-z0-9_]*)(?:\[\d+\])?\]|\{([A-Za-z_][A-Za-
 
 /**
  * Substitute PrusaSlicer/OrcaSlicer placeholder variables in user start/pause/end G-code with
- * values from the printer profile. Recognized placeholders are replaced; identifier-shaped
- * placeholders that are not in the map stay verbatim and are returned in `unknown` (deduplicated).
+ * values from the printer profile and the filament being printed. Recognized placeholders are
+ * replaced; identifier-shaped placeholders that are not in the map stay verbatim and are
+ * returned in `unknown` (deduplicated).
  */
 export function substituteSlicerVariables(
   gcode: string,
   profile: PrinterProfile,
+  filament: FilamentProfile,
 ): { gcode: string; unknown: string[] } {
   const unknown = new Set<string>()
   const out = gcode.replace(PLACEHOLDER, (match, square: string | undefined, curly: string | undefined) => {
@@ -47,7 +52,7 @@ export function substituteSlicerVariables(
       unknown.add(name)
       return match
     }
-    return String(resolve(profile))
+    return String(resolve(profile, filament))
   })
   return { gcode: out, unknown: [...unknown] }
 }
