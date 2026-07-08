@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { usePrinterProfiles } from '../stores/usePrinterProfiles'
 import { generateEmGcodeWithReport, HIGH_FLOW_WARNING_THRESHOLD_MM3_S } from '../engine/em/gcodeGenerator'
 import {
@@ -16,13 +16,24 @@ import NumericField from './NumericField.vue'
 
 const store = usePrinterProfiles()
 
-// Spec defaults follow the selected printer; edited fields override them.
+// Spec defaults follow the selected printer; the fields start prefilled with them and
+// refill whenever another printer is selected (edits between switches are one-shot).
 const specDefaults = computed(() => defaultEmTestSpec(store.selected ?? defaultPrinterProfile()))
-const pitchMin = ref<number | null>(null)
-const pitchMax = ref<number | null>(null)
-const blockCount = ref<number | null>(null)
-const linesPerBlock = ref<number | null>(null)
-const printSpeed = ref<number | null>(null)
+const pitchMin = ref<number | null>(specDefaults.value.pitchMinMm)
+const pitchMax = ref<number | null>(specDefaults.value.pitchMaxMm)
+const blockCount = ref<number | null>(specDefaults.value.blockCount)
+const linesPerBlock = ref<number | null>(specDefaults.value.linesPerBlock)
+const printSpeed = ref<number | null>(specDefaults.value.printSpeedMmS)
+watch(
+  () => store.selected?.id,
+  () => {
+    pitchMin.value = specDefaults.value.pitchMinMm
+    pitchMax.value = specDefaults.value.pitchMaxMm
+    blockCount.value = specDefaults.value.blockCount
+    linesPerBlock.value = specDefaults.value.linesPerBlock
+    printSpeed.value = specDefaults.value.printSpeedMmS
+  },
+)
 
 const spec = computed<EmTestSpec>(() => ({
   ...specDefaults.value,
@@ -242,7 +253,7 @@ function generate(): void {
   gap: 12px;
 }
 .fields > * {
-  flex: 1 1 140px;
+  flex: 1 1 160px;
 }
 .field-group .group-label {
   display: block;
