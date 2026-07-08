@@ -28,7 +28,7 @@ export interface EmResult {
   failureReason: string | null
   /** Deposited bead width in true mm (median after MAD rejection), null on failure. */
   wMm: number | null
-  /** Blur bias from the 2 mm separators, mm. */
+  /** Separator cross-check residual in mm; near zero when block and separator agree. */
   biasMm: number | null
   /** Printer X-scale diagnostic (1 = perfect). */
   pitchScale: number | null

@@ -18,15 +18,19 @@ The whole coupon prints at the printer's current flow. Each block of parallel si
 lines is commanded at a different, exactly known line PITCH (spacing). The printer's
 unknown deposited line width `w` decides each block's fate:
 
-every gap satisfies gap = pitch - w, so each block yields an independent estimate
-w = pitch - measured gap, averaged over all blocks (the fit slope of gap vs pitch is
-known to be exactly 1). All default pitches sit well ABOVE the bead width: a real
-scanner cannot read a slit much narrower than ~0.25 mm through the coupon's depth
-(angled illumination never reaches the lid and back; measured on a real 600 DPI scan),
-so the original merge-point vernier was revised to open-gap-only geometry. The 2 mm
-block separators are known-width gaps in the same image and calibrate the scanner's
-edge-blur bias b (a standard reference-artifact correction): w = pitch -
-(gap_measured - b). Two mirrored block rows cancel direction-dependent bias.
+every gap satisfies gap = pitch - w, so each gap yields an independent estimate
+w = measured_local_pitch - measured_gap (the fit slope of gap vs pitch is known to be
+exactly 1; local pitch from adjacent line centres, which are extrusion-immune). All
+default pitches sit well ABOVE the bead width: a real scanner cannot read a slit much
+narrower than ~0.25 mm through the coupon's depth (angled illumination never reaches
+the lid and back; measured on a real 600 DPI scan), so the original merge-point
+vernier was revised to open-gap-only geometry. No separate blur-bias subtraction is
+needed: the gradient-centroid edge estimator is unbiased for a symmetric edge spread,
+and a REVISED finding replaced the original separator-bias idea: the separator air is
+2 + nominal - w (bounded by printed line edges), so it cannot serve as a fixed-width
+reference; it is instead reported as a cross-check residual (near zero when in-block
+and separator measurements agree). Two mirrored block rows cancel direction-dependent
+bias.
 
 Axis-scale and shrinkage immunity: scanner card calibration (the existing
 `useCalibration` store) is a HARD requirement for the flow analysis; there is no
