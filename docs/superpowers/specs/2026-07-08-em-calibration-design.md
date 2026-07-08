@@ -27,7 +27,14 @@ so the original merge-point vernier was revised to open-gap-only geometry. The 2
 block separators are known-width gaps in the same image and calibrate the scanner's
 edge-blur bias b (a standard reference-artifact correction): w = pitch -
 (gap_measured - b). Two mirrored block rows cancel direction-dependent bias.
-Correction is a ratio:
+
+Axis-scale and shrinkage immunity: the commanded pitch is only trusted as a fallback.
+With scanner px/mm available (card calibration), the vision stage measures the actual
+pitch from the line centres in the same image (centres are extrusion-immune), so motor
+scale error and material shrinkage move pitch and gap together and cancel; trusting
+the commanded pitch instead couples axis error into flow at roughly pitch/w (~2x).
+Measured-vs-commanded pitch doubles as a per-axis scale diagnostic. Correction is a
+ratio:
 
     new_flow = current_flow * (nominal_width / w)
 
