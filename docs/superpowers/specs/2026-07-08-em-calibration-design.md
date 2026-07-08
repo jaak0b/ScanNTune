@@ -36,7 +36,14 @@ material shrinkage move pitch and gap together and cancel; trusting the commande
 pitch would couple axis error into flow at roughly pitch/w (~2x). The Flow page
 surfaces the requirement as step 1 (reusing the ScanPage calibration step), and the
 stage-2 analysis refuses a scan without a stored calibration.
-Measured-vs-commanded pitch doubles as a per-axis scale diagnostic. Correction is a
+Measured-vs-commanded pitch doubles as a per-axis scale diagnostic.
+
+Backing tolerance: the analyzer must be background-polarity-agnostic (gaps may read
+brighter OR darker than the plastic, validated the same dual-polarity way as the ring
+detector), which also supports scanning the coupon while still attached to a flexible
+build plate (hard-to-remove filaments): valid when the plate color contrasts with the
+filament and the plate lies flat on the glass (a plate wider than the scanner's glass
+rides the bezel and lifts the part into blur; surface the caveat in the UI). Correction is a
 ratio:
 
     new_flow = current_flow * (nominal_width / w)
