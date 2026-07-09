@@ -99,6 +99,14 @@ One printed part, one color, no pause, no mid-print M221.
   generator warns when the ramp consumes so much of the line that its middle never
   reaches the commanded speed. The later vision stage measures gaps in the line
   middles only.
+- Placement and optional contrasting base: `placement` (`'center' | 'front' | 'back'`)
+  moves the coupon on the bed so an edge can rest on the scanner glass while the rest
+  overhangs it, letting the coupon be scanned without removing it from the plate.
+  `contrastBase` (boolean) adds a solid base layer in a first filament color, then
+  reuses the PA coupon's filament-swap pause before the comb layers print in a second
+  color; any two colors that differ in brightness work, and the scan is still taken
+  top face down. Both fields default to the original single-color, centered behavior
+  and are covered by the renderer and the end-to-end gate.
 
 ## Architecture: shared G-code engine (Option A)
 

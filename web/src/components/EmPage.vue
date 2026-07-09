@@ -45,6 +45,8 @@ const pitchMax = ref<number | null>(specDefaults.value.pitchMaxMm)
 const blockCount = ref<number | null>(specDefaults.value.blockCount)
 const linesPerBlock = ref<number | null>(specDefaults.value.linesPerBlock)
 const printSpeed = ref<number | null>(specDefaults.value.printSpeedMmS)
+const placement = ref<EmTestSpec['placement']>(specDefaults.value.placement)
+const contrastBase = ref<boolean>(specDefaults.value.contrastBase)
 watch(
   () => store.selected?.id,
   () => {
@@ -53,8 +55,16 @@ watch(
     blockCount.value = specDefaults.value.blockCount
     linesPerBlock.value = specDefaults.value.linesPerBlock
     printSpeed.value = specDefaults.value.printSpeedMmS
+    placement.value = specDefaults.value.placement
+    contrastBase.value = specDefaults.value.contrastBase
   },
 )
+
+const placementItems = [
+  { title: 'Center', value: 'center' },
+  { title: 'Front edge', value: 'front' },
+  { title: 'Back edge', value: 'back' },
+]
 
 const spec = computed<EmTestSpec>(() => ({
   ...specDefaults.value,
@@ -63,6 +73,8 @@ const spec = computed<EmTestSpec>(() => ({
   blockCount: blockCount.value ?? specDefaults.value.blockCount,
   linesPerBlock: linesPerBlock.value ?? specDefaults.value.linesPerBlock,
   printSpeedMmS: printSpeed.value ?? specDefaults.value.printSpeedMmS,
+  placement: placement.value,
+  contrastBase: contrastBase.value,
 }))
 
 const geometry = computed(() => emCouponGeometry(spec.value))
@@ -277,6 +289,36 @@ const pitchScaleOff = computed(() => {
         <div class="fields">
           <NumericField v-model="printSpeed" label="Print speed (mm/s)" :step="1" :min="1" />
         </div>
+      </div>
+      <div class="field-group mt-1">
+        <span class="group-label">Placement and base</span>
+        <div class="fields">
+          <v-select
+            v-model="placement"
+            :items="placementItems"
+            label="Placement on the bed"
+            density="comfortable"
+            hide-details
+            data-testid="em-placement"
+          />
+        </div>
+        <p class="tip mb-0">
+          Edge placement helps scanning the coupon while still on the build plate: the plate
+          edge sits on the glass while the rest overhangs the scanner.
+        </p>
+        <v-checkbox
+          v-model="contrastBase"
+          label="Contrasting base (adds a filament swap pause)"
+          density="comfortable"
+          hide-details
+          data-testid="em-contrast-base"
+        />
+        <p v-if="contrastBase" class="tip mb-0" data-testid="em-contrast-base-note">
+          The base prints first in color A, the printer pauses for a swap, then the coupon
+          prints in color B on top. Any two colors that differ in brightness work. The scan
+          still goes top face down. Useful when the part must stay on the build plate or the
+          plate/bed shows poor contrast.
+        </p>
       </div>
       <div class="facts mt-2">
         <v-chip size="small" variant="tonal" prepend-icon="mdi-ruler-square">{{ footprintText }}</v-chip>
