@@ -19,7 +19,7 @@ const version = __APP_VERSION__
         <span class="brand-name">ScanNTune</span>
         <span class="brand-version">v{{ version }}</span>
       </div>
-      <nav class="ml-4">
+      <nav class="topnav ml-4">
         <v-btn
           variant="text"
           size="small"
@@ -37,11 +37,9 @@ const version = __APP_VERSION__
           @click="app.goPa()"
         >
           Pressure advance
-          <v-chip size="x-small" color="primary" variant="tonal" class="ml-1">Beta</v-chip>
         </v-btn>
         <v-btn variant="text" size="small" :active="app.screen === 'em'" data-testid="nav-em" @click="app.goEm()">
           Flow
-          <v-chip size="x-small" color="primary" variant="tonal" class="ml-1">Beta</v-chip>
         </v-btn>
       </nav>
       <v-spacer />
@@ -75,6 +73,7 @@ const version = __APP_VERSION__
   align-items: center;
   gap: 9px;
   padding-left: 12px;
+  flex-shrink: 0;
 }
 .brand-name {
   font-weight: 600;
@@ -83,5 +82,36 @@ const version = __APP_VERSION__
 .brand-version {
   font-size: 12px;
   color: rgba(var(--v-theme-on-surface), 0.5);
+}
+/* The nav scrolls horizontally instead of overflowing the bar on narrow screens. */
+.topnav {
+  display: flex;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  scrollbar-width: none;
+  min-width: 0;
+}
+.topnav::-webkit-scrollbar {
+  display: none;
+}
+.topnav .v-btn {
+  flex-shrink: 0;
+}
+@media (max-width: 700px) {
+  .brand-version {
+    display: none;
+  }
+}
+@media (max-width: 560px) {
+  .brand-name {
+    display: none;
+  }
+  .topnav {
+    margin-left: 4px !important;
+  }
+  .topnav .v-btn {
+    padding: 0 8px;
+    min-width: 0;
+  }
 }
 </style>
