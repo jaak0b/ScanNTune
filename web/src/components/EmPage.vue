@@ -124,7 +124,11 @@ function generate(): void {
 const analyzing = ref(false)
 const progressText = ref('')
 const scanError = ref('')
-const currentFlow = ref<number | null>(100)
+// The user's CURRENT slicer flow, entered either as a factor (PrusaSlicer extrusion
+// multiplier / Orca flow ratio, e.g. 0.96) or as a percent (Cura-style, e.g. 96). Values
+// above 5 are read as percent; real factors live near 1 and real percents near 100, so the
+// two ranges cannot collide. The corrected value is echoed back in the same style.
+const currentFlow = ref<number | null>(1)
 
 function onProgress(p: EmProgress): void {
   switch (p.stage) {
@@ -185,16 +189,26 @@ async function onPick(e: Event): Promise<void> {
 
 // Result card state, derived from the analyzedSpec snapshot, never the live form state.
 const result = computed(() => processing.value?.result ?? null)
+// Machine-level correction: the coupon always prints at firmware flow 100%, so the M221
+// command is computed against that, independent of any slicer setting.
 const correction = computed(() => {
   const r = result.value
   const s = analyzedSpec.value
   if (!r || !r.success || r.wMm === null || !s) return null
-  return emCorrection(
-    store.selected?.firmware ?? 'Klipper',
-    currentFlow.value ?? 100,
-    s.nominalLineWidthMm,
-    r.wMm,
-  )
+  return emCorrection(store.selected?.firmware ?? 'Klipper', 100, s.nominalLineWidthMm, r.wMm)
+})
+
+// Corrected slicer flow: the measured over/under-extrusion ratio applied to the user's
+// current slicer flow, echoed in the style it was entered (factor or percent).
+const newSlicerFlow = computed(() => {
+  const r = result.value
+  const s = analyzedSpec.value
+  if (!r || !r.success || r.wMm === null || !s) return null
+  const entered = currentFlow.value ?? 1
+  const isPercent = entered > 5
+  const factor = isPercent ? entered / 100 : entered
+  const corrected = factor * (s.nominalLineWidthMm / r.wMm)
+  return isPercent ? `${(corrected * 100).toFixed(1)}%` : corrected.toFixed(3)
 })
 const pitchScaleOff = computed(() => {
   const p = result.value?.pitchScale
@@ -353,18 +367,18 @@ const pitchScaleOff = computed(() => {
       <div class="fields mb-3">
         <NumericField
           v-model="currentFlow"
-          label="Flow % while the coupon printed"
-          :step="1"
-          :min="1"
+          label="Current slicer flow"
+          :step="0.01"
+          :min="0.01"
+          :precision="3"
           :disabled="analyzing"
           data-testid="em-current-flow"
         />
       </div>
       <p class="tip mb-3">
-        Leave at 100 unless a flow override (M221) was active while the coupon printed. The
-        coupon runs at firmware flow, so slicer flow settings do not apply to it; to carry the
-        result into a slicer profile, multiply that profile's flow by the same ratio the result
-        applies (its flow value divided by 100).
+        Enter your slicer's current value: the extrusion multiplier from PrusaSlicer or the
+        flow ratio from OrcaSlicer (e.g. 0.96), or a Cura-style percentage (e.g. 96). The
+        result shows the corrected value to put back in the same place.
       </p>
       <label class="dropzone" :class="{ 'dropzone-disabled': !isCalibrated }">
         <input
@@ -411,9 +425,9 @@ const pitchScaleOff = computed(() => {
             testid="em-width"
           />
           <MetricTile
-            v-if="correction"
-            label="New flow"
-            :value="`${correction.newFlowPercent}%`"
+            v-if="newSlicerFlow"
+            label="New slicer flow"
+            :value="newSlicerFlow"
             testid="em-flow"
           />
           <MetricTile
@@ -442,7 +456,10 @@ const pitchScaleOff = computed(() => {
         </div>
         <template v-if="correction">
           <CodeBlock :code="correction.command" data-testid="em-code" />
-          <p class="tip mt-0">{{ correction.summary }}</p>
+          <p class="tip mt-0">
+            The durable fix is the slicer flow above; the M221 command only scales the current
+            firmware session (useful for prints already sliced).
+          </p>
         </template>
       </template>
 
