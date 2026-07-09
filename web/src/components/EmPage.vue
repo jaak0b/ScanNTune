@@ -45,8 +45,55 @@ const pitchMax = ref<number | null>(specDefaults.value.pitchMaxMm)
 const blockCount = ref<number | null>(specDefaults.value.blockCount)
 const linesPerBlock = ref<number | null>(specDefaults.value.linesPerBlock)
 const printSpeed = ref<number | null>(specDefaults.value.printSpeedMmS)
-const placement = ref<EmTestSpec['placement']>(specDefaults.value.placement)
-const contrastBase = ref<boolean>(specDefaults.value.contrastBase)
+// The placement and contrasting-base spec fields collapse into one scanning-plan choice:
+// only four combinations make practical sense, keyed by how the finished print will be
+// scanned. On-plate plans print at the front edge; the plate itself can be laid on the
+// scanner glass in any orientation, so a rear option would be a phantom choice.
+type ScanPlan = 'part' | 'part-base' | 'plate' | 'plate-base'
+const scanPlan = ref<ScanPlan>('part')
+const SCAN_PLANS: Record<
+  ScanPlan,
+  { placement: EmTestSpec['placement']; contrastBase: boolean; note: string }
+> = {
+  part: {
+    placement: 'center',
+    contrastBase: false,
+    note:
+      'Remove the finished coupon and scan it top face down, lid closed. Works with any ' +
+      'single filament color that differs from the scanner lid.',
+  },
+  'part-base': {
+    placement: 'center',
+    contrastBase: true,
+    note:
+      'A solid base prints first, the printer pauses for a filament swap, and the coupon ' +
+      'prints on top in the second color. Pick this when the coupon color would not stand ' +
+      'out against the scanner lid; any two colors that differ in brightness work.',
+  },
+  plate: {
+    placement: 'front',
+    contrastBase: false,
+    note:
+      'The coupon prints at the front edge of the bed so the plate edge can lie on the ' +
+      'scanner glass with the rest overhanging. Needs a plate color that contrasts the ' +
+      'filament, and the plate must sit flat on the glass.',
+  },
+  'plate-base': {
+    placement: 'front',
+    contrastBase: true,
+    note:
+      'Front-edge print plus a contrasting base under the coupon: scan on the plate even ' +
+      'when the filament matches the plate color (a filament swap pause is added).',
+  },
+}
+const scanPlanItems = [
+  { title: 'Scan the removed part', value: 'part' },
+  { title: 'Scan the removed part, contrasting base', value: 'part-base' },
+  { title: 'Scan on the build plate', value: 'plate' },
+  { title: 'Scan on the build plate, contrasting base', value: 'plate-base' },
+]
+const scanPlanNote = computed(() => SCAN_PLANS[scanPlan.value].note)
+
 watch(
   () => store.selected?.id,
   () => {
@@ -55,16 +102,9 @@ watch(
     blockCount.value = specDefaults.value.blockCount
     linesPerBlock.value = specDefaults.value.linesPerBlock
     printSpeed.value = specDefaults.value.printSpeedMmS
-    placement.value = specDefaults.value.placement
-    contrastBase.value = specDefaults.value.contrastBase
+    scanPlan.value = 'part'
   },
 )
-
-const placementItems = [
-  { title: 'Center', value: 'center' },
-  { title: 'Front edge', value: 'front' },
-  { title: 'Back edge', value: 'back' },
-]
 
 const spec = computed<EmTestSpec>(() => ({
   ...specDefaults.value,
@@ -73,8 +113,8 @@ const spec = computed<EmTestSpec>(() => ({
   blockCount: blockCount.value ?? specDefaults.value.blockCount,
   linesPerBlock: linesPerBlock.value ?? specDefaults.value.linesPerBlock,
   printSpeedMmS: printSpeed.value ?? specDefaults.value.printSpeedMmS,
-  placement: placement.value,
-  contrastBase: contrastBase.value,
+  placement: SCAN_PLANS[scanPlan.value].placement,
+  contrastBase: SCAN_PLANS[scanPlan.value].contrastBase,
 }))
 
 const geometry = computed(() => emCouponGeometry(spec.value))
@@ -291,34 +331,18 @@ const pitchScaleOff = computed(() => {
         </div>
       </div>
       <div class="field-group mt-1">
-        <span class="group-label">Placement and base</span>
+        <span class="group-label">Scanning plan</span>
         <div class="fields">
           <v-select
-            v-model="placement"
-            :items="placementItems"
-            label="Placement on the bed"
+            v-model="scanPlan"
+            :items="scanPlanItems"
+            label="How will you scan the print?"
             density="comfortable"
             hide-details
-            data-testid="em-placement"
+            data-testid="em-scan-plan"
           />
         </div>
-        <p class="tip mb-0">
-          Edge placement helps scanning the coupon while still on the build plate: the plate
-          edge sits on the glass while the rest overhangs the scanner.
-        </p>
-        <v-checkbox
-          v-model="contrastBase"
-          label="Contrasting base (adds a filament swap pause)"
-          density="comfortable"
-          hide-details
-          data-testid="em-contrast-base"
-        />
-        <p v-if="contrastBase" class="tip mb-0" data-testid="em-contrast-base-note">
-          The base prints first in color A, the printer pauses for a swap, then the coupon
-          prints in color B on top. Any two colors that differ in brightness work. The scan
-          still goes top face down. Useful when the part must stay on the build plate or the
-          plate/bed shows poor contrast.
-        </p>
+        <p class="tip mb-0" data-testid="em-scan-plan-note">{{ scanPlanNote }}</p>
       </div>
       <div class="facts mt-2">
         <v-chip size="small" variant="tonal" prepend-icon="mdi-ruler-square">{{ footprintText }}</v-chip>
