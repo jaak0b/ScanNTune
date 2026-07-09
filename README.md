@@ -3,7 +3,8 @@
 [![Web CI](https://github.com/jaak0b/ScanNTune/actions/workflows/web-ci.yml/badge.svg)](https://github.com/jaak0b/ScanNTune/actions/workflows/web-ci.yml)
 [![License: MIT](https://img.shields.io/github/license/jaak0b/ScanNTune)](LICENSE)
 
-**Caliper-free 3D printer calibration from a flatbed scanner: skew, shrinkage, and pressure advance.**
+**Caliper-free 3D printer calibration from a flatbed scanner: skew, shrinkage, pressure advance, and
+extrusion multiplier.**
 Print a coupon, scan it on an ordinary office scanner, and get ready-to-paste firmware or slicer
 corrections. No calipers, no measuring, no eyeballing test prints, no typing numbers into a calculator.
 
@@ -57,6 +58,23 @@ lines and picking the one that "looks best".
 
 The result is ready to paste: Klipper `SET_PRESSURE_ADVANCE`, Marlin `M900`, or RepRapFirmware `M572`.
 On Klipper there's an optional follow-up coupon that sweeps `smooth_time` the same way.
+
+## Extrusion multiplier / flow
+
+ScanNTune also calibrates the extrusion multiplier (PrusaSlicer) / flow ratio (OrcaSlicer) from a scan,
+instead of you measuring a thin wall with calipers or judging a top surface by feel.
+
+1. **Generate and print the coupon** from your printer profile: a single-color part with rows of parallel
+   single-bead lines at precisely known spacings.
+2. **Scan it once,** face down. ScanNTune measures the air gap between neighboring lines to sub-pixel
+   precision; since the line spacing is known exactly, the deposited bead width falls out of a single
+   subtraction, averaged over more than a hundred gaps.
+3. **Enter your current slicer flow** and get the corrected value back in the same format, plus an `M221`
+   command for prints that are already sliced.
+
+Line centres don't move when beads print fatter or thinner, so the measurement is immune to printer axis
+stretch and material shrinkage. Filament that won't come off the plate (TPU, PETG) can be printed at the
+bed's front edge and scanned together with the build plate.
 
 ---
 
