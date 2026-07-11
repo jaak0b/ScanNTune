@@ -813,6 +813,7 @@ async function analyze(): Promise<void> {
 .fields {
   display: flex;
   flex-wrap: wrap;
+  align-items: flex-start;
   gap: 12px;
 }
 .fields > * {
