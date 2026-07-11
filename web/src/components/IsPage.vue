@@ -403,37 +403,33 @@ async function analyze(): Promise<void> {
       <div class="field-group">
         <span class="group-label">Speeds</span>
         <div class="fields">
-          <div class="field-col">
-            <NumericField
-              v-model="tierSpeed"
-              label="Line speed (mm/s)"
-              :step="10"
-              :min="cornerSpeed ?? MIN_CORNER_SPEED_MM_S"
-              data-testid="is-tier-speed"
-            />
-            <v-alert
-              v-if="highFlowText"
-              type="info"
-              variant="tonal"
-              density="compact"
-              class="soft-alert"
-              data-testid="is-flow-warning"
-              :text="highFlowText"
-            />
-          </div>
-          <div class="field-col">
-            <NumericField
-              v-model="cornerSpeed"
-              label="Corner speed (mm/s)"
-              :step="10"
-              :min="MIN_CORNER_SPEED_MM_S"
-              data-testid="is-corner-speed"
-            />
-            <p class="tip mt-0 mb-0">
-              <strong>Lower this if the print skips layers.</strong>
-            </p>
-          </div>
+          <NumericField
+            v-model="tierSpeed"
+            label="Line speed (mm/s)"
+            :step="10"
+            :min="cornerSpeed ?? MIN_CORNER_SPEED_MM_S"
+            data-testid="is-tier-speed"
+          />
+          <NumericField
+            v-model="cornerSpeed"
+            label="Corner speed (mm/s)"
+            :step="10"
+            :min="MIN_CORNER_SPEED_MM_S"
+            data-testid="is-corner-speed"
+          />
         </div>
+        <p class="tip mb-0">
+          <strong>Lower the corner speed if the print skips layers.</strong>
+        </p>
+        <v-alert
+          v-if="highFlowText"
+          type="info"
+          variant="tonal"
+          density="compact"
+          class="mt-2 soft-alert"
+          data-testid="is-flow-warning"
+          :text="highFlowText"
+        />
         <p v-if="accelNote" class="tip mb-0">{{ accelNote }}</p>
       </div>
       <div class="field-group mt-1">
@@ -792,11 +788,6 @@ async function analyze(): Promise<void> {
 }
 .fields > * {
   flex: 1 1 160px;
-}
-.field-col {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
 }
 .advanced-panels :deep(.v-expansion-panel) {
   background: transparent;
