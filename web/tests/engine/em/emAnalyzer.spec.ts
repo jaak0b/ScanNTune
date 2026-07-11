@@ -119,6 +119,29 @@ describe('analyzeEmCoupon render recovery', () => {
     240000,
   )
 
+  it(
+    'prices a quarter-turned coupon with the vertical figure of a per-axis (CCD) reference',
+    async () => {
+      // The comb profiles of a quarter-turned coupon run along the image's vertical axis, so a
+      // per-axis reference must convert them with its vertical figure alone; the horizontal figure
+      // here is deliberately far off and must not leak into the measurement.
+      const cv = await getCv()
+      const img = rgbaToBgrMat(cv, renderEmScan({ spec, trueWidthMm: 0.42, quarterTurns: 1 }))
+      try {
+        const r = analyzeEmCoupon(cv, img, spec, {
+          horizontal: PX_PER_MM * 2,
+          vertical: PX_PER_MM,
+        })
+        expect(r.success).toBe(true)
+        expect(r.wMm).not.toBeNull()
+        expect(Math.abs(r.wMm! - 0.42)).toBeLessThanOrEqual(0.005)
+      } finally {
+        img.delete()
+      }
+    },
+    240000,
+  )
+
   it('fails with a reason on a blank image', async () => {
     const cv = await getCv()
     const width = 400

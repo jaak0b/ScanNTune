@@ -6,6 +6,7 @@ import { readBytes } from '../util/preview'
 import { diagnoseScale } from '../engine/scanScale'
 import { measureCardScan } from '../workerClient'
 import { signedFixed } from '../util/format'
+import type { ScanAxis, ScannerType } from '../engine/types'
 import NumericField from './NumericField.vue'
 import HowToScanDiagram from './HowToScanDiagram.vue'
 import WhatToMeasureDiagram from './WhatToMeasureDiagram.vue'
@@ -18,6 +19,7 @@ const ISO_MM = 85.6
 
 const measuredMm = ref<number | null>(calibration.calibration?.referenceMm ?? null)
 const dpi = ref<number | null>(calibration.calibration?.dpi ?? 600)
+const scannerType = ref<ScannerType>(calibration.calibration?.scannerType ?? 'CIS')
 
 const detecting = ref(false)
 const isError = ref(false)
@@ -25,6 +27,7 @@ const statusText = ref('')
 const confirmReset = ref(false)
 
 const measuredWidthPx = ref<number | null>(calibration.calibration?.measuredWidthPx ?? null)
+const measuredAxis = ref<ScanAxis>(calibration.calibration?.measuredAxis ?? 'horizontal')
 const straightnessPx = ref(calibration.calibration?.straightnessPx ?? 0)
 const parallelismDegrees = ref(calibration.calibration?.parallelismDegrees ?? 0)
 const hasResult = ref(calibration.calibration !== null)
@@ -39,7 +42,14 @@ const detectedMm = computed(() =>
   measuredWidthPx.value && dpi.value ? measuredWidthPx.value / (dpi.value / 25.4) : 0,
 )
 const sizeDiff = computed(() => Math.abs(detectedMm.value - (measuredMm.value ?? 0)))
-const sizeCheckOk = computed(() => hasResult.value && sizeDiff.value < 0.3)
+// The size gate catches an entered-DPI or measurement mistake. On a CIS scanner both axes carry
+// the same small error, so 0.3 mm suffices. A CCD scanner's sensor axis is legitimately off by
+// around a percent (the very error this calibration corrects), so CCD mode allows 2% of the card
+// length; a resolution mix-up is a clean integer factor and is caught by the scale-factor note.
+const sizeToleranceMm = computed(() =>
+  scannerType.value === 'CCD' ? (measuredMm.value ?? ISO_MM) * 0.02 : 0.3,
+)
+const sizeCheckOk = computed(() => hasResult.value && sizeDiff.value < sizeToleranceMm.value)
 // A passing size check means maybeSave() persisted it (on detection, on edit, or it was already
 // stored when the page loaded), so derive "saved" from the check rather than tracking it separately.
 const saved = computed(() => sizeCheckOk.value)
@@ -97,6 +107,7 @@ async function processFile(file: File | null): Promise<void> {
       return
     }
     measuredWidthPx.value = r.measuredWidthPx
+    measuredAxis.value = r.measuredAxis ?? 'horizontal'
     straightnessPx.value = r.straightnessPx
     parallelismDegrees.value = r.parallelismDegrees
     hasResult.value = true
@@ -137,6 +148,8 @@ function maybeSave(): void {
       straightnessPx: straightnessPx.value,
       parallelismDegrees: parallelismDegrees.value,
       calibratedUtc: new Date().toISOString(),
+      scannerType: scannerType.value,
+      measuredAxis: measuredAxis.value,
     })
   }
 }
@@ -145,6 +158,7 @@ function startOver(): void {
   confirmReset.value = false
   calibration.clear()
   measuredWidthPx.value = null
+  measuredAxis.value = 'horizontal'
   straightnessPx.value = 0
   parallelismDegrees.value = 0
   hasResult.value = false
@@ -153,7 +167,7 @@ function startOver(): void {
   statusText.value = ''
 }
 
-watch([measuredMm, dpi], () => {
+watch([measuredMm, dpi, scannerType], () => {
   // Once the numbers are valid, drop a stale "enter your measurement first" prompt.
   if (isError.value && canUpload.value) {
     isError.value = false
@@ -219,6 +233,24 @@ watch([measuredMm, dpi], () => {
           hint="For best results scan at 600 dpi, and use the same resolution for your coupon."
           class="mt-3"
         />
+        <div class="mt-3">
+          <div class="field-label mb-1">Sensor type</div>
+          <v-btn-toggle
+            v-model="scannerType"
+            mandatory
+            divided
+            density="comfortable"
+            variant="outlined"
+            data-testid="sensor-toggle"
+          >
+            <v-btn value="CIS" data-testid="sensor-cis">CIS</v-btn>
+            <v-btn value="CCD" data-testid="sensor-ccd">CCD</v-btn>
+          </v-btn-toggle>
+          <p class="tip mt-1">
+            CIS applies the correction to both scan axes; CCD applies it only along the card's
+            long side. Your scanner's specification sheet names its sensor type.
+          </p>
+        </div>
         <p class="tip mt-2" :class="{ warn: isoSanityWarn }">{{ isoSanityText }}</p>
       </section>
     </div>
@@ -269,7 +301,10 @@ watch([measuredMm, dpi], () => {
       </p>
       <p class="text-body-2" :class="{ warn: !sizeCheckOk }">
         <span>Detected {{ detectedMm.toFixed(2) }} mm</span
-        ><span v-if="sizeCheckOk">, matches your {{ (measuredMm ?? 0).toFixed(2) }} mm.</span
+        ><span v-if="sizeCheckOk && sizeDiff < 0.3">, matches your {{ (measuredMm ?? 0).toFixed(2) }} mm.</span
+        ><span v-else-if="sizeCheckOk"
+          >, {{ sizeDiff.toFixed(2) }} mm from your {{ (measuredMm ?? 0).toFixed(2) }} mm: the
+          scanner scale error this calibration corrects.</span
         ><span v-else>, but you entered {{ (measuredMm ?? 0).toFixed(2) }} mm. Check the DPI or the measured value.</span>
       </p>
       <p v-if="scaleFactorNote" class="text-body-2 warn" data-testid="scale-factor-note">
@@ -367,6 +402,10 @@ watch([measuredMm, dpi], () => {
 .tip {
   font-size: 12.5px;
   color: rgba(var(--v-theme-on-surface), 0.6);
+}
+.field-label {
+  font-size: 13px;
+  color: rgba(var(--v-theme-on-surface), 0.7);
 }
 .tip.warn,
 .warn {

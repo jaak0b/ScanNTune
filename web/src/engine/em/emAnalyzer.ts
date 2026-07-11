@@ -6,6 +6,7 @@ import type { BlockMeasurement, EmMeasurement } from './gapMeasurer'
 import { measureEmCoupon } from './gapMeasurer'
 import { valueChannel } from '../cvUtils'
 import { median } from '../math'
+import type { ScaleReference } from '../scannerCalibration'
 
 // Top-level EM analysis: aligns the coupon, measures its comb geometry, and estimates the
 // deposited bead width. The estimator per gap g between adjacent lines j, j+1 is the gap
@@ -57,7 +58,7 @@ export function analyzeEmCoupon(
   cv: OpenCv,
   imageBgr: Mat,
   spec: EmTestSpec,
-  scanPxPerMm: number,
+  scanPxPerMm: ScaleReference,
   alignmentHolder?: { alignment?: EmAlignment },
   onProgress?: EmProgressCallback,
 ): EmResult {

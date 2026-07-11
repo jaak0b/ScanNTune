@@ -22,6 +22,7 @@ import type { EmResult } from '../engine/em/emAnalyzer'
 import { renderEmOverlayMat } from '../engine/em/emOverlayRenderer'
 import type { EmAlignment } from '../engine/em/fiducialAligner'
 import type { EmProgressCallback, EmTestSpec } from '../engine/em/types'
+import type { ScaleReference } from '../engine/scannerCalibration'
 import { decodeToBgr, matToImageBitmap, grayMatToImageBitmap } from './decode'
 
 // The CV pipeline runs here, off the main thread, so the UI never freezes during analysis. The worker
@@ -193,7 +194,7 @@ export interface EmProcessing {
 async function analyzeEmScan(
   bytes: ArrayBuffer,
   spec: EmTestSpec,
-  scanPxPerMm: number,
+  scanPxPerMm: ScaleReference,
   onProgress?: EmProgressCallback,
 ): Promise<EmProcessing> {
   const { report, finish } = stageReporter('EM', onProgress)

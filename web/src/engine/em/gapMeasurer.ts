@@ -4,6 +4,8 @@ import { BLOCK_GAP_MM, emCouponGeometry } from './types'
 import type { EmAlignment } from './fiducialAligner'
 import { mmToPx } from './fiducialAligner'
 import { median } from '../math'
+import { isUsableReference, referenceAlongDirection } from '../scannerCalibration'
+import type { ScaleReference } from '../scannerCalibration'
 
 // Measures the EM coupon's comb geometry to sub-pixel precision. For each test block, horizontal
 // intensity profiles are extracted along the scan-space direction of the coupon's x-axis (walked
@@ -76,7 +78,7 @@ export function measureEmCoupon(
   gray: Mat,
   alignment: EmAlignment,
   spec: EmTestSpec,
-  scanPxPerMm: number,
+  scanReference: ScaleReference,
 ): EmMeasurement {
   if (!gray || gray.empty()) throw new Error('Image is null or empty.')
   if (gray.channels() !== 1 || gray.type() !== cv.CV_8UC1) {
@@ -85,7 +87,8 @@ export function measureEmCoupon(
   if (!alignment.success || !alignment.affine) {
     throw new Error('Cannot measure the coupon without a successful alignment.')
   }
-  if (!(scanPxPerMm > 0)) throw new Error('scanPxPerMm must be a positive scanner calibration.')
+  if (!isUsableReference(scanReference))
+    throw new Error('The scan reference must be a positive scanner calibration.')
 
   const data = gray.data as Uint8Array
   const cols = gray.cols
@@ -99,6 +102,10 @@ export function measureEmCoupon(
   if (affinePxPerMmX <= 0) throw new Error('The alignment is degenerate (zero scale).')
   const ux = A.a / affinePxPerMmX
   const uy = A.c / affinePxPerMmX
+
+  // Every distance is measured along the profile direction (ux, uy), so a per-axis (CCD)
+  // reference reduces to its effective px/mm along that one image direction.
+  const scanPxPerMm = referenceAlongDirection(scanReference, ux, uy)
 
   const rowSpecs: { row: 0 | 1; blocks: typeof g.topRow; y0Mm: number; y1Mm: number }[] = [
     { row: 0, blocks: g.topRow, y0Mm: g.topRowY0Mm, y1Mm: g.topRowY1Mm },

@@ -2,6 +2,7 @@ import type { AlignedResult, AxisScale, MultiPlaneResult, Plane, PlaneAnalysis, 
 import { planeAxes } from './types'
 import { applyReference } from './couponAnalyzer'
 import { combineScanSet } from './scanCombiner'
+import type { ScaleReference } from './scannerCalibration'
 
 // The whole reconciliation, pure TypeScript (no OpenCV): group the aligned per-scan results by plane,
 // apply the pxPerMm reference, separate printer from scanner error over each plane's scan set, and
@@ -9,7 +10,7 @@ import { combineScanSet } from './scanCombiner'
 // plane with at least two scans per plane; anything else is a caller bug and throws rather than
 // silently dropping scans from the result. A scan set whose angles cannot separate the errors is a
 // normal outcome: it comes back flagged invalid with a user-worded failure reason, never a throw.
-export function reconcileScans(results: AlignedResult[], pxPerMm: number | null): MultiPlaneResult {
+export function reconcileScans(results: AlignedResult[], pxPerMm: ScaleReference | null): MultiPlaneResult {
   const groups = new Map<Plane, AlignedResult[]>()
   for (const r of results) {
     if (!r.plane)

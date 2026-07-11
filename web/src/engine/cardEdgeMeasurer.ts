@@ -79,6 +79,8 @@ export function measureCard(
     return {
       success: true,
       pxPerMm,
+      // In the original scan frame: a portrait card's long side runs along the image y axis.
+      measuredAxis: portrait ? 'vertical' : 'horizontal',
       measuredWidthPx: long.spanPx,
       detectedMm,
       straightnessPx: long.straightnessPx,

@@ -250,10 +250,15 @@ export interface AnalysisOptions {
   currentRotationDistanceY?: number | null
 }
 
+/** An image axis of a scan: horizontal is the image x axis, vertical the image y axis. */
+export type ScanAxis = 'horizontal' | 'vertical'
+
 /** The outcome of measuring a known-length reference (a bank card) in a scan. */
 export interface ScaleReferenceResult {
   success: boolean
   pxPerMm: number
+  /** The image axis the card's long side lay along; set on success. */
+  measuredAxis?: ScanAxis
   measuredWidthPx: number
   detectedMm: number
   straightnessPx: number
@@ -268,6 +273,15 @@ export interface ScaleReferenceResult {
   rejectedLongSidePx?: number | null
 }
 
+/**
+ * How the scanner's scale error distributes over the two image axes. A CIS scanner distorts both
+ * axes equally, so the card-measured px/mm applies isotropically. A CCD scanner is accurate along
+ * the carriage axis and mis-scaled along the sensor axis (its reduction optics set that axis's
+ * magnification), so the card measurement applies only to the image axis the card's long side was
+ * measured along, and the other axis stays at the nominal DPI.
+ */
+export type ScannerType = 'CIS' | 'CCD'
+
 /** A stored scanner calibration; the true px/mm recovered from a known-length reference. */
 export interface ScannerCalibration {
   pxPerMm: number
@@ -278,6 +292,10 @@ export interface ScannerCalibration {
   parallelismDegrees: number
   /** ISO-8601 UTC timestamp. */
   calibratedUtc: string
+  /** Absent on calibrations stored before the toggle existed; treated as CIS. */
+  scannerType?: ScannerType
+  /** The image axis the card was measured along; absent on older calibrations (horizontal). */
+  measuredAxis?: ScanAxis
 }
 
 /** A ready-to-apply firmware/slicer correction: the snippet to copy and a note on where it goes. */

@@ -8,6 +8,8 @@ import { solveAffine } from './affineSolver'
 import type { AffineSolverOptions } from './affineSolver'
 import { readPlaneId } from './planeIdReader'
 import { clippedSides } from './scanDiagnostics'
+import { isUsableReference, referenceAlongDirection } from './scannerCalibration'
+import type { ScaleReference } from './scannerCalibration'
 
 // Orchestrates the pipeline: detect ring centres -> locate the orientation fiducial and map rings to
 // the nominal grid -> fit the affine -> convert scale/skew into a calibration result. Orientation
@@ -150,18 +152,30 @@ function keepMask(
 /** An aligned measurement before the reference prices its scale percentages. */
 export type UnpricedResult = Omit<AlignedResult, 'xScalePercent' | 'yScalePercent'>
 
-// Converts the measured px/mm along each axis into a percentage scale error against a reference
-// px/mm. With a known reference (scanner DPI or a card measurement) the errors are absolute; without
-// one, the geometric mean of the two axes is the reference, so only anisotropy survives. Kept
-// separate so the per-scan pass can defer it: detection and the affine are reference-independent, so
-// changing the DPI reprices the result without re-running any CV.
-export function applyReference(result: UnpricedResult, pxPerMm: number | null): AlignedResult {
-  if (pxPerMm !== null && !(pxPerMm > 0 && Number.isFinite(pxPerMm)))
-    throw new Error(`The px/mm reference must be a positive number, got ${pxPerMm}.`)
-  const reference = pxPerMm ?? Math.sqrt(result.measuredPxPerMmX * result.measuredPxPerMmY)
+// Converts the measured px/mm along each axis into a percentage scale error against a reference.
+// With a known reference (scanner DPI or a card measurement) the errors are absolute; without one,
+// the geometric mean of the two axes is the reference, so only anisotropy survives. A per-axis
+// (CCD) reference is fixed to the glass while the coupon lies at an arbitrary angle, so each coupon
+// axis is priced against the reference's effective px/mm along that axis's image direction. Kept
+// separate so the per-scan pass can defer it: detection and the affine are reference-independent,
+// so changing the DPI reprices the result without re-running any CV.
+export function applyReference(result: UnpricedResult, reference: ScaleReference | null): AlignedResult {
+  if (reference !== null && !isUsableReference(reference))
+    throw new Error(`The px/mm reference must be positive, got ${JSON.stringify(reference)}.`)
+  let referenceX: number
+  let referenceY: number
+  if (reference === null) {
+    referenceX = referenceY = Math.sqrt(result.measuredPxPerMmX * result.measuredPxPerMmY)
+  } else {
+    const o = result.orientation
+    // The coupon's +Y image direction is the perpendicular of +X; the sign (flip) does not change
+    // the effective px/mm along the axis, so no flip handling is needed here.
+    referenceX = referenceAlongDirection(reference, o.xAxisX, o.xAxisY)
+    referenceY = referenceAlongDirection(reference, -o.xAxisY, o.xAxisX)
+  }
   return {
     ...result,
-    xScalePercent: (result.measuredPxPerMmX / reference - 1.0) * 100.0,
-    yScalePercent: (result.measuredPxPerMmY / reference - 1.0) * 100.0,
+    xScalePercent: (result.measuredPxPerMmX / referenceX - 1.0) * 100.0,
+    yScalePercent: (result.measuredPxPerMmY / referenceY - 1.0) * 100.0,
   }
 }

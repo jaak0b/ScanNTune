@@ -5,7 +5,7 @@ import { useCalibration } from '../stores/useCalibration'
 import { useScans } from '../stores/useScans'
 import { readBytes } from '../util/preview'
 import { diagnoseScale } from '../engine/scanScale'
-import { pxPerMmAtDpi } from '../engine/scannerCalibration'
+import { isotropicPxPerMm, scaleReferenceAtDpi } from '../engine/scannerCalibration'
 import { analyzeScan } from '../workerClient'
 import { reconcileScans } from '../engine/multiPlaneCombiner'
 import {
@@ -489,7 +489,7 @@ async function analyze(): Promise<void> {
   // is priced at the calibration DPI: the resolution the coupon scan is expected to use.
   const cal = calibration.calibration
   const pxPerMm = cal
-    ? pxPerMmAtDpi(cal, cal.dpi)
+    ? scaleReferenceAtDpi(cal, cal.dpi)
     : dpi.value != null && dpi.value >= 50
       ? dpi.value / 25.4
       : null
@@ -502,7 +502,7 @@ async function analyze(): Promise<void> {
         (sum, s) => sum + Math.sqrt(s.result!.measuredPxPerMmX! * s.result!.measuredPxPerMmY!),
         0,
       ) / measured.length
-    const d = diagnoseScale(detectedPxPerMm, pxPerMm)
+    const d = diagnoseScale(detectedPxPerMm, isotropicPxPerMm(pxPerMm))
     if (d.likelyMultiple !== null) {
       scaleMismatchWarning.value = `This scan measures about ${d.factor.toFixed(1)} times the size expected at ${Math.round(cal.dpi)} dpi. Rescan at your calibration resolution, or recalibrate at this one.`
     }

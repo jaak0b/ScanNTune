@@ -1,6 +1,7 @@
 import * as Comlink from 'comlink'
 import type { AnalysisApi, EmProcessing, PaProcessing, ScanProcessing } from './worker/analysis.worker'
 import type { CouponSpec, ScaleReferenceResult } from './engine/types'
+import type { ScaleReference } from './engine/scannerCalibration'
 import type { PaProgressCallback, PaTestSpec } from './engine/pa/types'
 import type { EmProgressCallback, EmTestSpec } from './engine/em/types'
 
@@ -46,7 +47,7 @@ export async function analyzePaScan(
 export async function analyzeEmScan(
   bytes: Uint8Array,
   spec: EmTestSpec,
-  scanPxPerMm: number,
+  scanPxPerMm: ScaleReference,
   onProgress?: EmProgressCallback,
 ): Promise<EmProcessing> {
   const b = bytes.slice().buffer
