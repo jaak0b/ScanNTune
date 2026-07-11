@@ -207,6 +207,26 @@ describe('analyzeIsCoupon render recovery', () => {
     240000,
   )
 
+  it(
+    'is order-independent: the swapped scan pair measures the axis from the other scan',
+    async () => {
+      // The UI passes the two files in pick order; each axis group must be assigned to
+      // whichever scan reads it along the sensor rows, regardless of argument order.
+      const truth = { y: { frequencyHz: 75, dampingRatio: 0.05, ringAmpMm: 0.25 } }
+      const r = await analyzePair(
+        ySpec,
+        { truth, quarterTurns: 1, flipped: true },
+        { truth, quarterTurns: 0, flipped: true },
+      )
+      expect(r.aligned).toBe(true)
+      const y = axisOf(r, 'y')
+      expect(y.accepted).toBe(true)
+      expect(y.scanIndex).toBe(1)
+      expect(Math.abs(y.frequencyHz! - 75)).toBeLessThanOrEqual(1.5)
+    },
+    240000,
+  )
+
   it('reports a failed alignment with a reason on a blank image', async () => {
     const cv = await getCv()
     const width = 400

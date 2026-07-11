@@ -39,6 +39,13 @@ function dedupedRefusals(a: IsAxisResult): string[] {
   return [...counts.entries()].map(([reason, n]) => (n > 1 ? `${n} lines: ${reason}` : reason))
 }
 
+// On a measured axis the refusals only concern the skipped minority, so the note leads with
+// the skipped count; without it the reason list can read as contradicting the measured chip.
+function skippedNote(a: IsAxisResult): string {
+  const skipped = a.linesTraced - a.linesUsed
+  return `${skipped} of ${a.linesTraced} lines skipped: ${dedupedRefusals(a).join(' ')}`
+}
+
 // The ready-to-paste snippet in the selected firmware's own configuration language. Klipper
 // takes a persistent [input_shaper] block; Marlin and RepRapFirmware take M593 commands.
 const snippet = computed(() => {
@@ -121,14 +128,13 @@ const snippet = computed(() => {
             variant="tonal"
             density="compact"
             class="mb-2 soft-alert"
-            :text="dedupedRefusals(axis).join(' ')"
+            :text="skippedNote(axis)"
             :data-testid="`is-notes-${axis.axis}`"
           />
           <v-table density="compact" class="shaper-table" :data-testid="`is-shapers-${axis.axis}`">
             <thead>
               <tr>
                 <th>Shaper</th>
-                <th>Frequency</th>
                 <th>Residual vibration across the tolerance band</th>
                 <th>Max accel</th>
               </tr>
@@ -151,7 +157,6 @@ const snippet = computed(() => {
                     recommended
                   </v-chip>
                 </td>
-                <td>{{ option.frequencyHz.toFixed(1) }} Hz</td>
                 <td>{{ percent(option.bandResidualVibration) }}</td>
                 <td>{{ Math.round(option.maxAccelMmS2) }} mm/s^2</td>
               </tr>

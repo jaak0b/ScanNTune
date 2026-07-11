@@ -1,67 +1,71 @@
 <script setup lang="ts">
-// Diagram: the resonance coupon layout. A frame band with three fiducial holes and a solid
-// origin corner. Each test line enters through the frame band, runs up inside the open
-// window, takes a sharp 90 degree corner there, and the measured segment records the
-// ringing as a wiggle before crossing the other axis group's lines further on.
+// Diagram: the resonance coupon. One solid frame band with an open window (the window and
+// the fiducial holes are cut out via a mask, so they show the page background and read as
+// holes in a single object). One highlighted test line demonstrates the measurement: the
+// run-up leg enters through the band, takes a sharp corner, rings as a decaying wiggle,
+// settles into a straight measured stretch, and ends in the far band.
 </script>
 
 <template>
   <svg
-    viewBox="0 0 480 210"
+    viewBox="0 0 480 212"
     class="diagram"
     role="img"
-    aria-label="The resonance coupon: a frame with three corner holes and a solid origin corner; each test line enters through the frame band, runs up inside the open window, turns a sharp 90 degree corner there, accelerates to the test speed, and the ringing is recorded as a wiggle on the measured segment, which continues into the zone where the two axis groups cross"
+    aria-label="The resonance coupon: one solid frame band with an open window, three fiducial holes and a solid origin corner. A highlighted test line enters through the band, turns a sharp corner, rings as a decaying wiggle, settles into a straight line and ends in the far band."
   >
-    <!-- Coupon frame: outer edge and open window. -->
-    <rect x="40" y="24" width="220" height="164" rx="6" class="couponFill" />
-    <rect x="64" y="48" width="172" height="116" rx="3" class="window" />
+    <defs>
+      <!-- The window and the three fiducial holes are cut out of the band, so the coupon
+           renders as one object with holes, not nested panels. -->
+      <mask id="is-coupon-cutout">
+        <rect x="40" y="24" width="220" height="164" rx="6" fill="#fff" />
+        <rect x="64" y="48" width="172" height="116" rx="3" fill="#000" />
+        <rect x="50" y="34" width="12" height="12" rx="2" fill="#000" />
+        <rect x="238" y="34" width="12" height="12" rx="2" fill="#000" />
+        <rect x="238" y="166" width="12" height="12" rx="2" fill="#000" />
+      </mask>
+    </defs>
 
-    <!-- Fiducial holes in three corners; the origin corner (bottom-left) stays solid. -->
-    <rect x="238" y="34" width="12" height="12" rx="2" class="hole" />
-    <rect x="238" y="166" width="12" height="12" rx="2" class="hole" />
-    <rect x="50" y="34" width="12" height="12" rx="2" class="hole" />
-    <circle cx="56" cy="172" r="2.5" class="solidDot" />
-    <line x1="62" y1="172" x2="286" y2="172" class="callout" />
-    <text x="290" y="176" class="lbl">solid corner marks the origin</text>
+    <!-- Coupon: the frame band as a single surface with the cutouts. -->
+    <rect
+      x="40"
+      y="24"
+      width="220"
+      height="164"
+      rx="6"
+      class="couponFill"
+      mask="url(#is-coupon-cutout)"
+    />
 
-    <!-- One test line: it enters through the bottom band, runs up inside the window,
-         and turns the sharp corner in the open window. -->
-    <line x1="88" y1="188" x2="88" y2="134" class="runup" stroke-width="2.5" />
-    <polyline points="83,142 88,134 93,142" class="runupStroke" fill="none" stroke-width="1.8" />
-    <!-- Measured segment: ringing wiggle right after the corner, settling further on. -->
+    <!-- Solid origin corner: the fourth corner has no hole, only a marker dot. -->
+    <circle cx="56" cy="172" r="3" class="solidDot" />
+
+    <!-- Faint neighbour lines of the same group, for context only. -->
+    <path d="M78 186 V132 H250" class="plain" fill="none" stroke-width="1.6" />
+    <path d="M98 186 V152 H250" class="plain" fill="none" stroke-width="1.6" />
+
+    <!-- The highlighted test line: run-up leg through the band, sharp corner, decaying
+         ringing wiggle, straight measured stretch into the far band. -->
+    <path d="M88 186 V142" class="runup" fill="none" stroke-width="2.5" />
     <path
-      d="M88 134 L96 134 C100 130 104 138 108 134 C112 130 116 141 120 134 C123 131 126 137 129 134 L236 134"
+      d="M88 142 C92 133 96 151 100 142 C104 134 108 149 112 142 C115 137 118 146 121 142 C124 139 127 144 130 142 L250 142"
       class="measured"
       fill="none"
       stroke-width="2.5"
     />
-    <!-- Neighbour lines of the same group, drawn plain. -->
-    <line x1="82" y1="188" x2="82" y2="146" class="plain" stroke-width="2" />
-    <line x1="94" y1="146" x2="236" y2="146" class="plain" stroke-width="2" />
-    <line x1="76" y1="188" x2="76" y2="158" class="plain" stroke-width="2" />
-    <line x1="88" y1="158" x2="236" y2="158" class="plain" stroke-width="2" />
-    <!-- The other axis group's lines crossing far past the read window. -->
-    <line x1="206" y1="60" x2="206" y2="188" class="plain" stroke-width="2" />
-    <line x1="218" y1="60" x2="218" y2="188" class="plain" stroke-width="2" />
+    <circle cx="88" cy="142" r="4.5" class="cornerRing" fill="none" stroke-width="1.6" />
 
-    <!-- Corner marker. -->
-    <circle cx="88" cy="134" r="4" class="cornerRing" fill="none" stroke-width="1.6" />
+    <!-- Callouts: each leader starts on the feature it names. -->
+    <polyline points="108,135 150,52 286,52" class="callout" fill="none" />
+    <text x="290" y="56" class="lbl">ringing recorded as a decaying wiggle</text>
 
-    <line x1="88" y1="166" x2="130" y2="100" class="callout" />
-    <line x1="130" y1="100" x2="286" y2="100" class="callout" />
-    <text x="290" y="104" class="lbl">run-up leg enters through the frame band</text>
+    <polyline points="93,139 168,96 286,96" class="callout" fill="none" />
+    <text x="290" y="100" class="lbl">sharp corner excites the axis</text>
 
-    <line x1="84" y1="130" x2="120" y2="196" class="callout" />
-    <line x1="120" y1="196" x2="286" y2="196" class="callout" />
-    <text x="290" y="200" class="lbl">sharp 90 degree corner rings the axis</text>
+    <polyline points="90,176 186,150 286,150" class="callout" fill="none" />
+    <text x="290" y="154" class="lbl">run-up leg enters through the band</text>
 
-    <line x1="112" y1="130" x2="140" y2="60" class="callout" />
-    <line x1="140" y1="60" x2="286" y2="60" class="callout" />
-    <text x="290" y="64" class="lbl">ringing recorded as a wiggle</text>
-
-    <line x1="212" y1="120" x2="250" y2="120" class="callout" />
-    <line x1="250" y1="120" x2="286" y2="132" class="callout" />
-    <text x="290" y="136" class="lbl">groups cross past the read window</text>
+    <polyline points="60,174 200,196 286,196" class="callout" fill="none" />
+    <text x="290" y="200" class="lbl">solid corner marks the origin</text>
   </svg>
 </template>
 
@@ -78,14 +82,6 @@
 .couponFill {
   fill: rgba(var(--v-theme-on-surface), 0.22);
 }
-.window {
-  fill: rgb(var(--v-theme-surface));
-  stroke: rgba(var(--v-theme-on-surface), 0.15);
-}
-.hole {
-  fill: rgb(var(--v-theme-surface));
-  stroke: rgba(var(--v-theme-on-surface), 0.35);
-}
 .solidDot {
   fill: rgba(var(--v-theme-on-surface), 0.55);
 }
@@ -96,14 +92,11 @@
 .runup {
   stroke: rgb(var(--v-theme-primary));
 }
-.runupStroke {
-  stroke: rgb(var(--v-theme-primary));
-}
 .measured {
   stroke: rgb(var(--v-theme-success));
 }
 .plain {
-  stroke: rgba(var(--v-theme-on-surface), 0.4);
+  stroke: rgba(var(--v-theme-on-surface), 0.25);
 }
 .cornerRing {
   stroke: rgb(var(--v-theme-warning));

@@ -172,9 +172,10 @@ function generate(): void {
 
 // Scan card state: the two scans of the same printed coupon, held page-locally like the other
 // flows hold their scan state. Each axis group is only read along the scanner's sensor rows,
-// which is why the part is scanned twice, a quarter turn apart.
-const scanFileA = ref<File | null>(null)
-const scanFileB = ref<File | null>(null)
+// which is why the part is scanned twice, a quarter turn apart. The analyzer assigns each
+// axis group to the scan that reads it along the sensor rows, so the pick order is free.
+const scanFiles = ref<File[]>([])
+const scanPickHint = ref('')
 const analyzing = ref(false)
 const scanError = ref('')
 const result = shallowRef<IsResult | null>(null)
@@ -182,28 +183,37 @@ const result = shallowRef<IsResult | null>(null)
 // the profile selection changes afterwards.
 const analyzedFirmware = ref<Firmware>('Klipper')
 
-function onPickScan(e: Event, slot: 0 | 1): void {
+function onPickScans(e: Event): void {
   const input = e.target as HTMLInputElement
-  const file = input.files?.[0] ?? null
+  const picked = Array.from(input.files ?? [])
   // Clear the input so picking the same file again still fires change.
   input.value = ''
-  if (!file || analyzing.value) return
-  if (slot === 0) scanFileA.value = file
-  else scanFileB.value = file
+  if (picked.length === 0 || analyzing.value) return
+  scanPickHint.value = ''
+  const room = 2 - scanFiles.value.length
+  if (picked.length > room) {
+    scanPickHint.value =
+      'The analysis uses exactly two scan images. The files beyond the first two were not added.'
+  }
+  scanFiles.value = [...scanFiles.value, ...picked.slice(0, Math.max(0, room))]
+}
+
+function removeScan(index: number): void {
+  if (analyzing.value) return
+  scanFiles.value = scanFiles.value.filter((_, i) => i !== index)
+  scanPickHint.value = ''
 }
 
 const canAnalyze = computed(
   () =>
-    scanFileA.value !== null &&
-    scanFileB.value !== null &&
+    scanFiles.value.length === 2 &&
     isCalibrated.value &&
     fittedSpec.value !== null &&
     !analyzing.value,
 )
 
 async function analyze(): Promise<void> {
-  const fileA = scanFileA.value
-  const fileB = scanFileB.value
+  const [fileA, fileB] = scanFiles.value
   const cal = calibration.calibration
   // The analysis measures the print as generated, so it runs against the bed-fitted spec.
   const usedSpec = fittedSpec.value
@@ -316,6 +326,10 @@ async function analyze(): Promise<void> {
           the corner's acceleration ramp. It should cover at least five wavelengths of the
           lowest resonance of interest at the tier speed. The printed lines are longer:
           they continue into the zone where the two axis groups cross.
+        </p>
+        <p class="tip mt-0 mb-2">
+          The line pitch only needs raising when neighbouring lines touch on a strongly
+          ringing printer: it must exceed twice the ringing amplitude plus the line width.
         </p>
         <div class="fields">
           <NumericField v-model="linesPerSpeed" label="Lines per speed" :step="1" :min="3" />
@@ -450,39 +464,55 @@ async function analyze(): Promise<void> {
       <p class="tip mb-3">
         Scan the coupon face down, then rotate the part a quarter turn on the glass and scan
         again. Both scans are needed because each line group is only read along the
-        scanner's accurate axis. Scan at the calibrated resolution with the lid closed.
+        scanner's accurate axis; the order of the two images does not matter. Scan at the
+        calibrated resolution with the lid closed.
       </p>
       <div class="scan-inputs mb-3">
         <label class="dropzone" :class="{ 'dropzone-disabled': !isCalibrated }">
           <input
             type="file"
             accept="image/*"
+            multiple
             class="file-input"
             :disabled="!isCalibrated || analyzing"
-            data-testid="is-scan-input-0"
-            @change="onPickScan($event, 0)"
+            data-testid="is-scan-input"
+            @change="onPickScans($event)"
           />
-          <v-icon size="28" :color="scanFileA ? 'success' : isCalibrated ? 'primary' : undefined">
-            {{ scanFileA ? 'mdi-check-circle' : 'mdi-image-plus' }}
+          <v-icon
+            size="28"
+            :color="scanFiles.length === 2 ? 'success' : isCalibrated ? 'primary' : undefined"
+          >
+            {{ scanFiles.length === 2 ? 'mdi-check-circle' : 'mdi-image-plus' }}
           </v-icon>
-          <span class="dz-label">Upright scan (0 degrees)</span>
-          <span class="dz-sub">{{ scanFileA?.name ?? 'Choose the scan image' }}</span>
+          <span class="dz-label">Scan images</span>
+          <span class="dz-sub">Choose both scans of the coupon</span>
         </label>
-        <label class="dropzone" :class="{ 'dropzone-disabled': !isCalibrated }">
-          <input
-            type="file"
-            accept="image/*"
-            class="file-input"
-            :disabled="!isCalibrated || analyzing"
-            data-testid="is-scan-input-90"
-            @change="onPickScan($event, 1)"
-          />
-          <v-icon size="28" :color="scanFileB ? 'success' : isCalibrated ? 'primary' : undefined">
-            {{ scanFileB ? 'mdi-check-circle' : 'mdi-image-plus' }}
-          </v-icon>
-          <span class="dz-label">Quarter-turned scan (90 degrees)</span>
-          <span class="dz-sub">{{ scanFileB?.name ?? 'Choose the scan image' }}</span>
-        </label>
+        <div v-if="scanFiles.length > 0" class="scan-files">
+          <div
+            v-for="(file, i) in scanFiles"
+            :key="`${file.name}-${i}`"
+            class="scan-file"
+            :data-testid="`is-scan-file-${i}`"
+          >
+            <v-icon size="16" color="success">mdi-image-check</v-icon>
+            <span class="scan-file-name">{{ file.name }}</span>
+            <v-btn
+              icon="mdi-close"
+              size="x-small"
+              variant="text"
+              :disabled="analyzing"
+              :aria-label="`Remove ${file.name}`"
+              :data-testid="`is-scan-remove-${i}`"
+              @click="removeScan(i)"
+            />
+          </div>
+        </div>
+        <p v-if="scanFiles.length < 2" class="tip mt-0 mb-0" data-testid="is-scan-count-hint">
+          Two scan images are needed: the upright scan and the quarter-turned scan.
+        </p>
+        <p v-if="scanPickHint" class="tip mt-0 mb-0" data-testid="is-scan-pick-hint">
+          {{ scanPickHint }}
+        </p>
       </div>
       <p v-if="!isCalibrated" class="tip" data-testid="is-scan-needs-calibration">
         Calibrate the scanner first (step 1); the analysis needs the scanner's true
@@ -607,9 +637,27 @@ async function analyze(): Promise<void> {
   flex-wrap: wrap;
 }
 .scan-inputs {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.scan-files {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.scan-file {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 4px 2px 8px;
+  border-radius: 8px;
+  background: rgb(var(--v-theme-surface-bright));
+}
+.scan-file-name {
+  font-size: 12.5px;
+  overflow-wrap: anywhere;
+  flex: 1;
 }
 .dropzone {
   display: flex;
