@@ -73,16 +73,15 @@ const partColorsItems = [
 const scanPlanNote = computed(() => {
   if (scanPlace.value === 'plate') {
     return (
-      'Useful for filaments that are hard to remove, like TPU or PETG. The coupon is ' +
-      'printed at the front edge of the bed, so that edge of the build plate can lie on ' +
-      'the scanner glass. The plate color needs to contrast with the filament.'
+      'The coupon prints at the front edge of the bed so the plate edge can rest on the ' +
+      'scanner glass. Use this for filaments that are hard to remove, like TPU or PETG. ' +
+      'The plate color must contrast with the filament.'
     )
   }
   return partColors.value === 'base'
-    ? 'A base is printed in a second color underneath the coupon, with a filament swap ' +
-        'pause between the two. The two filaments need to differ in brightness.'
-    : 'The removed part is scanned face down on the glass. The filament color needs to ' +
-        'contrast with the backing, either the scanner lid or a sheet of paper.'
+    ? 'A base prints in a second color under the coupon, with a filament swap pause ' +
+        'between them. The two filaments must differ in brightness.'
+    : 'The filament color must contrast with the backing, either the lid or a sheet of paper.'
 })
 
 watch(
@@ -155,9 +154,9 @@ const highFlowText = computed(() => {
   const flow = Math.max(...s.speedsMmS) * nominal * p.layerHeightMm
   if (flow <= HIGH_FLOW_WARNING_THRESHOLD_MM3_S) return ''
   return (
-    `The selected line speed extrudes ${flow.toFixed(1)} mm^3/s of filament; a typical ` +
-    `hotend melts about ${HIGH_FLOW_WARNING_THRESHOLD_MM3_S} mm^3/s and thins the lines ` +
-    'above that. The ringing wavelength is still readable from slightly thinned lines.'
+    `The line speed extrudes ${flow.toFixed(1)} mm^3/s, above the roughly ` +
+    `${HIGH_FLOW_WARNING_THRESHOLD_MM3_S} mm^3/s a typical hotend melts, so the lines print ` +
+    'thinner. The ringing wavelength is still readable from slightly thinned lines.'
   )
 })
 
@@ -351,8 +350,8 @@ async function analyze(): Promise<void> {
       <h1 class="text-h5 font-weight-bold">Input shaper calibration</h1>
       <p class="text-body-2 text-medium-emphasis mt-1">
         Print a resonance test coupon whose lines record the ringing after a sharp corner.
-        Two scans of the coupon measure the resonance frequency and damping per axis and
-        give the input shaper values to set.
+        Two scans then measure each axis's resonance frequency and damping, and report the
+        input shaper values to set.
       </p>
     </header>
 
@@ -379,9 +378,9 @@ async function analyze(): Promise<void> {
         </v-btn>
       </div>
       <p v-if="!isCalibrated" class="text-body-2 text-medium-emphasis mt-2 mb-0">
-        Required before the scan step. The analysis measures the ringing in millimetres,
-        which needs the true scanner resolution from the card calibration. Generating the
-        test print works without it.
+        Required before the scan step, not for generating the print. The analysis reads the
+        ringing in millimetres, which needs the true scanner resolution from the card
+        calibration.
       </p>
     </section>
 
@@ -578,10 +577,9 @@ async function analyze(): Promise<void> {
         <span class="num">5</span><span class="step-title">Scan the print</span>
       </div>
       <p class="tip mb-3">
-        Scan the coupon with the printed top face down on the glass and the lid closed, at
-        the calibrated resolution. Two scans are needed because each line group is only read
-        along the scanner's accurate axis. Place the part as shown below: first with the
-        solid corner at the top left, then rotated a quarter turn clockwise.
+        Scan the coupon face down with the lid closed, at the calibrated resolution. Scan it
+        twice, once in each placement shown below, because each line group is only read along
+        the scanner's accurate axis.
       </p>
       <div class="diagram-wrap mb-3">
         <IsFirstScanDiagram />
@@ -590,8 +588,8 @@ async function analyze(): Promise<void> {
         <IsSecondScanDiagram />
       </div>
       <p class="tip mb-3">
-        These placements are a recommended starting point, not a requirement. The analysis
-        resolves any orientation, and the order of the two images does not matter.
+        The placements are a suggested starting point. The analysis resolves any
+        orientation, and the order of the two images does not matter.
       </p>
       <div class="scan-inputs mb-3">
         <label class="dropzone" :class="{ 'dropzone-disabled': !isCalibrated }">
@@ -641,8 +639,7 @@ async function analyze(): Promise<void> {
         </p>
       </div>
       <p v-if="!isCalibrated" class="tip" data-testid="is-scan-needs-calibration">
-        Calibrate the scanner first (step 1); the analysis needs the scanner's true
-        resolution.
+        Calibrate the scanner in step 1 to enable the analysis.
       </p>
       <div class="gen-row">
         <v-btn
