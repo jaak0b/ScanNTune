@@ -3,7 +3,6 @@ import {
   correctionFactor,
   effectiveDpi,
   isotropicPxPerMm,
-  pxPerMmAtDpi,
   referenceAlongDirection,
   scaleReferenceAtDpi,
 } from '../../src/engine/scannerCalibration'
@@ -24,8 +23,8 @@ describe('scanner calibration', () => {
     const factor = 23.5969 / (600.0 / 25.4)
 
     expect(Math.abs(correctionFactor(cal) - factor)).toBeLessThanOrEqual(1e-12)
-    expect(Math.abs(pxPerMmAtDpi(cal, 600) - 23.5969)).toBeLessThanOrEqual(1e-9)
-    expect(Math.abs(pxPerMmAtDpi(cal, 1200) - (1200.0 / 25.4) * factor)).toBeLessThanOrEqual(1e-9)
+    expect(Math.abs((scaleReferenceAtDpi(cal, 600) as number) - 23.5969)).toBeLessThanOrEqual(1e-9)
+    expect(Math.abs((scaleReferenceAtDpi(cal, 1200) as number) - (1200.0 / 25.4) * factor)).toBeLessThanOrEqual(1e-9)
     expect(Math.abs(effectiveDpi(cal) - 23.5969 * 25.4)).toBeLessThanOrEqual(1e-9)
   })
 })

@@ -58,6 +58,15 @@ Absolute scale needs a known px/mm (scanner DPI is rarely exact), so the app mea
 7810 plastic card (`cardEdgeMeasurer`) to learn the true px/mm; without it, only anisotropy and skew are
 meaningful.
 
+A scanner's scale error can be per-axis: a CCD scanner is mis-scaled along its sensor axis but accurate
+along the carriage axis, so a calibration is a `ScaleReference` (a scalar px/mm, or a per-axis pair for
+CCD), never a bare number. Every flow that converts scan pixels to millimetres must take the
+`ScaleReference` from `scaleReferenceAtDpi` (the only exported way to price a stored calibration) and
+convert along its actual measurement direction via `referenceAlongDirection`; a new flow that pockets a
+scalar px/mm reintroduces the wrong-axis bug on CCD scanners. Each flow's render-recovery tests should
+include one case with a deliberately wrong figure on the unused axis to prove it cannot leak in (see the
+quarter-turned coupon case in `emAnalyzer.spec.ts`).
+
 Two durable gotchas:
 - **OpenCV.js loads via a default import** (`import cvReady from '@techstark/opencv-js'`), NOT a namespace or
   dynamic `import()`. Its `module.exports` is a Promise, which a namespace/dynamic import turns into a broken

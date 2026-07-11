@@ -2,7 +2,7 @@ import type { ScannerCalibration } from './types'
 
 // Derived quantities for a stored scanner calibration. CorrectionFactor is the scanner's isotropic
 // scale error relative to its nominal DPI and is roughly constant across DPI settings, so
-// pxPerMmAtDpi can apply the same calibration to a coupon scanned at any resolution.
+// scaleReferenceAtDpi can apply the same calibration to a coupon scanned at any resolution.
 
 /** Pixels-per-mm the DPI setting nominally implies (DPI / 25.4), before the scanner's error. */
 export function nominalPxPerMm(c: ScannerCalibration): number {
@@ -25,8 +25,10 @@ export function percentVsNominal(c: ScannerCalibration): number {
   return (correctionFactor(c) - 1.0) * 100.0
 }
 
-/** The true px/mm for a scan taken at the given DPI, applying the stored error. */
-export function pxPerMmAtDpi(c: ScannerCalibration, dpi: number): number {
+// The true px/mm for a scan taken at the given DPI, applying the stored error. Deliberately not
+// exported: a bare scalar hides which image axis the error belongs to, so callers go through
+// scaleReferenceAtDpi and are forced to handle a per-axis (CCD) reference.
+function pxPerMmAtDpi(c: ScannerCalibration, dpi: number): number {
   return (dpi / 25.4) * correctionFactor(c)
 }
 
