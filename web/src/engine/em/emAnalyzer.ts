@@ -32,6 +32,14 @@ export interface EmResult {
   wMm: number | null
   /** Separator cross-check residual in mm; near zero when block and separator agree. */
   biasMm: number | null
+  /**
+   * Estimated one-sided edge shift in mm from a scanner-lamp penumbra (median left offset plus
+   * median right offset). Zero for a symmetric edge spread; nonzero flags a lamp shadow that
+   * biases the measured bead width. Null on failure.
+   */
+  flankAsymmetryMm: number | null
+  /** True when the flank asymmetry implies a bead-width bias above the 1% flow-ratio action step. */
+  shadowWarning: boolean
   /** Printer X-scale diagnostic (1 = perfect). */
   pitchScale: number | null
   /** Per-gap w estimates kept after rejection (diagnostics/overlay). */
@@ -130,11 +138,20 @@ export function analyzeEmCoupon(
     )
   }
 
+  const flankAsymmetryMm = flankAsymmetry(measurement)
+
   return {
     success: true,
     failureReason: null,
     wMm,
     biasMm: separatorBiasMm(measurement, spec, wMm),
+    flankAsymmetryMm,
+    // A symmetric point spread shifts both flanks equally and oppositely, so the two medians sum
+    // to zero; a one-sided lamp penumbra shifts one flank only, and that residual tracks
+    // the bead-width bias (each gap loses the shift, w gains it). Warn once the implied error
+    // exceeds one percent of the width, the smallest flow-ratio step a user acts on; a benign
+    // scan's baseline asymmetry sits an order of magnitude below that.
+    shadowWarning: flankAsymmetryMm !== null && Math.abs(flankAsymmetryMm) > 0.01 * wMm,
     pitchScale: measurement.pitchScale,
     samples,
     blocksMeasured: measurement.blocks.length,
@@ -172,12 +189,24 @@ function separatorBiasMm(
   return residuals.length > 0 ? median(residuals) : null
 }
 
+// The one-sided scanner-lamp shadow estimate: the sum of the median left-flank and median
+// right-flank sub-pixel edge offsets. A symmetric edge spread widens both flanks equally and
+// oppositely, so the medians cancel; a one-sided penumbra shifts a single flank, leaving a
+// nonzero sum that equals the bead-width bias. Null when no flank offsets were collected.
+function flankAsymmetry(measurement: EmMeasurement): number | null {
+  const { leftFlankOffsetsMm, rightFlankOffsetsMm } = measurement
+  if (leftFlankOffsetsMm.length === 0 || rightFlankOffsetsMm.length === 0) return null
+  return median(leftFlankOffsetsMm) + median(rightFlankOffsetsMm)
+}
+
 function failure(reason: string, flipped: boolean, rotationQuarterTurns: number): EmResult {
   return {
     success: false,
     failureReason: reason,
     wMm: null,
     biasMm: null,
+    flankAsymmetryMm: null,
+    shadowWarning: false,
     pitchScale: null,
     samples: [],
     blocksMeasured: 0,

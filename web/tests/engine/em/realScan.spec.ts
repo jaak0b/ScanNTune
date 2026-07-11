@@ -34,6 +34,12 @@ describe('real-scan EM regression', () => {
         expect(r.biasMm).not.toBeNull()
         expect(Math.abs(r.biasMm as number)).toBeLessThanOrEqual(0.06)
 
+        // This scan was made with the beads running along the lamp axis, where the one-sided
+        // penumbra does not fall across the gaps, so no shadow warning and a near-zero asymmetry.
+        expect(r.flankAsymmetryMm).not.toBeNull()
+        expect(Math.abs(r.flankAsymmetryMm as number)).toBeLessThanOrEqual(0.005)
+        expect(r.shadowWarning).toBe(false)
+
         expect(r.blocksMeasured).toBeGreaterThanOrEqual(20)
 
         expect(r.pitchScale).not.toBeNull()

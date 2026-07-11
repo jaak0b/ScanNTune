@@ -513,6 +513,15 @@ const pitchScaleOff = computed(() => {
             pitch scale {{ result.pitchScale!.toFixed(4) }}
           </v-chip>
           <v-chip
+            v-if="result.flankAsymmetryMm !== null"
+            size="small"
+            variant="tonal"
+            prepend-icon="mdi-mirror"
+            data-testid="em-flank-asymmetry"
+          >
+            flank asymmetry {{ result.flankAsymmetryMm.toFixed(3) }} mm
+          </v-chip>
+          <v-chip
             v-if="pitchScaleOff"
             size="small"
             variant="tonal"
@@ -523,6 +532,14 @@ const pitchScaleOff = computed(() => {
             printer scale is off; run the skew and size calibration
           </v-chip>
         </div>
+        <v-alert
+          v-if="result.shadowWarning"
+          type="warning"
+          variant="tonal"
+          class="mb-3"
+          data-testid="em-shadow-warning"
+          text="Rotate the coupon 90 degrees on the scanner glass and rescan. The scanner lamp casts a one-sided shadow across the lines in this orientation, which inflates the measured bead width."
+        />
         <template v-if="correction">
           <CodeBlock :code="correction.command" data-testid="em-code" />
           <p class="tip mt-0">

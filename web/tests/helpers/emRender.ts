@@ -24,9 +24,17 @@ export interface EmRenderOptions {
   /** Uniform pitch scale simulating printer axis stretch (default 1). */
   pitchScale?: number
   marginMm?: number
+  /**
+   * Injects a one-sided scanner-lamp penumbra: the named flank of every test line gets an edge
+   * spread widened by `extraSigmaMm`, modelling the shadow skirt a flatbed lamp casts across gaps.
+   * `side` is the shadowed flank in increasing profile x ('left' = the background-to-plastic edge,
+   * 'right' = the plastic-to-background edge). Absent means a symmetric edge (unchanged output).
+   */
+  shadow?: { side: 'left' | 'right'; extraSigmaMm: number }
 }
 
-type Resolved = Required<Omit<EmRenderOptions, 'baseGray'>> & Pick<EmRenderOptions, 'baseGray'>
+type Resolved = Required<Omit<EmRenderOptions, 'baseGray' | 'shadow'>> &
+  Pick<EmRenderOptions, 'baseGray' | 'shadow'>
 
 const DEFAULTS: Omit<Resolved, 'spec' | 'trueWidthMm'> = {
   pxPerMm: 12,
@@ -68,6 +76,10 @@ function softEdge(d: number, sigma: number): number {
   if (sigma <= 0) return d >= 0 ? 1 : 0
   return Math.max(0, Math.min(1, 0.5 + d / sigma))
 }
+
+// Peak coverage of an injected one-sided shadow skirt, kept below the 0.5 plastic-vs-gap mid level
+// so the skirt darkens the gap without moving the edge's mid-level crossing.
+const SKIRT_PEAK = 0.4
 
 /** Coverage (0..1) of an axis-aligned box, softened at its edges by `sigma` mm. */
 function boxCoverage(
@@ -127,8 +139,30 @@ function couponCoverage(
       for (const lineX of block.lineXsMm) {
         const c = scaleX(lineX)
         const half = o.trueWidthMm / 2
-        if (Math.abs(x - c) > half + sigma) continue
-        const lineCoverage = Math.min(rowCoverage, softEdge(half - Math.abs(x - c), sigma))
+        // Signed distance into the line (positive inside plastic, negative in the adjacent gap).
+        const d = half - Math.abs(x - c)
+        const flank = x < c ? 'left' : 'right'
+        const shadowed = o.shadow !== undefined && o.shadow.side === flank
+        const reach = shadowed ? o.shadow!.extraSigmaMm : 0
+        if (d < -sigma && d < -reach) continue
+        // The real plastic edge stays sharp (the mid-level crossing sits on the true edge). A
+        // one-sided lamp penumbra adds a shadow skirt in the gap next to one flank only (left =
+        // x < c, the background-to-plastic edge in increasing x; right = x > c): a partial-darkness
+        // ramp that stays below the plastic-vs-gap mid level, so it does not move the crossing but
+        // its gradient pulls the centroid outward into the gap. That is the bias a real scan shows.
+        let edge = softEdge(d, sigma)
+        if (shadowed && reach > sigma && d < -sigma && d > -reach) {
+          // Sub-mid shadow skirt in the gap next to this flank, confined to the band from `sigma`
+          // (just past the sharp edge, so the two samples straddling the mid-level crossing stay
+          // clean and the crossing stays on the true edge) out to `reach` (kept inside the centroid
+          // window). A smooth triangular darkening peaks mid-band; its gradient, seen by the wider
+          // centroid window but not by the local crossing, pulls the centroid outward into the gap:
+          // the one-sided bias a real lamp penumbra imprints, and the shift the diagnostic recovers.
+          const u = (-d - sigma) / (reach - sigma) // 0 at the band's inner edge, 1 at its outer edge
+          const triangle = 1 - Math.abs(2 * u - 1)
+          edge = Math.max(edge, SKIRT_PEAK * triangle)
+        }
+        const lineCoverage = Math.min(rowCoverage, edge)
         coverage = Math.max(coverage, lineCoverage)
       }
     }

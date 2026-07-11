@@ -142,6 +142,62 @@ describe('analyzeEmCoupon render recovery', () => {
     240000,
   )
 
+  it(
+    'reports a near-zero flank asymmetry and no shadow warning on a clean render',
+    async () => {
+      const r = await analyzeRender({ trueWidthMm: 0.42 })
+      expect(r.success).toBe(true)
+      expect(r.flankAsymmetryMm).not.toBeNull()
+      expect(Math.abs(r.flankAsymmetryMm!)).toBeLessThan(0.005)
+      expect(r.shadowWarning).toBe(false)
+    },
+    240000,
+  )
+
+  it(
+    'detects a one-sided lamp shadow and warns, with an asymmetry near the width inflation',
+    async () => {
+      const trueWidth = 0.42
+      // Rendered at a higher resolution so the narrowest gaps span enough pixels for the flanks to
+      // be measured independently; the tightest default-spec gap is only about a quarter millimetre.
+      const px = 24
+      // A symmetric clean reference to measure how much the injected shadow inflated the width.
+      const clean = await analyzeRender({ trueWidthMm: trueWidth, pxPerMm: px })
+      const rLeft = await analyzeRender({
+        trueWidthMm: trueWidth,
+        pxPerMm: px,
+        shadow: { side: 'left', extraSigmaMm: 0.16 },
+      })
+      const rRight = await analyzeRender({
+        trueWidthMm: trueWidth,
+        pxPerMm: px,
+        shadow: { side: 'right', extraSigmaMm: 0.16 },
+      })
+      expect(clean.success).toBe(true)
+      expect(rLeft.success).toBe(true)
+      expect(rRight.success).toBe(true)
+      expect(rLeft.shadowWarning).toBe(true)
+      expect(rRight.shadowWarning).toBe(true)
+      expect(rLeft.flankAsymmetryMm).not.toBeNull()
+      expect(rRight.flankAsymmetryMm).not.toBeNull()
+      // The asymmetry sign is the signature of which flank the lamp shadowed: the two sides shift
+      // opposite flanks, so their asymmetries come out with opposite signs.
+      expect(Math.sign(rLeft.flankAsymmetryMm!)).not.toBe(0)
+      expect(Math.sign(rRight.flankAsymmetryMm!)).toBe(-Math.sign(rLeft.flankAsymmetryMm!))
+      // The estimated one-sided edge shift should track the actual width inflation each shadow
+      // caused (clean baseline vs shadowed) within a factor of two, since each gap loses the shift
+      // and the bead width gains it.
+      for (const r of [rLeft, rRight]) {
+        const inflation = r.wMm! - clean.wMm!
+        expect(Math.abs(inflation)).toBeGreaterThan(0.01 * trueWidth)
+        const ratio = Math.abs(r.flankAsymmetryMm!) / Math.abs(inflation)
+        expect(ratio).toBeGreaterThan(0.5)
+        expect(ratio).toBeLessThan(2)
+      }
+    },
+    240000,
+  )
+
   it('fails with a reason on a blank image', async () => {
     const cv = await getCv()
     const width = 400

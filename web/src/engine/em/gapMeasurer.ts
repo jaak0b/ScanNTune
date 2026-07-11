@@ -44,6 +44,15 @@ export interface EmMeasurement {
   separators: SeparatorMeasurement[]
   /** Measured line-centre pitch span divided by the commanded span: the printer X-scale diagnostic. */
   pitchScale: number
+  /**
+   * Signed sub-pixel offsets, in mm, of each left flank's gradient-centroid edge from its linear
+   * mid-level crossing (left flank = the background-to-plastic edge in increasing profile x). A
+   * symmetric edge spread biases both flanks equally and oppositely; a one-sided scanner-lamp
+   * penumbra shifts only the shadowed flank, which the flank-asymmetry diagnostic detects.
+   */
+  leftFlankOffsetsMm: number[]
+  /** As leftFlankOffsetsMm, for right flanks (the plastic-to-background edge in increasing x). */
+  rightFlankOffsetsMm: number[]
 }
 
 const N_PROFILES = 9
@@ -65,12 +74,18 @@ interface DetectedLine {
   leftPx: number // profile-local sub-pixel positions, px
   rightPx: number
   centerPx: number
+  // Signed offsets (gradient centroid minus linear mid-level crossing) of each flank, in
+  // profile-local px, for the flank-asymmetry (scanner-lamp shadow) diagnostic.
+  leftOffsetPx: number
+  rightOffsetPx: number
 }
 
 interface BlockProfileResult {
   measurement: BlockMeasurement
   firstLeftMm: number
   lastRightMm: number
+  leftFlankOffsetsMm: number[]
+  rightFlankOffsetsMm: number[]
 }
 
 export function measureEmCoupon(
@@ -115,6 +130,8 @@ export function measureEmCoupon(
   const blocks: BlockMeasurement[] = []
   const separators: SeparatorMeasurement[] = []
   const spanRatios: number[] = []
+  const leftFlankOffsetsMm: number[] = []
+  const rightFlankOffsetsMm: number[] = []
 
   for (const rowSpec of rowSpecs) {
     const rowLenMm = rowSpec.y1Mm - rowSpec.y0Mm
@@ -147,6 +164,8 @@ export function measureEmCoupon(
       const centers = r.measurement.lineCentersMm
       const commandedSpanMm = (spec.linesPerBlock - 1) * r.measurement.pitchCommandedMm
       spanRatios.push((centers[centers.length - 1] - centers[0]) / commandedSpanMm)
+      leftFlankOffsetsMm.push(...r.leftFlankOffsetsMm)
+      rightFlankOffsetsMm.push(...r.rightFlankOffsetsMm)
     }
     for (let i = 0; i + 1 < results.length; i++) {
       const left = results[i]
@@ -167,7 +186,7 @@ export function measureEmCoupon(
   }
   const pitchScale = spanRatios.reduce((a, b) => a + b, 0) / spanRatios.length
 
-  return { blocks, separators, pitchScale }
+  return { blocks, separators, pitchScale, leftFlankOffsetsMm, rightFlankOffsetsMm }
 }
 
 interface RowContext {
@@ -250,6 +269,9 @@ function measureBlock(
   const lineCentersMm = lines.map((l) => toMm(l.centerPx))
   const gapsMm = lines.slice(1).map((l, j) => toMm(l.leftPx) - toMm(lines[j].rightPx))
 
+  // Flank offsets are relative shifts, so only the px-to-mm scale matters (no origin term).
+  const offsetToMm = (px: number) => px / ctx.scanPxPerMm
+
   return {
     measurement: {
       row: ctx.row,
@@ -260,6 +282,8 @@ function measureBlock(
     },
     firstLeftMm: toMm(lines[0].leftPx),
     lastRightMm: toMm(lines[lines.length - 1].rightPx),
+    leftFlankOffsetsMm: lines.map((l) => offsetToMm(l.leftOffsetPx)),
+    rightFlankOffsetsMm: lines.map((l) => offsetToMm(l.rightOffsetPx)),
   }
 }
 
@@ -306,11 +330,13 @@ function detectLines(
         // plateau from bilinear resampling).
         const left = refineEdge(profile, mid, grad, runStart, windowSamples, n)
         const right = refineEdge(profile, mid, grad, runEnd + 1, windowSamples, n)
-        if (Number.isFinite(left) && Number.isFinite(right)) {
+        if (Number.isFinite(left.pos) && Number.isFinite(right.pos)) {
           lines.push({
-            leftPx: left * PROFILE_STEP_PX,
-            rightPx: right * PROFILE_STEP_PX,
-            centerPx: ((left + right) / 2) * PROFILE_STEP_PX,
+            leftPx: left.pos * PROFILE_STEP_PX,
+            rightPx: right.pos * PROFILE_STEP_PX,
+            centerPx: ((left.pos + right.pos) / 2) * PROFILE_STEP_PX,
+            leftOffsetPx: left.offset * PROFILE_STEP_PX,
+            rightOffsetPx: right.offset * PROFILE_STEP_PX,
           })
         }
       }
@@ -329,6 +355,9 @@ function detectLines(
 // gradient piecewise constant (flat plateaus), where a parabola quantizes to whole pixels but the
 // centroid stays exact. The linear-interpolated mid-level crossing is the seed and the fallback
 // when the window carries no gradient. NaN when the crossing sits at the profile boundary.
+// `pos` is NaN when the crossing sits at the profile boundary. `offset` is the refined position
+// minus the linear crossing (in samples): the signed flank shift the asymmetry diagnostic pools,
+// zero whenever the centroid falls back to the crossing.
 function refineEdge(
   profile: Float64Array,
   mid: number,
@@ -336,8 +365,8 @@ function refineEdge(
   crossK: number,
   windowSamples: number,
   n: number,
-): number {
-  if (crossK < 1 || crossK > n - 1) return NaN
+): { pos: number; offset: number } {
+  if (crossK < 1 || crossK > n - 1) return { pos: NaN, offset: NaN }
   const a = profile[crossK - 1]
   const b = profile[crossK]
   const denom = b - a
@@ -353,8 +382,9 @@ function refineEdge(
     weight += gk
     moment += gk * k
   }
-  if (weight <= 0) return crossing
-  return moment / weight
+  if (weight <= 0) return { pos: crossing, offset: 0 }
+  const pos = moment / weight
+  return { pos, offset: pos - crossing }
 }
 
 // Linear-interpolated percentile of an ascending-sorted array.
