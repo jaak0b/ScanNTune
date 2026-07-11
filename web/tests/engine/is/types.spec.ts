@@ -23,6 +23,7 @@ describe('defaultIsTestSpec', () => {
     expect(spec.cornerSpeedMmS).toBe(100)
     expect(spec.weldMm).toBe(1)
     expect(spec.placement).toBe('center')
+    expect(spec.contrastBase).toBe(false)
   })
   it('floors the profile acceleration at the low-signal threshold and never caps it', () => {
     // The floor equals the low-acceleration warning threshold, so a default spec never

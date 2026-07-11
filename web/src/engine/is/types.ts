@@ -45,6 +45,16 @@ export interface IsTestSpec {
   weldMm: number
   /** Where the coupon sits on the bed: centered, or pushed to the front/back edge. */
   placement: CouponPlacement
+  /**
+   * Whether the coupon prints on a solid contrasting-color base (consumed by the
+   * generator): base layers in the first filament under the entire footprint, band and
+   * window alike, then a filament swap pause, then the coupon in the second filament.
+   * The base backs the open window, so the scanned silhouette shows the base color
+   * between the test lines instead of the backing behind the part. The pedestal and
+   * measured layers shift up by the base thickness; the scan face (the top, laid face
+   * down on the glass) and the traced geometry are unchanged.
+   */
+  contrastBase: boolean
 }
 
 export const MIN_SPEED_TIERS = 1
@@ -93,6 +103,7 @@ export function defaultIsTestSpec(profile: PrinterProfile): IsTestSpec {
     cornerSpeedMmS: DEFAULT_CORNER_SPEED_MM_S,
     weldMm: 1,
     placement: 'center',
+    contrastBase: false,
   }
 }
 

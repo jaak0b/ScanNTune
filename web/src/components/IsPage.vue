@@ -58,6 +58,38 @@ const axisItems = [
   { title: 'X only', value: 'x' },
   { title: 'Y only', value: 'y' },
 ]
+// The placement and contrasting-base spec fields are driven by two scanning choices:
+// where the scan happens (removed part vs the whole build plate on the scanner, the
+// latter for filaments that will not come off, e.g. TPU or PETG), and, for a removed
+// part only, whether a contrasting base is printed under the coupon. Scanning with the
+// plate is always a single-color print at the bed's front edge so the plate edge can
+// lie on the glass with the rest overhanging.
+type ScanPlace = 'part' | 'plate'
+type PartColors = 'single' | 'base'
+const scanPlace = ref<ScanPlace>('part')
+const partColors = ref<PartColors>('single')
+const scanPlaceItems = [
+  { title: 'Scan the removed part', value: 'part' },
+  { title: 'Scan with the build plate', value: 'plate' },
+]
+const partColorsItems = [
+  { title: 'Single color', value: 'single' },
+  { title: 'Two colors (contrasting base)', value: 'base' },
+]
+const scanPlanNote = computed(() => {
+  if (scanPlace.value === 'plate') {
+    return (
+      'Useful for filaments that are hard to remove, like TPU or PETG. The coupon is ' +
+      'printed at the front edge of the bed, so that edge of the build plate can lie on ' +
+      'the scanner glass. The plate color needs to contrast with the filament.'
+    )
+  }
+  return partColors.value === 'base'
+    ? 'A base is printed in a second color underneath the coupon, with a filament swap ' +
+        'pause between the two. The two filaments need to differ in brightness.'
+    : 'The removed part is scanned face down on the glass. The filament color needs to ' +
+        'contrast with the backing, either the scanner lid or a sheet of paper.'
+})
 
 watch(
   () => store.selected?.id,
@@ -68,6 +100,8 @@ watch(
     measuredLine.value = specDefaults.value.measuredLineMm
     linePitch.value = specDefaults.value.linePitchMm
     axisChoice.value = 'both'
+    scanPlace.value = 'part'
+    partColors.value = 'single'
   },
 )
 
@@ -80,6 +114,8 @@ const spec = computed<IsTestSpec>(() => {
     measuredLineMm: measuredLine.value ?? specDefaults.value.measuredLineMm,
     linePitchMm: linePitch.value ?? specDefaults.value.linePitchMm,
     axes: (axisChoice.value === 'both' ? ['x', 'y'] : [axisChoice.value]) as IsAxis[],
+    placement: (scanPlace.value === 'plate' ? 'front' : 'center') as IsTestSpec['placement'],
+    contrastBase: scanPlace.value === 'part' && partColors.value === 'base',
   }
 })
 
@@ -428,6 +464,29 @@ async function analyze(): Promise<void> {
             data-testid="is-axes"
           />
         </div>
+      </div>
+      <div class="field-group mt-1">
+        <span class="group-label">Scanning plan</span>
+        <div class="fields">
+          <v-select
+            v-model="scanPlace"
+            :items="scanPlaceItems"
+            label="How will you scan the print?"
+            density="comfortable"
+            hide-details
+            data-testid="is-scan-plan"
+          />
+          <v-select
+            v-if="scanPlace === 'part'"
+            v-model="partColors"
+            :items="partColorsItems"
+            label="Colors"
+            density="comfortable"
+            hide-details
+            data-testid="is-part-colors"
+          />
+        </div>
+        <p class="tip mb-0" data-testid="is-scan-plan-note">{{ scanPlanNote }}</p>
       </div>
       <div class="facts mt-2">
         <v-chip

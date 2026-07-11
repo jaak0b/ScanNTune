@@ -438,6 +438,163 @@ describe('generateIsGcodeWithReport (Marlin and RepRapFirmware)', () => {
   })
 })
 
+describe('contrastBase', () => {
+  const baseSpec = { ...spec, contrastBase: true }
+  const report = generateIsGcodeWithReport(profile, filament, baseSpec)
+  const lines = report.gcode.split('\n')
+  const pauseIndex = lines.indexOf('PAUSE')
+
+  /** Coupon layer chunks after the pause: the pedestal and the measured layer. */
+  function chunksAfterPause(): string[][] {
+    const zIndexes = lines.flatMap((l, i) =>
+      i > pauseIndex && /^G1 Z0\./.test(l) ? [i] : [],
+    )
+    return zIndexes.map((z, k) => lines.slice(z + 1, zIndexes[k + 1] ?? lines.length))
+  }
+
+  it('emits the pause gcode only when contrastBase is set', () => {
+    expect(pauseIndex).toBeGreaterThan(0)
+    expect(report.gcode).toContain('; if your pause macro already retracts')
+    const plain = generateIsGcodeWithReport(profile, filament, spec)
+    expect(plain.gcode).not.toContain('PAUSE')
+    expect(plain.gcode).not.toContain('; if your pause macro already retracts')
+  })
+
+  it('brackets the pause with a retract and an unretract', () => {
+    expect(lines[pauseIndex - 1]).toMatch(/^G1 E-/)
+    expect(lines[pauseIndex + 1]).toBe(
+      '; if your pause macro already retracts, set retractMm to 0 in the profile',
+    )
+    expect(lines[pauseIndex + 2]).toMatch(/^G1 E[^-]/)
+  })
+
+  it('prints two solid base layers under the full footprint, window included, before the pause', () => {
+    const preZs = [
+      ...new Set(
+        lines
+          .slice(0, pauseIndex)
+          .filter((l) => l.startsWith('G1 Z'))
+          .map((l) => l.match(/Z([\d.]+)/)![1]),
+      ),
+    ]
+    expect(preZs).toEqual(['0.200', '0.400'])
+    // The base backs the open window: some base extrusion midpoint lies inside it.
+    const win = {
+      x0: ox + g.windowBox.x0,
+      y0: oy + g.windowBox.y0,
+      x1: ox + g.windowBox.x1,
+      y1: oy + g.windowBox.y1,
+    }
+    let x = 0
+    let y = 0
+    let inWindow = false
+    for (const l of lines.slice(0, pauseIndex)) {
+      const m = l.match(/^G([01]) X(-?[\d.]+) Y(-?[\d.]+)/)
+      if (!m) continue
+      const nx = Number(m[2])
+      const ny = Number(m[3])
+      if (m[1] === '1' && /E[\d.]/.test(l)) {
+        const mx = (x + nx) / 2
+        const my = (y + ny) / 2
+        if (mx > win.x0 && mx < win.x1 && my > win.y0 && my < win.y1) inWindow = true
+      }
+      x = nx
+      y = ny
+    }
+    expect(inWindow).toBe(true)
+  })
+
+  it('keeps the fiducial hole boxes free of extrusion on the base layers', () => {
+    const holeBoxes = g.fiducials.map((f) => ({
+      x0: ox + f.xMm - g.fiducialSizeMm / 2,
+      y0: oy + f.yMm - g.fiducialSizeMm / 2,
+      x1: ox + f.xMm + g.fiducialSizeMm / 2,
+      y1: oy + f.yMm + g.fiducialSizeMm / 2,
+    }))
+    const crossesHole = (x0: number, y0: number, x1: number, y1: number) => {
+      // Sample the segment densely; the hole boxes are 5 mm, so 0.5 mm steps cannot skip one.
+      const len = Math.hypot(x1 - x0, y1 - y0)
+      const n = Math.max(2, Math.ceil(len / 0.5))
+      for (let k = 0; k <= n; k++) {
+        const px = x0 + ((x1 - x0) * k) / n
+        const py = y0 + ((y1 - y0) * k) / n
+        for (const b of holeBoxes) {
+          if (px > b.x0 && px < b.x1 && py > b.y0 && py < b.y1) return true
+        }
+      }
+      return false
+    }
+    let x = 0
+    let y = 0
+    for (const l of lines.slice(0, pauseIndex)) {
+      const m = l.match(/^G([01]) X(-?[\d.]+) Y(-?[\d.]+)/)
+      if (!m) continue
+      const nx = Number(m[2])
+      const ny = Number(m[3])
+      if (m[1] === '1' && /E[\d.]/.test(l)) {
+        expect(crossesHole(x, y, nx, ny), `extrusion through a fiducial hole: ${l}`).toBe(false)
+      }
+      x = nx
+      y = ny
+    }
+  })
+
+  it('shifts the pedestal and measured layers up by the two base layers', () => {
+    const zMoves = lines.filter((l) => l.startsWith('G1 Z'))
+    const zs = [...new Set(zMoves.map((l) => l.match(/Z([\d.]+)/)![1]))]
+    expect(zs).toEqual(['0.200', '0.400', '0.600', '0.800', '10'])
+  })
+
+  it('keeps the perimeters-lines-raster order on the shifted coupon layers', () => {
+    const chunks = chunksAfterPause()
+    expect(chunks).toHaveLength(2)
+    for (const chunk of chunks) {
+      const deretracts = chunk.flatMap((l, i) => (/^G1 E[\d.]/.test(l) ? [i] : []))
+      const perimeterStart = deretracts[0]
+      const linesStart = chunk.findIndex((l, i) => i > perimeterStart && /^G1 E-/.test(l))
+      const rasterStart = deretracts.find((i) => i > linesStart)!
+      expect(perimeterStart).toBeGreaterThanOrEqual(0)
+      expect(linesStart).toBeGreaterThan(perimeterStart)
+      expect(rasterStart).toBeGreaterThan(linesStart)
+      for (const line of allLines) {
+        const coords = cornerMoveStr(line).split(' E')[0]
+        const idx = chunk.findIndex((l) => l.startsWith(coords))
+        expect(idx).toBeGreaterThan(linesStart)
+        expect(idx).toBeLessThan(rasterStart)
+      }
+    }
+  })
+
+  it('keeps the fan off on the base and pedestal and at full for the measured lines only', () => {
+    expect(lines.slice(0, pauseIndex)).not.toContain('M106 S255')
+    const [pedestal, measured] = chunksAfterPause()
+    expect(pedestal).not.toContain('M106 S255')
+    const on = measured.indexOf('M106 S255')
+    const off = measured.indexOf('M107')
+    expect(on).toBeGreaterThanOrEqual(0)
+    expect(off).toBeGreaterThan(on)
+  })
+
+  it('keeps every coordinate on the bed and inside the coupon footprint', () => {
+    const moves = [...report.gcode.matchAll(/^G1 X(-?[\d.]+) Y(-?[\d.]+) E[\d.]/gm)]
+    expect(moves.length).toBeGreaterThan(0)
+    for (const m of moves) {
+      expect(Number(m[1])).toBeGreaterThanOrEqual(ox - 0.001)
+      expect(Number(m[1])).toBeLessThanOrEqual(ox + g.couponWidthMm + 0.001)
+      expect(Number(m[2])).toBeGreaterThanOrEqual(oy - 0.001)
+      expect(Number(m[2])).toBeLessThanOrEqual(oy + g.couponHeightMm + 0.001)
+    }
+  })
+
+  it('reports pause gcode placeholders only with a contrast base', () => {
+    const weird: PrinterProfile = { ...profile, pauseGcode: 'M600 S[not_a_real_variable]' }
+    const withBase = generateIsGcodeWithReport(weird, filament, baseSpec)
+    expect(withBase.unknownVariables).toContain('not_a_real_variable')
+    const plain = generateIsGcodeWithReport(weird, filament, spec)
+    expect(plain.unknownVariables).not.toContain('not_a_real_variable')
+  })
+})
+
 describe('bed fitting', () => {
   it('drops a 300 mm/s tier with a note when the coupon overflows a 120 mm bed', () => {
     const small: PrinterProfile = { ...profile, bedWidthMm: 120, bedDepthMm: 120 }
@@ -477,6 +634,12 @@ describe('validation and reporting', () => {
     const cold: PrinterProfile = { ...profile, startGcode: 'G28' }
     const r = generateIsGcodeWithReport(cold, filament, spec)
     expect(r.warnings.some((w) => w.includes('sets no temperatures'))).toBe(true)
+  })
+
+  it('matches the same generation with placement and contrastBase set to their defaults', () => {
+    const explicit = { ...spec, placement: 'center' as const, contrastBase: false }
+    const r = generateIsGcodeWithReport(profile, filament, explicit)
+    expect(r.gcode).toBe(generateIsGcodeWithReport(profile, filament, spec).gcode)
   })
 
   it('uses the profile acceleration without an upper cap', () => {

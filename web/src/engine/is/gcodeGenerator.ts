@@ -1,6 +1,7 @@
 import type { FilamentProfile, PrinterProfile } from '../gcode/profileTypes'
 import { couponOrigin, EDGE_MARGIN_MM, prepareProfile, setupPreamble } from '../gcode/couponShell'
 import {
+  BASE_LAYERS,
   basePerimeters,
   type Box,
   type Emitter,
@@ -12,7 +13,9 @@ import {
   NOMINAL_WIDTH_FACTOR,
   PEDESTAL_LAYERS,
   PEDESTAL_WIDTH_FACTOR,
+  PERIMETER_LOOPS,
   RASTER_SPEED_FACTOR,
+  rasterBase,
   retract,
   travel,
 } from '../gcode/emitter'
@@ -44,12 +47,12 @@ export function generateIsGcodeWithReport(
   validateIsSpec(spec)
   const { spec: fitted, notes } = fitSpecToBed(spec, profile)
 
-  // Single color: the pause G-code is never emitted, so its placeholders are not reported.
+  // The pause G-code is only emitted (and its placeholders only reported) with a contrast base.
   const {
     profile: substituted,
     unknownVariables,
     warnings,
-  } = prepareProfile(profile, filament, { includePause: false })
+  } = prepareProfile(profile, filament, { includePause: spec.contrastBase })
   warnings.push(...notes)
   warnings.push(...rampWarnings(fitted))
 
@@ -186,9 +189,42 @@ function emitIsGcode(profile: PrinterProfile, filament: FilamentProfile, spec: I
   // extrusion so the measured corners carry the raw machine response.
   L.push(...disableShapingCommands(profile))
 
+  // Contrasting-color base: solid layers over the full coupon rectangle, band and window
+  // alike (only the fiducial holes stay open), then a filament change pause. The base
+  // becomes the scan background behind the test lines, so the silhouette read gains
+  // contrast: the gaps between lines show the base color instead of whatever backing sits
+  // behind the part. Every coupon layer above shifts up by the base thickness; the scan
+  // face (the top) is unchanged.
+  const zOffsetMm = spec.contrastBase ? BASE_LAYERS * profile.layerHeightMm : 0
+  if (spec.contrastBase) {
+    const infillInset = PERIMETER_LOOPS * nominal
+    const baseRasterHoles = holes.map((h) => ({
+      x0: h.x0 - infillInset,
+      y0: h.y0 - infillInset,
+      x1: h.x1 + infillInset,
+      y1: h.y1 + infillInset,
+    }))
+    for (let layer = 0; layer < BASE_LAYERS; layer++) {
+      const z = profile.layerHeightMm * (layer + 1)
+      L.push(`G1 Z${z.toFixed(3)} F600`)
+      basePerimeters(e, profile, filament, nominal, ox, oy, g.couponWidthMm, g.couponHeightMm,
+        holes)
+      rasterBase(e, profile, filament, nominal, ox + infillInset, oy + infillInset,
+        g.couponWidthMm - 2 * infillInset, g.couponHeightMm - 2 * infillInset,
+        layer % 2 === 0, baseRasterHoles)
+    }
+    // Filament change to the contrasting color.
+    retract(e, profile, 1)
+    L.push(...profile.pauseGcode.split('\n'))
+    // Printers whose PAUSE/M600 macro already retracts may see a small blob at the band
+    // start; set retractMm to 0 in the profile if that happens.
+    L.push('; if your pause macro already retracts, set retractMm to 0 in the profile')
+    retract(e, profile, -1)
+  }
+
   const totalLayers = PEDESTAL_LAYERS + IS_MEASURED_LAYERS
   for (let layer = 0; layer < totalLayers; layer++) {
-    const z = profile.layerHeightMm * (layer + 1)
+    const z = profile.layerHeightMm * (layer + 1) + zOffsetMm
     // Retract before the Z push; the travel to the band perimeters runs retracted.
     retract(e, profile, 1)
     L.push(`G1 Z${z.toFixed(3)} F600`)
@@ -220,14 +256,17 @@ function emitIsGcode(profile: PrinterProfile, filament: FilamentProfile, spec: I
     // measured segment is commanded at the tier speed.
     // The single beads over the open window are bridges; standard bridge practice is
     // maximum part cooling, fixed and identical across tiers so cooling never varies
-    // between test lines. The pedestal layer is a first layer on the bed, so it prints
-    // with the fan off, per standard first-layer practice.
+    // between test lines. The pedestal layer prints with the fan off, per standard
+    // first-layer practice: on the bed it IS the first layer, and on a contrast base it
+    // still bonds best without cooling.
     if (!pedestal) L.push('M106 S255')
     for (const group of g.groups) {
       for (const line of group.lines) {
         // The pedestal layer only needs to stick: its lines are capped to the same speed the
         // band fill uses on that layer, because a single first-layer bead at the fast tiers
-        // would be dragged off the bed. The measured layers run at the full tier speed.
+        // would be dragged off the bed. On a contrast base the pedestal bonds to plastic
+        // instead of the bed, which is easier, but the cap stays as a conservative choice.
+        // The measured layers run at the full tier speed.
         const speed = pedestal
           ? Math.min(line.speedMmS, profile.travelSpeedMmS * RASTER_SPEED_FACTOR)
           : line.speedMmS
