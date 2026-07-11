@@ -51,13 +51,6 @@ const cornerSpeed = ref<number | null>(specDefaults.value.cornerSpeedMmS)
 const linesPerSpeed = ref<number | null>(specDefaults.value.linesPerSpeed)
 const measuredLine = ref<number | null>(specDefaults.value.measuredLineMm)
 const linePitch = ref<number | null>(specDefaults.value.linePitchMm)
-type AxisChoice = 'both' | 'x' | 'y'
-const axisChoice = ref<AxisChoice>('both')
-const axisItems = [
-  { title: 'X and Y', value: 'both' },
-  { title: 'X only', value: 'x' },
-  { title: 'Y only', value: 'y' },
-]
 // The placement and contrasting-base spec fields are driven by two scanning choices:
 // where the scan happens (removed part vs the whole build plate on the scanner, the
 // latter for filaments that will not come off, e.g. TPU or PETG), and, for a removed
@@ -99,7 +92,6 @@ watch(
     linesPerSpeed.value = specDefaults.value.linesPerSpeed
     measuredLine.value = specDefaults.value.measuredLineMm
     linePitch.value = specDefaults.value.linePitchMm
-    axisChoice.value = 'both'
     scanPlace.value = 'part'
     partColors.value = 'single'
   },
@@ -113,7 +105,7 @@ const spec = computed<IsTestSpec>(() => {
     linesPerSpeed: linesPerSpeed.value ?? specDefaults.value.linesPerSpeed,
     measuredLineMm: measuredLine.value ?? specDefaults.value.measuredLineMm,
     linePitchMm: linePitch.value ?? specDefaults.value.linePitchMm,
-    axes: (axisChoice.value === 'both' ? ['x', 'y'] : [axisChoice.value]) as IsAxis[],
+    axes: ['x', 'y'] as IsAxis[],
     placement: (scanPlace.value === 'plate' ? 'front' : 'center') as IsTestSpec['placement'],
     contrastBase: scanPlace.value === 'part' && partColors.value === 'base',
   }
@@ -431,19 +423,6 @@ async function analyze(): Promise<void> {
           :text="highFlowText"
         />
         <p v-if="accelNote" class="tip mb-0">{{ accelNote }}</p>
-      </div>
-      <div class="field-group mt-1">
-        <span class="group-label">Axes</span>
-        <div class="fields">
-          <v-select
-            v-model="axisChoice"
-            :items="axisItems"
-            label="Axes to test"
-            density="comfortable"
-            hide-details
-            data-testid="is-axes"
-          />
-        </div>
       </div>
       <div class="field-group mt-1">
         <span class="group-label">Scanning plan</span>
