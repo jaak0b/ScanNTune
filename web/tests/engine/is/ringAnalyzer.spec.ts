@@ -4,14 +4,15 @@ import {
   analyzeTracedLine,
   gaussianTrend,
   poolAxisFits,
-  ringModel,
 } from '../../../src/engine/is/ringAnalyzer'
 import type { LineFit, RingModelParams } from '../../../src/engine/is/ringAnalyzer'
 import type { TracedLine } from '../../../src/engine/is/lineTracer'
 
-// Unit-level validation of the ring fitting on synthetic 1-D traces (no imaging): the model
-// generator here is the module's own ringModel, so these tests pin the estimator (detrend,
-// periodogram seed, Levenberg-Marquardt refinement) and the refusal gates in isolation. The
+// Unit-level validation of the ring fitting on synthetic 1-D traces (no imaging): the
+// generator synthesizes the PHYSICAL trace (forced corner-overshoot lobe, free damped ring,
+// offset, optionally drift), deliberately richer than the analyzer's fit model, so these
+// tests pin the estimator (detrend, transient exclusion, periodogram seed, variable
+// projection, Levenberg-Marquardt polish) and the refusal gates in isolation. The
 // image-level ground-truth recovery lives in isAnalyzer.spec.ts.
 
 function rng(seed: number): () => number {
@@ -30,7 +31,31 @@ function gauss(rand: () => number): number {
   return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v)
 }
 
-function makeTrace(params: RingModelParams, noiseMm: number, seed = 42): TracedLine {
+interface TruthParams {
+  lobeAmpMm: number
+  lobeTauS: number
+  ringAmpMm: number
+  frequencyHz: number
+  dampingRatio: number
+  phaseRad: number
+  offsetMm: number
+  /** Slow drift across the record, mm per second (scanner transport artifact). */
+  driftMmPerS?: number
+}
+
+/** The physical trace: forced overshoot lobe + free damped ring + offset + drift. */
+function truthModel(p: TruthParams, t: number): number {
+  const omega = 2 * Math.PI * p.frequencyHz
+  const damped = omega * Math.sqrt(Math.max(0, 1 - p.dampingRatio * p.dampingRatio))
+  return (
+    p.lobeAmpMm * Math.exp(-t / Math.max(p.lobeTauS, 1e-6)) +
+    p.ringAmpMm * Math.exp(-omega * p.dampingRatio * t) * Math.cos(damped * t + p.phaseRad) +
+    p.offsetMm +
+    (p.driftMmPerS ?? 0) * t
+  )
+}
+
+function makeTrace(params: TruthParams, noiseMm: number, seed = 42): TracedLine {
   const n = 750
   const dt = 0.2 / n
   const tS = new Float64Array(n)
@@ -38,12 +63,12 @@ function makeTrace(params: RingModelParams, noiseMm: number, seed = 42): TracedL
   const rand = rng(seed)
   for (let i = 0; i < n; i++) {
     tS[i] = i * dt
-    lateralMm[i] = ringModel(params, tS[i]) + (noiseMm > 0 ? gauss(rand) * noiseMm : 0)
+    lateralMm[i] = truthModel(params, tS[i]) + (noiseMm > 0 ? gauss(rand) * noiseMm : 0)
   }
   return { speedMmS: 150, tS, lateralMm, noiseWindowStart: Math.floor(0.75 * n) }
 }
 
-const TRUE_PARAMS: RingModelParams = {
+const TRUE_PARAMS: TruthParams = {
   lobeAmpMm: 0.08,
   lobeTauS: 0.008,
   ringAmpMm: 0.25,
@@ -79,6 +104,22 @@ describe('analyzeTracedLine', () => {
     expect(fit.refusalReason).toContain('below the detection threshold')
   })
 
+  it('recovers the frequency under a slow drift the record-length filter cannot remove', () => {
+    // Regression for the real-scan failure of 2026-07-11: a ~0.1 mm near-linear drift across
+    // the 0.2 s record (scanner transport artifact) three times the ring amplitude, plus a
+    // large forced overshoot. The background line and the transient exclusion must keep the
+    // fit on the ring.
+    const fit = analyzeTracedLine(
+      makeTrace(
+        { ...TRUE_PARAMS, frequencyHz: 52, ringAmpMm: 0.03, lobeAmpMm: 0.1, driftMmPerS: 0.5 },
+        0.003,
+      ),
+    )
+    expect(fit.accepted).toBe(true)
+    expect(Math.abs(fit.params!.frequencyHz - 52)).toBeLessThan(1)
+    expect(fit.params!.dampingRatio).toBeLessThan(0.15)
+  })
+
   it('refuses a fit that lands at the frequency search bound', () => {
     const fit = analyzeTracedLine(makeTrace({ ...TRUE_PARAMS, frequencyHz: 152 }, 0.002))
     expect(fit.accepted).toBe(false)
@@ -108,10 +149,18 @@ describe('gaussianTrend', () => {
 })
 
 describe('poolAxisFits', () => {
+  const goodParams = (f: number): RingModelParams => ({
+    backgroundMm: 0,
+    backgroundSlopeMmPerS: 0,
+    ringAmpMm: 0.25,
+    frequencyHz: f,
+    dampingRatio: 0.05,
+    phaseRad: 0.4,
+  })
   const goodFit = (f: number, se = 0.05): LineFit => ({
     accepted: true,
     refusalReason: null,
-    params: { ...TRUE_PARAMS, frequencyHz: f },
+    params: goodParams(f),
     r2: 0.95,
     noiseRmsMm: 0.002,
     frequencySeHz: se,

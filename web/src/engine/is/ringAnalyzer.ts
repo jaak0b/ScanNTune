@@ -5,29 +5,38 @@ import type { TracedLine } from './lineTracer'
 // estimate, with refusal gates at every step. The stages, each an established method:
 //
 // 1. Detrend: a Gaussian regression filter (ISO 16610-21 profile filtering), the standard
-//    surface-metrology separation of waviness from the signal band. The cutoff is placed a
-//    factor 3 below the lowest search frequency, where the filter's Gaussian transmission
-//    leaves the ring band untouched (transmission of the trend at 3x the cutoff is
-//    0.5^9 ~ 0.2%) while absorbing scanner transport waviness and straightness drift.
-// 2. Frequency seed: maximization of the periodogram evaluated on a dense frequency grid
+//    surface-metrology separation of waviness from the signal band, as high-frequency
+//    conditioning. Drift slower than the record length passes this filter almost unchanged,
+//    which is why the model below carries its own first-order polynomial background term
+//    (standard background modeling in nonlinear regression) instead of a stronger filter,
+//    whose transmission skirt would reach into the ring band and bias the estimate.
+// 2. Forced-transient exclusion: the corner produces a large FORCED overshoot (the command
+//    response), roughly three times the free-ring amplitude and not described by the free
+//    decay whose frequency and damping are wanted. The fit window starts at the first zero
+//    crossing after the overshoot peak, where the free ringdown begins; only the free
+//    response is fit.
+// 3. Frequency seed: maximization of the periodogram evaluated on a dense frequency grid
 //    (Rife & Boorstyn 1974, the maximum-likelihood frequency estimator for a sinusoid in
-//    white Gaussian noise), with the direct DTFT sums handling the slightly non-uniform
-//    sample times inside the acceleration ramp.
-// 3. Refinement: Levenberg-Marquardt nonlinear least squares (Levenberg 1944, Marquardt
-//    1963; damped Gauss-Newton with multiplicative lambda control as in Madsen, Nielsen &
-//    Tingleff, "Methods for Non-Linear Least Squares Problems") over all seven model
-//    parameters, with a forward-difference Jacobian and ml-matrix for the linear solves.
-// 4. Uncertainty: the asymptotic covariance of the nonlinear least-squares estimate,
+//    white Gaussian noise), computed on the trimmed, linearly detrended window, with the
+//    direct DTFT sums handling the slightly non-uniform sample times.
+// 4. Fit: variable projection (Golub & Pereyra 1973). With the ring written in quadrature
+//    form its amplitude/phase and the background line are LINEAR parameters, solved exactly
+//    per (f, zeta) by least squares; only (f, zeta) are searched, on a grid around the seed
+//    (+/-20%, so the fit stays in the periodogram's basin instead of side lobes), then
+//    polished by Levenberg-Marquardt over all six parameters (Levenberg 1944, Marquardt
+//    1963; multiplicative lambda control as in Madsen, Nielsen & Tingleff, "Methods for
+//    Non-Linear Least Squares Problems").
+// 5. Uncertainty: the asymptotic covariance of the nonlinear least-squares estimate,
 //    sigma^2 (J^T J)^-1 (Seber & Wild, "Nonlinear Regression", 1989), which for Gaussian
 //    noise attains the Cramer-Rao bound of the damped-sinusoid model (Yao & Pandit, IEEE
 //    Trans. Signal Processing 43(11), 1995).
 //
-// Model: lateral(t) = A * exp(-t / tauL)                                (corner settle lobe)
-//                   + B * exp(-2 pi f zeta t) * cos(2 pi f sqrt(1 - zeta^2) t + phi)
-//                   + C
-// with t the time since the corner. The damped cosine is the free response of the
-// second-order underdamped machine axis; the single-exponential lobe absorbs the corner
-// overshoot settle that is not part of the resonance.
+// Model, t measured from the fit-window start:
+//   lateral(t) = c0 + c1 * t                                  (background line: drift)
+//              + exp(-2 pi f zeta t) * (a * cos(2 pi f sqrt(1 - zeta^2) t)
+//                                     + b * sin(2 pi f sqrt(1 - zeta^2) t))
+// The damped quadrature pair is the free response of the second-order underdamped machine
+// axis; reported amplitude is sqrt(a^2 + b^2) and phase atan2(-b, a).
 
 export const F_MIN_HZ = 20
 export const F_MAX_HZ = 150
@@ -75,13 +84,14 @@ const MAD_TO_SIGMA = 1.4826
 const MEDIAN_EFFICIENCY = 1.2533
 
 export interface RingModelParams {
-  lobeAmpMm: number
-  lobeTauS: number
+  /** Background line at the fit-window start, mm. */
+  backgroundMm: number
+  /** Background line slope, mm per second. */
+  backgroundSlopeMmPerS: number
   ringAmpMm: number
   frequencyHz: number
   dampingRatio: number
   phaseRad: number
-  offsetMm: number
 }
 
 export interface LineFit {
@@ -105,14 +115,14 @@ export interface AxisPool {
   linesUsed: number
 }
 
-/** The ringing model evaluated at time t (seconds since the corner). */
+/** The ringing model evaluated at time t (seconds since the fit-window start). */
 export function ringModel(p: RingModelParams, t: number): number {
   const omega = 2 * Math.PI * p.frequencyHz
   const damped = omega * Math.sqrt(Math.max(0, 1 - p.dampingRatio * p.dampingRatio))
   return (
-    p.lobeAmpMm * Math.exp(-t / Math.max(p.lobeTauS, 1e-6)) +
-    p.ringAmpMm * Math.exp(-omega * p.dampingRatio * t) * Math.cos(damped * t + p.phaseRad) +
-    p.offsetMm
+    p.backgroundMm +
+    p.backgroundSlopeMmPerS * t +
+    p.ringAmpMm * Math.exp(-omega * p.dampingRatio * t) * Math.cos(damped * t + p.phaseRad)
   )
 }
 
@@ -171,25 +181,83 @@ function seedFrequency(tS: Float64Array, y: Float64Array): { fHz: number; phase:
   }
 }
 
-const PARAM_COUNT = 7
+// Internal quadrature parameter vector: [c0, c1, a, b, f, zeta]. The first four are the
+// linear parameters of the variable projection; f sits at FREQ_INDEX for the covariance.
+const PARAM_COUNT = 6
+const FREQ_INDEX = 4
+
+function quadratureModel(v: number[], t: number): number {
+  const omega = 2 * Math.PI * v[4]
+  const zeta = v[5]
+  const damped = omega * Math.sqrt(Math.max(0, 1 - zeta * zeta))
+  const env = Math.exp(-omega * zeta * t)
+  return v[0] + v[1] * t + env * (v[2] * Math.cos(damped * t) + v[3] * Math.sin(damped * t))
+}
 
 function vectorToParams(v: number[]): RingModelParams {
   return {
-    lobeAmpMm: v[0],
-    lobeTauS: v[1],
-    ringAmpMm: v[2],
-    frequencyHz: v[3],
-    dampingRatio: v[4],
-    phaseRad: v[5],
-    offsetMm: v[6],
+    backgroundMm: v[0],
+    backgroundSlopeMmPerS: v[1],
+    ringAmpMm: Math.hypot(v[2], v[3]),
+    frequencyHz: v[4],
+    dampingRatio: v[5],
+    phaseRad: Math.atan2(-v[3], v[2]),
   }
 }
 
 function residuals(v: number[], tS: Float64Array, y: Float64Array): Float64Array {
-  const p = vectorToParams(v)
   const r = new Float64Array(y.length)
-  for (let i = 0; i < y.length; i++) r[i] = y[i] - ringModel(p, tS[i])
+  for (let i = 0; i < y.length; i++) r[i] = y[i] - quadratureModel(v, tS[i])
   return r
+}
+
+/**
+ * The variable projection inner step (Golub & Pereyra 1973): for fixed (f, zeta) the model is
+ * linear in [c0, c1, a, b], solved exactly by least squares on the normal equations. Returns
+ * the full parameter vector and its residual sum of squares.
+ */
+function varproSolve(
+  fHz: number,
+  zeta: number,
+  tS: Float64Array,
+  y: Float64Array,
+): { v: number[]; ssr: number } | null {
+  const n = y.length
+  const omega = 2 * Math.PI * fHz
+  const damped = omega * Math.sqrt(Math.max(0, 1 - zeta * zeta))
+  const basis = new Array<Float64Array>(4)
+  for (let j = 0; j < 4; j++) basis[j] = new Float64Array(n)
+  for (let i = 0; i < n; i++) {
+    const t = tS[i]
+    const env = Math.exp(-omega * zeta * t)
+    basis[0][i] = 1
+    basis[1][i] = t
+    basis[2][i] = env * Math.cos(damped * t)
+    basis[3][i] = env * Math.sin(damped * t)
+  }
+  const ata = Matrix.zeros(4, 4)
+  const atb = Matrix.zeros(4, 1)
+  for (let j = 0; j < 4; j++) {
+    for (let k = j; k < 4; k++) {
+      let s = 0
+      for (let i = 0; i < n; i++) s += basis[j][i] * basis[k][i]
+      ata.set(j, k, s)
+      ata.set(k, j, s)
+    }
+    let s = 0
+    for (let i = 0; i < n; i++) s += basis[j][i] * y[i]
+    atb.set(j, 0, s)
+  }
+  let lin: number[]
+  try {
+    lin = solve(ata, atb).to1DArray()
+  } catch {
+    // A singular basis (e.g. the envelope decayed to zero over the window) has no unique
+    // linear solution; the caller skips this grid point.
+    return null
+  }
+  const v = [lin[0], lin[1], lin[2], lin[3], fHz, zeta]
+  return { v, ssr: ssr(residuals(v, tS, y)) }
 }
 
 function ssr(r: Float64Array): number {
@@ -285,43 +353,132 @@ function medianOf(values: number[]): number {
   return n % 2 === 1 ? sorted[(n - 1) / 2] : (sorted[n / 2 - 1] + sorted[n / 2]) / 2
 }
 
-/** Analyzes one traced line: detrend, seed, LM fit, and the per-line refusal gates. */
+/** Damping grid of the variable projection search (log-spaced over the physical range). */
+const ZETA_GRID = [0.001, 0.002, 0.005, 0.01, 0.02, 0.035, 0.05, 0.075, 0.1, 0.15, 0.22, 0.3, 0.4]
+/** Half-width of the frequency search around the periodogram seed, as a fraction. */
+const SEED_BAND_REL = 0.2
+
+/**
+ * Fit-window start: the free ringdown begins at the first zero crossing after the forced
+ * corner-overshoot peak (the largest excursion of the early trace). Returns null when the
+ * trace never crosses zero in its first half, i.e. there is no free response to fit.
+ */
+function freeResponseStart(y: Float64Array): number | null {
+  const n = y.length
+  const peakSearchEnd = Math.floor(n / 4)
+  let peak = 0
+  let peakAbs = -1
+  for (let i = 0; i < peakSearchEnd; i++) {
+    const a = Math.abs(y[i])
+    if (a > peakAbs) {
+      peakAbs = a
+      peak = i
+    }
+  }
+  for (let i = peak + 1; i < Math.floor(n / 2); i++) {
+    if (y[i] * y[peak] < 0) return i
+  }
+  return null
+}
+
+/** Least-squares line through (t, y), used only to condition the periodogram seed input. */
+function linearDetrend(tS: Float64Array, y: Float64Array): Float64Array {
+  const n = y.length
+  let st = 0
+  let sy = 0
+  let stt = 0
+  let sty = 0
+  for (let i = 0; i < n; i++) {
+    st += tS[i]
+    sy += y[i]
+    stt += tS[i] * tS[i]
+    sty += tS[i] * y[i]
+  }
+  const det = n * stt - st * st
+  const slope = det !== 0 ? (n * sty - st * sy) / det : 0
+  const icept = (sy - slope * st) / n
+  const out = new Float64Array(n)
+  for (let i = 0; i < n; i++) out[i] = y[i] - icept - slope * tS[i]
+  return out
+}
+
+/**
+ * Analyzes one traced line: Gaussian-filter detrend, forced-transient exclusion, periodogram
+ * seed, variable projection grid, Levenberg-Marquardt polish, and the per-line refusal gates.
+ */
 export function analyzeTracedLine(line: TracedLine): LineFit {
   const tS = line.tS
   const n = tS.length
 
   // Detrend with the Gaussian regression filter; the cutoff period sits a factor 3 below the
-  // lowest search frequency so the trend cannot eat the ring band.
+  // lowest search frequency so the trend cannot eat the ring band. Drift slower than the
+  // record survives this filter and is carried by the model's background line instead.
   const cutoffS = 3 / F_MIN_HZ
   const trend = gaussianTrend(tS, line.lateralMm, cutoffS)
   const y = new Float64Array(n)
   for (let i = 0; i < n; i++) y[i] = line.lateralMm[i] - trend[i]
 
-  const noiseRmsMm = rms(y, line.noiseWindowStart, n)
-
-  // Seeds: periodogram frequency/phase/amplitude, nominal damping, small lobe.
-  const seed = seedFrequency(tS, y)
-  const v0 = [
-    y[0] - seed.amp * Math.cos(seed.phase), // lobe amplitude
-    0.02, // lobe time constant, s
-    seed.amp,
-    seed.fHz,
-    0.05,
-    seed.phase,
+  // Noise floor from the trace tail (the ring has decayed there), with the tail's own
+  // least-squares line removed first: residual drift the Gaussian filter passes would
+  // otherwise masquerade as noise and inflate the detection threshold.
+  const noiseRmsMm = rms(
+    linearDetrend(tS.subarray(line.noiseWindowStart), y.subarray(line.noiseWindowStart)),
     0,
-  ]
+    n - line.noiseWindowStart,
+  )
 
-  const fit = levenbergMarquardt(v0, tS, y)
-  const params = vectorToParams(fit.v)
-  // A cosine fit is sign-ambiguous (B, phi) <-> (-B, phi + pi); normalize to positive amplitude.
-  if (params.ringAmpMm < 0) {
-    params.ringAmpMm = -params.ringAmpMm
-    params.phaseRad += Math.PI
+  const noFit = (reason: string): LineFit => ({
+    accepted: false,
+    refusalReason: reason,
+    params: null,
+    r2: 0,
+    noiseRmsMm,
+    frequencySeHz: null,
+  })
+
+  // Forced-transient exclusion: fit only the free ringdown after the corner-overshoot peak.
+  const start = freeResponseStart(y)
+  if (start === null) {
+    return noFit(
+      'The trace never settles from the corner transient into a free ringdown, so there is ' +
+        'no resonance to fit. The trace may be corrupted by print defects or scan artifacts.',
+    )
+  }
+  const wN = n - start
+  const t0 = tS[start]
+  const tw = new Float64Array(wN)
+  const yw = new Float64Array(wN)
+  for (let i = 0; i < wN; i++) {
+    tw[i] = tS[start + i] - t0
+    yw[i] = y[start + i]
   }
 
+  // Periodogram seed on the trimmed, linearly detrended window; the drift would otherwise
+  // dominate the spectrum and pull the seed to the low band edge.
+  const seed = seedFrequency(tw, linearDetrend(tw, yw))
+  const fLo = Math.max(F_MIN_HZ, seed.fHz * (1 - SEED_BAND_REL))
+  const fHi = Math.min(F_MAX_HZ, seed.fHz * (1 + SEED_BAND_REL))
+
+  // Variable projection grid over (f, zeta) inside the seed's basin, then LM polish.
+  let best: { v: number[]; ssr: number } | null = null
+  for (let f = fLo; f <= fHi; f += PERIODOGRAM_GRID_HZ) {
+    for (const zeta of ZETA_GRID) {
+      const trial = varproSolve(f, zeta, tw, yw)
+      if (trial && (best === null || trial.ssr < best.ssr)) best = trial
+    }
+  }
+  if (best === null) {
+    return noFit(
+      'The ringing model could not be fit to the traced line. The trace may be corrupted by ' +
+        'print defects or scan artifacts.',
+    )
+  }
+  const fit = levenbergMarquardt(best.v, tw, yw)
+  const params = vectorToParams(fit.v)
+
   let sst = 0
-  const mean = Array.from(y).reduce((a, b) => a + b, 0) / n
-  for (let i = 0; i < n; i++) sst += (y[i] - mean) * (y[i] - mean)
+  const mean = Array.from(yw).reduce((a, b) => a + b, 0) / wN
+  for (let i = 0; i < wN; i++) sst += (yw[i] - mean) * (yw[i] - mean)
   const r2 = sst > 0 ? 1 - fit.ssr / sst : 0
 
   const refuse = (reason: string): LineFit => ({
@@ -356,6 +513,17 @@ export function analyzeTracedLine(line: TracedLine): LineFit {
         'so it cannot be trusted. The true resonance likely lies outside the measurable range.',
     )
   }
+  // A polish that walks to the edge of the seed's search band contradicts the spectrum: the
+  // periodogram and the least-squares fit disagree on where the ring is.
+  if (
+    (fLo > F_MIN_HZ && params.frequencyHz <= fLo + BOUND_MARGIN_HZ) ||
+    (fHi < F_MAX_HZ && params.frequencyHz >= fHi - BOUND_MARGIN_HZ)
+  ) {
+    return refuse(
+      'The model fit and the spectrum of the trace disagree on the ringing frequency, so the ' +
+        'fit cannot be trusted. The trace may be corrupted by print defects or scan artifacts.',
+    )
+  }
   if (params.dampingRatio <= ZETA_MIN || params.dampingRatio >= ZETA_MAX) {
     return refuse(
       'The fitted damping ratio sits at the edge of the physically plausible range, so the fit cannot be trusted.',
@@ -365,12 +533,12 @@ export function analyzeTracedLine(line: TracedLine): LineFit {
   // Cramer-Rao standard error of the frequency from the asymptotic NLS covariance
   // sigma^2 (J^T J)^-1 at the solution.
   let frequencySeHz: number | null = null
-  const dof = n - PARAM_COUNT
+  const dof = wN - PARAM_COUNT
   if (dof > 0) {
     const sigma2 = fit.ssr / dof
     try {
       const cov = inverse(fit.jacobian.transpose().mmul(fit.jacobian)).mul(sigma2)
-      const varF = cov.get(3, 3)
+      const varF = cov.get(FREQ_INDEX, FREQ_INDEX)
       if (varF > 0 && Number.isFinite(varF)) frequencySeHz = Math.sqrt(varF)
     } catch {
       // A singular information matrix leaves the CRB undefined; the pooled MAD-based
