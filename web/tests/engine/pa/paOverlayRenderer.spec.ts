@@ -28,6 +28,7 @@ describe('renderPaOverlayMat', () => {
       lines,
       bestLineIndex: 5,
       bestPa: paValueForLine(spec, 5),
+      measuredPxPerMm: 24,
       flipped: false,
       rotationQuarterTurns: 0,
     }

@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, ref, shallowRef } from 'vue'
 import { usePrinterProfiles } from '../stores/usePrinterProfiles'
 import { readBytes } from '../util/preview'
+import { resolutionRowValue } from '../util/scanResolution'
 import { analyzePaScan } from '../workerClient'
 import type { PaProcessing } from '../workerClient'
 import { generatePaGcodeWithReport } from '../engine/pa/gcodeGenerator'
@@ -217,6 +218,11 @@ const correction = computed(() => {
   const r = result.value
   if (!r || !r.success || r.bestPa === null) return null
   return paCorrection(store.selected?.firmware ?? 'Klipper', r.bestPa)
+})
+// Raw diagnostic: the resolution geometrically measured from the coupon itself.
+const resolutionText = computed(() => {
+  const px = result.value?.measuredPxPerMm
+  return px != null && px > 0 ? resolutionRowValue(px) : null
 })
 
 const edgeShift = computed<{ start: number; end: number } | null>(() => {
@@ -515,6 +521,17 @@ const stCorrection = computed(() => {
             :value="`${linesReadable} / ${analyzedSpec!.lineCount}`"
             testid="pa-lines-readable"
           />
+        </div>
+
+        <div v-if="resolutionText" class="facts mb-3">
+          <v-chip
+            size="small"
+            variant="tonal"
+            prepend-icon="mdi-magnify-scan"
+            data-testid="pa-resolution"
+          >
+            resolution {{ resolutionText }}
+          </v-chip>
         </div>
 
         <div v-if="edgeShift" class="warn-box mb-3" data-testid="pa-edge-warning">

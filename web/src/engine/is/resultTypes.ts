@@ -67,6 +67,8 @@ export interface IsScanInfo {
   orientationSolved: boolean
   flipped: boolean
   rotationQuarterTurns: number
+  /** Geometrically measured scan scale from the solved affine; null when no affine solved. */
+  measuredPxPerMm: number | null
 }
 
 /**

@@ -307,8 +307,39 @@ describe('analyzeIsCoupon render recovery', () => {
       expect(r.failureReason).toContain('Scan 1')
       expect(r.failureReason).toContain('dpi')
       expect(r.failureReason).toContain('150')
-      expect(r.scans).toHaveLength(1)
+      // The resolution set check runs after both scans align, so both carry diagnostics.
+      expect(r.scans).toHaveLength(2)
       expect(r.axes).toEqual([])
+    },
+    240000,
+  )
+
+  it(
+    'refuses a pair whose second scan mismatches the expected calibration resolution',
+    async () => {
+      const truth = { y: { frequencyHz: 75, dampingRatio: 0.05, ringAmpMm: 0.25 } }
+      const cv = await getCv()
+      const a = rgbaToBgrMat(
+        cv,
+        renderIsScan({ pxPerMm: PX_PER_MM, spec: ySpec, truth, quarterTurns: 0, flipped: true }),
+      )
+      const b = rgbaToBgrMat(
+        cv,
+        renderIsScan({ pxPerMm: PX_PER_MM / 2, spec: ySpec, truth, quarterTurns: 1, flipped: true }),
+      )
+      try {
+        const expectedDpi = Math.round(PX_PER_MM * 25.4)
+        const r = analyzeIsCoupon(cv, a, b, ySpec, PX_PER_MM, expectedDpi)
+        expect(r.aligned).toBe(false)
+        expect(r.failureReason).toContain('Scan 2')
+        expect(r.failureReason).toContain('expected resolution')
+        expect(r.scans).toHaveLength(2)
+        expect(r.scans[1].measuredPxPerMm).not.toBeNull()
+        expect(r.axes).toEqual([])
+      } finally {
+        a.delete()
+        b.delete()
+      }
     },
     240000,
   )

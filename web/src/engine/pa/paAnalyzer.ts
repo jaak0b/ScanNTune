@@ -8,7 +8,7 @@ import { estimateLineContrast, measureLineWidthProfile, MIN_LINE_CONTRAST } from
 import type { WidthSample } from './lineMeasurer'
 import { valueChannel } from '../cvUtils'
 import { median } from '../math'
-import { insufficientResolutionReason } from '../resolutionGate'
+import { evaluateScanSetResolution } from '../resolutionGate'
 
 // Turns an aligned PA coupon scan into a pressure-advance estimate. Each test line is profiled
 // with measureLineWidthProfile and scored by the RMS width deviation inside +/- 2 mm windows
@@ -81,10 +81,11 @@ export function analyzePaCoupon(
   // The local scale along the width-profile direction prices the scan's resolution; a scan too
   // coarse for the sub-pixel width readout is refused before any numbers come out of it.
   const perpPxPerMm = Math.hypot(alignment.b, alignment.d)
-  const resolutionReason = insufficientResolutionReason(perpPxPerMm)
-  if (resolutionReason) {
+  const [resolution] = evaluateScanSetResolution([{ pxPerMm: perpPxPerMm }])
+  if (!resolution.ok) {
     return {
-      ...failure(resolutionReason),
+      ...failure(resolution.reason!),
+      measuredPxPerMm: perpPxPerMm,
       flipped: alignment.flipped,
       rotationQuarterTurns: alignment.rotationQuarterTurns,
     }
@@ -102,6 +103,7 @@ export function analyzePaCoupon(
         ...failure(
           'The test lines are too similar in brightness to the base. Print the lines in a filament that contrasts more with the base.',
         ),
+        measuredPxPerMm: perpPxPerMm,
         flipped: alignment.flipped,
         rotationQuarterTurns: alignment.rotationQuarterTurns,
       }
@@ -133,6 +135,7 @@ export function analyzePaCoupon(
     return {
       ...failure('Too few readable lines were found on the coupon to estimate pressure advance.'),
       lines,
+      measuredPxPerMm: perpPxPerMm,
       flipped: alignment.flipped,
       rotationQuarterTurns: alignment.rotationQuarterTurns,
     }
@@ -163,6 +166,7 @@ export function analyzePaCoupon(
     lines,
     bestLineIndex,
     bestPa,
+    measuredPxPerMm: perpPxPerMm,
     flipped: alignment.flipped,
     rotationQuarterTurns: alignment.rotationQuarterTurns,
   }
@@ -175,6 +179,7 @@ function failure(reason: string): PaResult {
     lines: [],
     bestLineIndex: null,
     bestPa: null,
+    measuredPxPerMm: null,
     flipped: false,
     rotationQuarterTurns: 0,
   }

@@ -4,12 +4,16 @@ import { SkewCouponScan, ScanState } from '../model/skewCouponScan'
 import { ringSeverity } from '../engine/scanDiagnostics'
 import { normalizeAngle } from '../engine/scanCombiner'
 import { xAxisAngleDegrees } from '../engine/types'
+import { resolutionBadge, resolutionRowValue } from '../util/scanResolution'
+import type { ScanResolutionVerdict } from '../util/scanResolution'
 import OverlayCanvas from './OverlayCanvas.vue'
 
 const props = defineProps<{
   scan: SkewCouponScan
   removable?: boolean
   problem?: 'duplicate'
+  /** The scan's resolution verdict within the uploaded set; undefined until measured. */
+  resolution?: ScanResolutionVerdict
 }>()
 const emit = defineEmits<{ (e: 'remove'): void }>()
 
@@ -41,6 +45,10 @@ const rows = computed(() => {
   const planeSev: Sev = s.plane ? 'ok' : aligned ? 'warn' : 'mute'
   const flipValue = s.flipped === null ? 'Unknown' : s.flipped ? 'Mirrored' : 'None'
   const angle = s.result?.orientation ? normalizeAngle(xAxisAngleDegrees(s.result.orientation)) : null
+  const measuredPxPerMm =
+    s.result?.measuredPxPerMmX != null && s.result?.measuredPxPerMmY != null
+      ? Math.sqrt(s.result.measuredPxPerMmX * s.result.measuredPxPerMmY)
+      : null
   return [
     { label: 'Rings', value: `${s.ringsFound} of ${s.ringsExpected}`, sev: ringSev, testid: 'ring-count' },
     { label: 'Plane', value: s.plane ?? 'Not detected', sev: planeSev, testid: undefined },
@@ -51,8 +59,20 @@ const rows = computed(() => {
       testid: 'scan-angle',
     },
     { label: 'Flip', value: flipValue, sev: (s.flipped === null ? 'mute' : 'ok') as Sev, testid: 'scan-flip' },
+    {
+      label: 'Resolution',
+      value: resolutionRowValue(measuredPxPerMm),
+      sev: (measuredPxPerMm === null
+        ? 'mute'
+        : props.resolution && !props.resolution.ok
+          ? 'err'
+          : 'ok') as Sev,
+      testid: 'scan-resolution',
+    },
   ]
 })
+
+const badResolution = computed(() => resolutionBadge(props.resolution))
 
 const pill = computed<{ text: string; sev: Sev } | null>(() => {
   switch (props.scan.state) {
@@ -63,6 +83,7 @@ const pill = computed<{ text: string; sev: Sev } | null>(() => {
     case ScanState.Unlabeled:
       return { text: 'Plane not read', sev: 'warn' }
     case ScanState.Measured:
+      if (badResolution.value) return { text: badResolution.value.text, sev: 'err' }
       if (props.problem === 'duplicate') return { text: 'Nearly same angle', sev: 'warn' }
       return { text: `${props.scan.plane} plane`, sev: 'ok' }
     default:
@@ -77,6 +98,7 @@ const stripe = computed<Sev | ''>(() => pill.value?.sev ?? '')
 // when the fitted grid says a missing hole ran off an image edge.
 const note = computed<string | null>(() => {
   if (props.scan.failureReason) return props.scan.failureReason
+  if (badResolution.value) return badResolution.value.explanation
   if (props.scan.state === ScanState.Unlabeled)
     return (
       'The plane-identifying marks near the origin corner could not be read, so this scan ' +

@@ -9,8 +9,8 @@ import { analyzeTracedLine, poolAxisFits } from './ringAnalyzer'
 import { recommendShapers } from './shaperRecommender'
 import type { IsAxisResult, IsLineOutcome, IsResult, IsScanInfo } from './resultTypes'
 import { valueChannel } from '../cvUtils'
-import { insufficientResolutionReason } from '../resolutionGate'
-import { isUsableReference } from '../scannerCalibration'
+import { evaluateScanSetResolution } from '../resolutionGate'
+import { isUsableReference, isotropicPxPerMm } from '../scannerCalibration'
 import type { ScaleReference } from '../scannerCalibration'
 
 // Top-level input shaper analysis over TWO scans of the same printed coupon: the part scanned
@@ -37,6 +37,7 @@ export function analyzeIsCoupon(
   scanB: Mat,
   spec: IsTestSpec,
   scanReference: ScaleReference,
+  expectedDpi: number | null = null,
   alignmentHolder?: { alignments?: IsAlignment[] },
 ): IsResult {
   if (!scanA || scanA.empty() || !scanB || scanB.empty()) {
@@ -67,20 +68,6 @@ export function analyzeIsCoupon(
         axes: [],
       }
     }
-    // The affine's scale prices this scan's resolution; a scan too coarse for the sub-pixel
-    // line tracing is refused per scan, the same way an unalignable scan is.
-    const resolutionReason = insufficientResolutionReason(
-      Math.hypot(alignment.affine!.a, alignment.affine!.c),
-    )
-    if (resolutionReason) {
-      alignments.push(alignment) // the overlay can still show the located coupon
-      return {
-        aligned: false,
-        failureReason: `Scan ${i + 1}: ${resolutionReason}`,
-        scans: alignments.map(scanInfo),
-        axes: [],
-      }
-    }
     // A face-down scan of the coupon's top face is always mirrored relative to the coupon
     // frame. An unmirrored scan therefore shows the BED side: there the sharp on-glass edge
     // is the slow-printed pedestal bead (which carries no ringing), the measured layer sits
@@ -99,6 +86,27 @@ export function analyzeIsCoupon(
       }
     }
     alignments.push(alignment)
+  }
+
+  // The solved affines' scales price each scan's resolution: both scans are judged together
+  // (against the calibration's expected resolution when known, else against each other), so a
+  // scan too coarse for the sub-pixel line tracing or taken at the wrong resolution setting is
+  // refused per scan, the same way an unalignable scan is.
+  const scales = alignments.map((a) => Math.hypot(a.affine!.a, a.affine!.c))
+  const verdicts = evaluateScanSetResolution(
+    scales.map((pxPerMm) => ({ pxPerMm })),
+    expectedDpi != null && expectedDpi > 0
+      ? { pxPerMm: isotropicPxPerMm(scanReference), dpi: expectedDpi }
+      : null,
+  )
+  const badIndex = verdicts.findIndex((v) => !v.ok)
+  if (badIndex >= 0) {
+    return {
+      aligned: false,
+      failureReason: `Scan ${badIndex + 1}: ${verdicts[badIndex].reason}`,
+      scans: alignments.map(scanInfo),
+      axes: [],
+    }
   }
 
   const axes: IsAxisResult[] = []
@@ -122,6 +130,7 @@ function scanInfo(a: IsAlignment): IsScanInfo {
     orientationSolved: a.orientationSolved,
     flipped: a.flipped,
     rotationQuarterTurns: a.rotationQuarterTurns,
+    measuredPxPerMm: a.affine ? Math.hypot(a.affine.a, a.affine.c) : null,
   }
 }
 

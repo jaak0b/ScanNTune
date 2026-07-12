@@ -6,7 +6,8 @@ import type { BlockMeasurement, EmMeasurement } from './gapMeasurer'
 import { measureEmCoupon } from './gapMeasurer'
 import { valueChannel } from '../cvUtils'
 import { median } from '../math'
-import { insufficientResolutionReason } from '../resolutionGate'
+import { evaluateScanSetResolution } from '../resolutionGate'
+import { isotropicPxPerMm } from '../scannerCalibration'
 import type { ScaleReference } from '../scannerCalibration'
 
 // Top-level EM analysis: aligns the coupon, measures its comb geometry, and estimates the
@@ -46,6 +47,8 @@ export interface EmResult {
   /** Per-gap w estimates kept after rejection (diagnostics/overlay). */
   samples: { row: 0 | 1; blockIndex: number; wMm: number }[]
   blocksMeasured: number
+  /** Geometrically measured scan scale from the solved affine; null before alignment. */
+  measuredPxPerMm: number | null
   flipped: boolean
   rotationQuarterTurns: number
 }
@@ -68,6 +71,7 @@ export function analyzeEmCoupon(
   imageBgr: Mat,
   spec: EmTestSpec,
   scanPxPerMm: ScaleReference,
+  expectedDpi: number | null = null,
   alignmentHolder?: { alignment?: EmAlignment },
   onProgress?: EmProgressCallback,
 ): EmResult {
@@ -84,15 +88,20 @@ export function analyzeEmCoupon(
     )
   }
 
+  const measuredPxPerMm = Math.hypot(alignment.affine.a, alignment.affine.c)
   const fail = (reason: string) =>
-    failure(reason, alignment.flipped, alignment.rotationQuarterTurns)
+    failure(reason, alignment.flipped, alignment.rotationQuarterTurns, measuredPxPerMm)
 
-  // The affine's scale prices the scan's resolution; a scan too coarse for the sub-pixel gap
-  // readout is refused before any numbers come out of it.
-  const resolutionReason = insufficientResolutionReason(
-    Math.hypot(alignment.affine.a, alignment.affine.c),
+  // The affine's scale prices the scan's resolution: a scan too coarse for the sub-pixel gap
+  // readout is refused, and a scan whose measured resolution disagrees with the calibration's
+  // expected one is refused before any wrongly scaled numbers come out of it.
+  const [resolution] = evaluateScanSetResolution(
+    [{ pxPerMm: measuredPxPerMm }],
+    expectedDpi != null && expectedDpi > 0
+      ? { pxPerMm: isotropicPxPerMm(scanPxPerMm), dpi: expectedDpi }
+      : null,
   )
-  if (resolutionReason) return fail(resolutionReason)
+  if (!resolution.ok) return fail(resolution.reason!)
 
   onProgress?.({ stage: 'measure' })
   const gray = valueChannel(cv, imageBgr)
@@ -163,6 +172,7 @@ export function analyzeEmCoupon(
     pitchScale: measurement.pitchScale,
     samples,
     blocksMeasured: measurement.blocks.length,
+    measuredPxPerMm,
     flipped: alignment.flipped,
     rotationQuarterTurns: alignment.rotationQuarterTurns,
   }
@@ -207,7 +217,12 @@ function flankAsymmetry(measurement: EmMeasurement): number | null {
   return median(leftFlankOffsetsMm) + median(rightFlankOffsetsMm)
 }
 
-function failure(reason: string, flipped: boolean, rotationQuarterTurns: number): EmResult {
+function failure(
+  reason: string,
+  flipped: boolean,
+  rotationQuarterTurns: number,
+  measuredPxPerMm: number | null = null,
+): EmResult {
   return {
     success: false,
     failureReason: reason,
@@ -218,6 +233,7 @@ function failure(reason: string, flipped: boolean, rotationQuarterTurns: number)
     pitchScale: null,
     samples: [],
     blocksMeasured: 0,
+    measuredPxPerMm,
     flipped,
     rotationQuarterTurns,
   }

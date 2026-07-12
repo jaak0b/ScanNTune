@@ -2,6 +2,8 @@ import type { AlignedResult, AxisScale, MultiPlaneResult, Plane, PlaneAnalysis, 
 import { planeAxes } from './types'
 import { applyReference } from './couponAnalyzer'
 import { combineScanSet } from './scanCombiner'
+import { evaluateScanSetResolution } from './resolutionGate'
+import { isotropicPxPerMm } from './scannerCalibration'
 import type { ScaleReference } from './scannerCalibration'
 
 // The whole reconciliation, pure TypeScript (no OpenCV): group the aligned per-scan results by plane,
@@ -10,7 +12,11 @@ import type { ScaleReference } from './scannerCalibration'
 // plane with at least two scans per plane; anything else is a caller bug and throws rather than
 // silently dropping scans from the result. A scan set whose angles cannot separate the errors is a
 // normal outcome: it comes back flagged invalid with a user-worded failure reason, never a throw.
-export function reconcileScans(results: AlignedResult[], pxPerMm: ScaleReference | null): MultiPlaneResult {
+export function reconcileScans(
+  results: AlignedResult[],
+  pxPerMm: ScaleReference | null,
+  expectedDpi: number | null = null,
+): MultiPlaneResult {
   const groups = new Map<Plane, AlignedResult[]>()
   for (const r of results) {
     if (!r.plane)
@@ -27,6 +33,21 @@ export function reconcileScans(results: AlignedResult[], pxPerMm: ScaleReference
       throw new Error(
         `The ${plane} plane has ${group.length} scan(s); each plane needs at least two scans at different angles.`,
       )
+  }
+
+  // Every scan's geometrically measured resolution must agree with the expected one (when the
+  // reference carries a known DPI) and with the rest of the set, before any averaging: a scan
+  // taken at a different scanner resolution setting would otherwise silently skew every figure.
+  const verdicts = evaluateScanSetResolution(
+    results.map((r) => ({ pxPerMm: Math.sqrt(r.measuredPxPerMmX * r.measuredPxPerMmY) })),
+    pxPerMm !== null && expectedDpi != null && expectedDpi > 0
+      ? { pxPerMm: isotropicPxPerMm(pxPerMm), dpi: expectedDpi }
+      : null,
+  )
+  const bad = verdicts.find((v) => !v.ok)
+  if (bad) throw new Error(bad.reason!)
+
+  for (const [plane, group] of groups) {
     planeAnalyses.push({ plane, scanSet: combineScanSet(group) })
   }
   return combinePlanes(planeAnalyses)

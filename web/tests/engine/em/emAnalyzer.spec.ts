@@ -199,6 +199,28 @@ describe('analyzeEmCoupon render recovery', () => {
   )
 
   it(
+    'refuses a scan whose measured resolution mismatches the expected calibration resolution',
+    async () => {
+      // Coupon rendered (and priced) at 24 px/mm, but the expected resolution says the scan
+      // should measure twice that: the analyzer must refuse with the mismatch reason instead of
+      // returning wrongly scaled widths.
+      const cv = await getCv()
+      const img = rgbaToBgrMat(cv, renderEmScan({ pxPerMm: PX_PER_MM, spec, trueWidthMm: 0.42 }))
+      try {
+        const expectedDpi = Math.round(2 * PX_PER_MM * 25.4)
+        const r = analyzeEmCoupon(cv, img, spec, 2 * PX_PER_MM, expectedDpi)
+        expect(r.success).toBe(false)
+        expect(r.failureReason).toContain('expected resolution')
+        expect(r.failureReason).toContain(`${expectedDpi} dpi`)
+        expect(r.wMm).toBeNull()
+      } finally {
+        img.delete()
+      }
+    },
+    240000,
+  )
+
+  it(
     'fails with a resolution reason on a scan below the 150 dpi floor',
     async () => {
       const r = await analyzeRender({ trueWidthMm: 0.42, pxPerMm: 5 })

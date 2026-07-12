@@ -5,6 +5,7 @@ import { useCalibration } from '../stores/useCalibration'
 import { usePrinterProfiles } from '../stores/usePrinterProfiles'
 import { readBytes } from '../util/preview'
 import { scaleReferenceAtDpi } from '../engine/scannerCalibration'
+import { resolutionRowValue } from '../util/scanResolution'
 import { analyzeEmScan } from '../workerClient'
 import type { EmProcessing } from '../workerClient'
 import { emCorrection } from '../engine/em/emCorrectionFormatter'
@@ -218,7 +219,7 @@ async function onPick(e: Event): Promise<void> {
     // The calibration's scale error holds across resolutions; the scan is expected at the
     // calibration DPI, so the calibration is priced at exactly that resolution.
     const scanPxPerMm = scaleReferenceAtDpi(cal, cal.dpi)
-    processing.value = await analyzeEmScan(bytes, usedSpec, scanPxPerMm, onProgress)
+    processing.value = await analyzeEmScan(bytes, usedSpec, scanPxPerMm, cal.dpi, onProgress)
     analyzedSpec.value = usedSpec
   } catch (err) {
     console.error('EM scan analysis failed', err)
@@ -255,6 +256,11 @@ const newSlicerFlow = computed(() => {
 const pitchScaleOff = computed(() => {
   const p = result.value?.pitchScale
   return p !== null && p !== undefined && Math.abs(p - 1) > 0.003
+})
+// Raw diagnostic: the resolution geometrically measured from the coupon itself.
+const resolutionText = computed(() => {
+  const px = result.value?.measuredPxPerMm
+  return px != null && px > 0 ? resolutionRowValue(px) : null
 })
 </script>
 
@@ -506,6 +512,15 @@ const pitchScaleOff = computed(() => {
           />
         </div>
         <div class="facts mb-3">
+          <v-chip
+            v-if="resolutionText"
+            size="small"
+            variant="tonal"
+            prepend-icon="mdi-magnify-scan"
+            data-testid="em-resolution"
+          >
+            resolution {{ resolutionText }}
+          </v-chip>
           <v-chip size="small" variant="tonal" prepend-icon="mdi-scale-balance" data-testid="em-bias">
             separator check {{ result.biasMm!.toFixed(3) }} mm
           </v-chip>

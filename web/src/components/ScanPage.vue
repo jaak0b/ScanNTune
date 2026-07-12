@@ -4,8 +4,13 @@ import { useApp } from '../stores/useApp'
 import { useCalibration } from '../stores/useCalibration'
 import { useScans } from '../stores/useScans'
 import { readBytes } from '../util/preview'
-import { diagnoseScale } from '../engine/scanScale'
-import { isotropicPxPerMm, scaleReferenceAtDpi } from '../engine/scannerCalibration'
+import { scaleReferenceAtDpi } from '../engine/scannerCalibration'
+import {
+  evaluateScanSetResolution,
+  expectedFromCalibration,
+  expectedFromDpi,
+} from '../util/scanResolution'
+import type { ScanResolutionVerdict } from '../util/scanResolution'
 import { analyzeScan } from '../workerClient'
 import { reconcileScans } from '../engine/multiPlaneCombiner'
 import {
@@ -93,6 +98,29 @@ const planeProblems = computed(() => {
   return problems
 })
 
+// Per-scan resolution verdicts over the whole uploaded set: each measured scan's geometrically
+// measured px/mm is judged against the expected resolution (the calibration, or the entered DPI)
+// and against the other scans, so the one scan taken at a wrong resolution setting is flagged on
+// its own card. Set-relative, so the verdicts recompute whenever the scan set changes.
+const resolutionExpected = computed(() =>
+  calibration.calibration
+    ? expectedFromCalibration(calibration.calibration)
+    : expectedFromDpi(dpi.value != null && dpi.value >= 50 ? dpi.value : null),
+)
+const resolutionVerdicts = computed<Map<number, ScanResolutionVerdict>>(() => {
+  const measured = store.scans.filter((s) => s.isMeasured)
+  const verdicts = evaluateScanSetResolution(
+    measured.map((s) => ({
+      pxPerMm: Math.sqrt(s.result!.measuredPxPerMmX! * s.result!.measuredPxPerMmY!),
+    })),
+    resolutionExpected.value,
+  )
+  return new Map(measured.map((s, i) => [s.id, verdicts[i]]))
+})
+const resolutionBadCount = computed(
+  () => [...resolutionVerdicts.value.values()].filter((v) => !v.ok).length,
+)
+
 // Measured scans grouped by plane, each group carrying the angle figures the analyzability check
 // and the group header need. Scans that have not measured a plane (pending, unreadable, misaligned
 // or unlabeled) stay outside the groups and are listed separately.
@@ -174,6 +202,7 @@ const canAnalyze = computed(() => {
     n >= 2 &&
     n <= MAX_SCANS &&
     notReady.value.length === 0 &&
+    resolutionBadCount.value === 0 &&
     planeGroups.value.length > 0 &&
     planeGroups.value.every((g) => g.ready)
   )
@@ -191,6 +220,11 @@ const analyzeReason = computed(() => {
   if (n === 0) return 'Add at least two scans of each plate you want to calibrate.'
   const bad = notReady.value.length
   if (bad > 0) return `Fix ${bad} scan${bad === 1 ? '' : 's'} to analyze.`
+  const wrongRes = resolutionBadCount.value
+  if (wrongRes > 0)
+    return wrongRes === 1
+      ? 'One scan measures a wrong resolution; replace it to analyze.'
+      : `${wrongRes} scans measure a wrong resolution; replace them to analyze.`
   const short = planeGroups.value.find((g) => !g.ready)
   if (short) return `${short.plane} plate: ${short.statusText}`
   return ''
@@ -401,7 +435,6 @@ function startOver(): void {
   store.clear()
   isError.value = false
   statusText.value = ''
-  scaleMismatchWarning.value = ''
 }
 
 const plates: ReadonlyArray<{ key: string; label: string; file: string }> = [
@@ -479,10 +512,6 @@ async function analyzeItem(id: number, bytes: Uint8Array, coupon: CouponSpec): P
   }
 }
 
-// Set by analyze() when the scans measure a size far from what the calibration resolution
-// predicts (a clean 2x or 0.5x factor: a resolution swap between calibration and scan).
-const scaleMismatchWarning = ref('')
-
 async function analyze(): Promise<void> {
   const measured = store.scans.filter((s) => s.isMeasured)
   // The card calibration stores the scanner's scale error, which holds across resolutions, so it
@@ -493,24 +522,13 @@ async function analyze(): Promise<void> {
     : dpi.value != null && dpi.value >= 50
       ? dpi.value / 25.4
       : null
-  scaleMismatchWarning.value = ''
-  if (cal && pxPerMm !== null && measured.length > 0) {
-    // Geometric cross-check, independent of any metadata: the scans' own measured px/mm against
-    // the expected one. A clean 2x or 0.5x factor means the resolutions were swapped.
-    const detectedPxPerMm =
-      measured.reduce(
-        (sum, s) => sum + Math.sqrt(s.result!.measuredPxPerMmX! * s.result!.measuredPxPerMmY!),
-        0,
-      ) / measured.length
-    const d = diagnoseScale(detectedPxPerMm, isotropicPxPerMm(pxPerMm))
-    if (d.likelyMultiple !== null) {
-      scaleMismatchWarning.value = `This scan measures about ${d.factor.toFixed(1)} times the size expected at ${Math.round(cal.dpi)} dpi. Rescan at your calibration resolution, or recalibrate at this one.`
-    }
-  }
   try {
+    // The reconcile re-runs the per-scan resolution gate the cards already show, so a wrong
+    // resolution can never slip into the averaged figures even if the UI state went stale.
     const result = reconcileScans(
       measured.map((s) => asAligned(toRaw(s.result!))),
       pxPerMm,
+      resolutionExpected.value?.dpi ?? null,
     )
     // Each scan's overlay stays owned by the scans store, so nothing is copied here; only the
     // reconciled numbers travel in the payload.
@@ -722,6 +740,7 @@ function getCoupon(file: string): void {
             :key="s.id"
             :scan="s"
             :removable="true"
+            :resolution="resolutionVerdicts.get(s.id)"
             @remove="store.remove(s.id)"
           />
         </div>
@@ -773,6 +792,7 @@ function getCoupon(file: string): void {
               :scan="s"
               :removable="true"
               :problem="planeProblems.get(s.id)"
+              :resolution="resolutionVerdicts.get(s.id)"
               @remove="store.remove(s.id)"
             />
           </div>
@@ -844,11 +864,6 @@ function getCoupon(file: string): void {
         >
           Start over
         </v-btn>
-      </div>
-
-      <div v-if="scaleMismatchWarning" class="warn-box mb-3" data-testid="scale-mismatch-warning">
-        <v-icon color="warning" size="16" class="warn-icon">mdi-alert-outline</v-icon>
-        <span>{{ scaleMismatchWarning }}</span>
       </div>
 
       <div v-if="invalidPlanes.length" class="warn-box mb-3">

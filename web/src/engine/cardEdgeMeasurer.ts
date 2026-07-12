@@ -2,6 +2,7 @@ import type { Mat, OpenCv } from './opencv'
 import type { ScaleReferenceResult } from './types'
 import { median } from './math'
 import { analyzeThresholdBands, valueChannel } from './cvUtils'
+import { evaluateScanSetResolution } from './resolutionGate'
 
 // Measures a reference card's long side to sub-pixel precision: locates the card by validating both
 // threshold polarities against the ISO/IEC 7810 ID-1 shape, fits each long edge as a straight line
@@ -75,6 +76,11 @@ export function measureCard(
 
     const pxPerMm = long.spanPx / knownLongSideMm
     const detectedMm = nominalDpi > 0 ? long.spanPx / (nominalDpi / 25.4) : 0
+
+    // The MEASURED px/mm gates the resolution, never the entered DPI, so a coarse scan cannot
+    // sneak past a mistyped nominal figure and store an unusable calibration.
+    const [resolution] = evaluateScanSetResolution([{ pxPerMm }])
+    if (!resolution.ok) return fail(resolution.reason!, long.spanPx)
 
     return {
       success: true,
