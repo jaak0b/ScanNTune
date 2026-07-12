@@ -91,7 +91,8 @@ export interface IsLine {
   protectedMm: number
   /**
    * Distances from the corner at which this line crosses lines printed before it this
-   * layer, sorted ascending. The emitter drops the flow to zero over each crossing.
+   * layer, sorted ascending. Crossings print at full flow (the beads weld into the grid);
+   * the distances document that every crossing lies beyond the protected span.
    */
   crossingsMm: number[]
 }

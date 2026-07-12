@@ -196,26 +196,32 @@ describe('generateIsGcodeWithReport (Klipper)', () => {
     }
   })
 
-  it('dips the flow to zero exactly at each crossing on the second-printed group', () => {
+  it('extrudes at full flow through every crossing so the beads weld into the grid', () => {
     const chunk = measuredChunk(lines)
+    const fullE = ePerMm(nominal)
     for (const group of g.groups) {
       for (const line of group.lines) {
         const idx = chunk.indexOf(cornerMoveStr(line))
         const segs = walkLine(chunk, idx, ox + line.measured.x0, oy + line.measured.y0)
+        // The only zero-E segment on a measured line is the standard end-of-line coast;
+        // crossings introduce no flow dip and no extra subsegment splits.
         const zeros = segs.slice(0, -1).filter((s) => s.e === null)
-        // Every line ends with the standard zero-E coast; the crossing dips come before
-        // it, and no other zero-E segment exists between the prime and that coast.
-        const dips = zeros.slice(0, -1)
-        expect(dips).toHaveLength(line.crossingsMm.length)
-        dips.forEach((d, k) => {
-          expect(d.startDist + d.len / 2).toBeCloseTo(line.crossingsMm[k], 1)
-          expect(d.len).toBeCloseTo(nominal, 1)
-          expect(d.startDist).toBeGreaterThan(line.protectedMm)
-        })
+        expect(zeros).toHaveLength(1)
+        expect(zeros[0].startDist + zeros[0].len).toBeCloseTo(
+          Math.hypot(line.tail.x1 - line.measured.x0, line.tail.y1 - line.measured.y0),
+          1,
+        )
+        for (const s of segs.slice(0, -1)) {
+          if (s.e === null) continue
+          expect((s.e ?? 0) / (s.len * fullE)).toBeCloseTo(1, 2)
+        }
       }
     }
-    // The second-printed group actually carries crossings.
+    // The second-printed group actually carries crossings, all past the protected span.
     expect(g.groups[1].lines.every((l) => l.crossingsMm.length > 0)).toBe(true)
+    for (const line of g.groups[1].lines) {
+      for (const c of line.crossingsMm) expect(c).toBeGreaterThan(line.protectedMm)
+    }
   })
 
   it('prints band perimeters, then the test lines, then the band raster on every layer', () => {
