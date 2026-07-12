@@ -63,6 +63,7 @@ function fakeAxisResult(alignment: IsAlignment): IsAxisResult {
       traced: i !== 1,
       accepted: i >= 2,
       refusalReason: i < 2 ? 'test reason' : null,
+      refusalCategory: i === 1 ? ('not-traced' as const) : i === 0 ? ('weak-ringing' as const) : null,
       startPx: span.start,
       endPx: span.end,
     }

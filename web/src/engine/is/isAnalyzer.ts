@@ -2,15 +2,17 @@ import type { Mat, OpenCv } from '../opencv'
 import type { IsAxis, IsTestSpec } from './types'
 import { isCouponGeometry } from './couponGeometry'
 import type { IsLineGroup } from './couponGeometry'
-import { alignIsCoupon } from './isFiducialAligner'
+import { alignIsCoupon, mmToPx } from './isFiducialAligner'
 import type { IsAlignment } from './isFiducialAligner'
+import { assessMeasurementBackdrop } from '../measurementBackdrop'
+import type { BackdropAssessment } from '../measurementBackdrop'
 import { imageDirection, measuredDirection, traceGroup, tracedSpanPx } from './lineTracer'
 import { analyzeTracedLine, poolAxisFits } from './ringAnalyzer'
 import { recommendShapers } from './shaperRecommender'
 import type { IsAxisResult, IsLineOutcome, IsResult, IsScanInfo } from './resultTypes'
 import { valueChannel } from '../cvUtils'
-import { insufficientResolutionReason } from '../resolutionGate'
-import { isUsableReference } from '../scannerCalibration'
+import { evaluateScanSetResolution } from '../resolutionGate'
+import { isUsableReference, isotropicPxPerMm } from '../scannerCalibration'
 import type { ScaleReference } from '../scannerCalibration'
 
 // Top-level input shaper analysis over TWO scans of the same printed coupon: the part scanned
@@ -37,6 +39,7 @@ export function analyzeIsCoupon(
   scanB: Mat,
   spec: IsTestSpec,
   scanReference: ScaleReference,
+  expectedDpi: number | null = null,
   alignmentHolder?: { alignments?: IsAlignment[] },
 ): IsResult {
   if (!scanA || scanA.empty() || !scanB || scanB.empty()) {
@@ -67,20 +70,6 @@ export function analyzeIsCoupon(
         axes: [],
       }
     }
-    // The affine's scale prices this scan's resolution; a scan too coarse for the sub-pixel
-    // line tracing is refused per scan, the same way an unalignable scan is.
-    const resolutionReason = insufficientResolutionReason(
-      Math.hypot(alignment.affine!.a, alignment.affine!.c),
-    )
-    if (resolutionReason) {
-      alignments.push(alignment) // the overlay can still show the located coupon
-      return {
-        aligned: false,
-        failureReason: `Scan ${i + 1}: ${resolutionReason}`,
-        scans: alignments.map(scanInfo),
-        axes: [],
-      }
-    }
     // A face-down scan of the coupon's top face is always mirrored relative to the coupon
     // frame. An unmirrored scan therefore shows the BED side: there the sharp on-glass edge
     // is the slow-printed pedestal bead (which carries no ringing), the measured layer sits
@@ -101,6 +90,72 @@ export function analyzeIsCoupon(
     alignments.push(alignment)
   }
 
+  // Orientation-pair gate: with both axes under test, the two scans must differ by an odd
+  // number of quarter turns, or one axis's lines run along the scanner's transport axis in
+  // BOTH scans and that axis is unmeasurable before any tracing. A half turn (or none)
+  // between the scans keeps every group on the same scanner axis, so it is refused here as
+  // a scanning mistake instead of surfacing later as a per-axis refusal.
+  if (
+    geometry.groups.length > 1 &&
+    (alignments[0].rotationQuarterTurns - alignments[1].rotationQuarterTurns) % 2 === 0
+  ) {
+    return {
+      aligned: false,
+      failureReason:
+        'The two scans differ by a half turn or not at all, so the X and Y lines cannot ' +
+        'both be measured. Rescan one of them with the coupon turned a quarter turn on the glass.',
+      scans: alignments.map(scanInfo),
+      axes: [],
+    }
+  }
+
+  // The solved affines' scales price each scan's resolution: both scans are judged together
+  // (against the calibration's expected resolution when known, else against each other), so a
+  // scan too coarse for the sub-pixel line tracing or taken at the wrong resolution setting is
+  // refused per scan, the same way an unalignable scan is.
+  const scales = alignments.map((a) => Math.hypot(a.affine!.a, a.affine!.c))
+  const verdicts = evaluateScanSetResolution(
+    scales.map((pxPerMm) => ({ pxPerMm })),
+    expectedDpi != null && expectedDpi > 0
+      ? { pxPerMm: isotropicPxPerMm(scanReference), dpi: expectedDpi }
+      : null,
+  )
+  const badIndex = verdicts.findIndex((v) => !v.ok)
+  if (badIndex >= 0) {
+    return {
+      aligned: false,
+      failureReason: `Scan ${badIndex + 1}: ${verdicts[badIndex].reason}`,
+      scans: alignments.map(scanInfo),
+      axes: [],
+    }
+  }
+
+  // Measurement-backdrop gate per scan: the floor showing through the open window must present
+  // a single tone that contrasts with the plastic, or the traced line edges read shifted (a dark
+  // textured build plate behind the window corrupts the ring readout).
+  for (let i = 0; i < 2; i++) {
+    const gray = valueChannel(cv, scans[i])
+    let backdrop
+    try {
+      backdrop = assessIsBackdrop(gray, alignments[i], spec, geometry)
+    } finally {
+      gray.delete()
+    }
+    if (backdrop.failure) {
+      return {
+        aligned: false,
+        failureReason:
+          `Scan ${i + 1}: the backing showing through the coupon window is ` +
+          (backdrop.failure === 'low-contrast'
+            ? 'too similar in brightness to the plastic'
+            : 'too uneven in brightness') +
+          ' to measure against. Scan the removed part against the lid or a sheet of paper, or use a light, even build plate.',
+        scans: alignments.map(scanInfo),
+        axes: [],
+      }
+    }
+  }
+
   const axes: IsAxisResult[] = []
   for (const group of geometry.groups) {
     axes.push(measureGroup(cv, scans, alignments, spec, group, scanReference))
@@ -114,6 +169,62 @@ export function analyzeIsCoupon(
   }
 }
 
+// Samples plastic tones on the frame band and backdrop tones between adjacent test lines inside
+// the open window (half a line pitch off each measured segment, early in its protected span,
+// before any crossings) plus the fiducial holes, all through the solved affine, and judges them
+// with the shared measurement-backdrop gate.
+function assessIsBackdrop(
+  gray: Mat,
+  alignment: IsAlignment,
+  spec: IsTestSpec,
+  geometry: ReturnType<typeof isCouponGeometry>,
+): BackdropAssessment {
+  const data = gray.data as Uint8Array
+  const cols = gray.cols
+  const rows = gray.rows
+  const sample = (xMm: number, yMm: number): number => {
+    const p = mmToPx(alignment, xMm, yMm)
+    const x = Math.round(p.x)
+    const y = Math.round(p.y)
+    if (x < 0 || y < 0 || x >= cols || y >= rows) return NaN
+    return data[y * cols + x]
+  }
+
+  const band = geometry.frameBandMm
+  const plastic: number[] = []
+  for (let t = 0.1; t <= 0.9; t += 0.1) {
+    plastic.push(
+      sample(geometry.couponWidthMm * t, band / 2),
+      sample(geometry.couponWidthMm * t, geometry.couponHeightMm - band / 2),
+      sample(band / 2, geometry.couponHeightMm * t),
+      sample(geometry.couponWidthMm - band / 2, geometry.couponHeightMm * t),
+    )
+  }
+
+  const backdrop: number[] = []
+  for (const group of geometry.groups) {
+    for (const line of group.lines) {
+      const m = line.measured
+      const len = Math.hypot(m.x1 - m.x0, m.y1 - m.y0)
+      if (len <= 0) continue
+      const dx = (m.x1 - m.x0) / len
+      const dy = (m.y1 - m.y0) / len
+      // Early in the protected span: inside the window, before any crossings.
+      const along = Math.min(line.protectedMm, len) / 2
+      const cx = m.x0 + dx * along
+      const cy = m.y0 + dy * along
+      const off = spec.linePitchMm / 2
+      backdrop.push(sample(cx - dy * off, cy + dx * off), sample(cx + dy * off, cy - dx * off))
+    }
+  }
+  for (const f of geometry.fiducials) backdrop.push(sample(f.xMm, f.yMm))
+
+  return assessMeasurementBackdrop(
+    plastic.filter(Number.isFinite),
+    backdrop.filter(Number.isFinite),
+  )
+}
+
 // The per-scan diagnostics the UI reports: how far the alignment got (plate and holes found,
 // orientation solved) plus the resolved orientation itself.
 function scanInfo(a: IsAlignment): IsScanInfo {
@@ -122,6 +233,7 @@ function scanInfo(a: IsAlignment): IsScanInfo {
     orientationSolved: a.orientationSolved,
     flipped: a.flipped,
     rotationQuarterTurns: a.rotationQuarterTurns,
+    measuredPxPerMm: a.affine ? Math.hypot(a.affine.a, a.affine.c) : null,
   }
 }
 
@@ -183,6 +295,7 @@ function measureGroup(
       traced: false,
       accepted: false,
       refusalReason: null,
+      refusalCategory: null,
       startPx: null,
       endPx: null,
     }))
@@ -219,6 +332,7 @@ function measureGroup(
       traced: traced.traces[i] !== null,
       accepted: false,
       refusalReason: traced.traces[i] === null ? NOT_TRACED_REASON : null,
+      refusalCategory: traced.traces[i] === null ? ('not-traced' as const) : null,
       startPx: span.start,
       endPx: span.end,
     }
@@ -245,6 +359,7 @@ function measureGroup(
   for (let k = 0; k < tracedIndices.length; k++) {
     lines[tracedIndices[k]].accepted = fits[k].accepted
     lines[tracedIndices[k]].refusalReason = fits[k].refusalReason
+    lines[tracedIndices[k]].refusalCategory = fits[k].refusalCategory
   }
   const pool = poolAxisFits(
     fits,

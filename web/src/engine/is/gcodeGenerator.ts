@@ -280,18 +280,12 @@ function emitIsGcode(profile: PrinterProfile, filament: FilamentProfile, spec: I
         // taken without deceleration, so the corner dumps no pressure and the bead stays
         // continuous through it.
         extrude(e, profile, filament, width, ox + line.runUp.x1, oy + line.runUp.y1, runUpSpeed)
-        // Groups printed earlier this layer leave beads across this line's path; the flow
-        // is zeroed over each crossing. The geometry guarantees every crossing (and its
-        // flow ramps) lies beyond the protected span, so the read window sees none of it.
-        if (line.crossingsMm.length > 0) {
-          extrudeWithDips(
-            e, profile, filament, width,
-            ox + line.measured.x1, oy + line.measured.y1, speed,
-            line.crossingsMm.map((at) => ({ atMm: at, occupiedMm: width })),
-          )
-        } else {
-          extrude(e, profile, filament, width, ox + line.measured.x1, oy + line.measured.y1, speed)
-        }
+        // Crossings over beads printed earlier this layer are taken at full flow, the way
+        // grid infill crosses itself: the free beads must weld into the stiff grid, and
+        // with pressure advance disabled a zero-E stretch drains nozzle pressure and
+        // breaks the bead instead. The geometry guarantees every crossing lies beyond the
+        // protected span, so the read window never sees the small crossing blob.
+        extrude(e, profile, filament, width, ox + line.measured.x1, oy + line.measured.y1, speed)
         finishLine(e, profile, filament, width, line.tail, ox, oy, speed)
       }
     }

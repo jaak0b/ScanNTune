@@ -122,6 +122,50 @@ describe('analyzeEmCoupon render recovery', () => {
   )
 
   it(
+    'refuses a textured-plate backdrop (speckled tones behind the gaps) instead of mis-measuring',
+    async () => {
+      const cv = await getCv()
+      // Render on a mid plate tone, then speckle every plate-tone pixel: the four-population
+      // scene of a coupon scanned on a textured build plate, including through the comb gaps.
+      const rgba = renderEmScan({ pxPerMm: PX_PER_MM, spec, trueWidthMm: 0.42, plasticGray: 20, backgroundGray: 150 })
+      let seed = 123456789
+      const rand = () => {
+        seed = (seed * 1664525 + 1013904223) >>> 0
+        return seed / 4294967296
+      }
+      for (let i = 0; i < rgba.data.length; i += 4) {
+        if (rgba.data[i] === 150) {
+          // A textured plate has no plateau tone: a continuum between its dark pits and
+          // bright glints (the measured spread of a real PEI plate spans 40 to 150).
+          const tone = 40 + Math.round(rand() * 110)
+          rgba.data[i] = tone
+          rgba.data[i + 1] = tone
+          rgba.data[i + 2] = tone
+        }
+      }
+      const img = rgbaToBgrMat(cv, rgba)
+      try {
+        const r = analyzeEmCoupon(cv, img, spec, PX_PER_MM)
+        expect(r.success).toBe(false)
+        expect(r.failureReason).toContain('too uneven')
+      } finally {
+        img.delete()
+      }
+    },
+    240000,
+  )
+
+  it(
+    'refuses a backdrop too similar in brightness to the plastic instead of mis-measuring',
+    async () => {
+      const r = await analyzeRender({ trueWidthMm: 0.42, plasticGray: 26, backgroundGray: 45 })
+      expect(r.success).toBe(false)
+      expect(r.failureReason).toContain('too similar in brightness')
+    },
+    240000,
+  )
+
+  it(
     'prices a quarter-turned coupon with the vertical figure of a per-axis (CCD) reference',
     async () => {
       // The comb profiles of a quarter-turned coupon run along the image's vertical axis, so a
@@ -193,6 +237,28 @@ describe('analyzeEmCoupon render recovery', () => {
         const ratio = Math.abs(r.flankAsymmetryMm!) / Math.abs(inflation)
         expect(ratio).toBeGreaterThan(0.5)
         expect(ratio).toBeLessThan(2)
+      }
+    },
+    240000,
+  )
+
+  it(
+    'refuses a scan whose measured resolution mismatches the expected calibration resolution',
+    async () => {
+      // Coupon rendered (and priced) at 24 px/mm, but the expected resolution says the scan
+      // should measure twice that: the analyzer must refuse with the mismatch reason instead of
+      // returning wrongly scaled widths.
+      const cv = await getCv()
+      const img = rgbaToBgrMat(cv, renderEmScan({ pxPerMm: PX_PER_MM, spec, trueWidthMm: 0.42 }))
+      try {
+        const expectedDpi = Math.round(2 * PX_PER_MM * 25.4)
+        const r = analyzeEmCoupon(cv, img, spec, 2 * PX_PER_MM, expectedDpi)
+        expect(r.success).toBe(false)
+        expect(r.failureReason).toContain('expected resolution')
+        expect(r.failureReason).toContain(`${expectedDpi} dpi`)
+        expect(r.wMm).toBeNull()
+      } finally {
+        img.delete()
       }
     },
     240000,

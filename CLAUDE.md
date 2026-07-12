@@ -257,6 +257,16 @@ shipped source, comments, or UI text: they are guidance for how to work, not doc
     the bed-fit machinery shrinks the spec for small beds. Printed paths must form continuous beads (no
     zero-flow gap inside a path) and nothing may extend outside the coupon outline.
 
+12. **Extend the concept's existing home; never bolt a duplicate beside a symptom.** Before adding or
+    fixing logic, find the module that already owns the concept (search for the concept, not just the
+    symptom site) and extend it. Never compute a value the codebase already derives elsewhere: if a
+    figure (resolution, px/mm, scale reference, fiducial, orientation) is produced in two places, unify
+    on the single source. A concern shared across flows lives in a shared engine module wired into all
+    consumers, never patched into one flow; always ask whether every other scan flow would want the
+    same. A minimal local guard that duplicates existing logic is a defect, not a small change. Any
+    non-trivial engine or cross-cutting change gets a short written design first (its canonical home,
+    what it extends, what it must not duplicate) for owner approval before implementation.
+
 **Verification bar.** The standard for "verified" is `npm run build` plus `npm test` plus `npm run e2e` all
 green (and, for any change to the measurement pipeline, the synthetic-fixture validation of rule 1). That
 automated gate is sufficient: do not additionally launch a dev server for manual browser verification unless

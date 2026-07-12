@@ -32,7 +32,9 @@ const straightnessPx = ref(calibration.calibration?.straightnessPx ?? 0)
 const parallelismDegrees = ref(calibration.calibration?.parallelismDegrees ?? 0)
 const hasResult = ref(calibration.calibration !== null)
 
-const canUpload = computed(() => (measuredMm.value ?? 0) > 0 && (dpi.value ?? 0) >= 50)
+// 150 dpi is the measurement floor every flow enforces on its own scans, so a calibration below
+// it could never be used; the same floor gates the card scan here.
+const canUpload = computed(() => (measuredMm.value ?? 0) > 0 && (dpi.value ?? 0) >= 150)
 
 const pxPerMm = computed(() =>
   measuredWidthPx.value && measuredMm.value ? measuredWidthPx.value / measuredMm.value : 0,
@@ -81,7 +83,7 @@ const isoSanityText = computed(() => {
 async function processFile(file: File | null): Promise<void> {
   if (!canUpload.value) {
     isError.value = true
-    statusText.value = 'Enter your measured size and a DPI of at least 50 first.'
+    statusText.value = 'Enter your measured size and a DPI of at least 150 first.'
     return
   }
   if (!file) return
@@ -223,15 +225,17 @@ watch([measuredMm, dpi, scannerType], () => {
           :min="1"
           :precision="2"
           placeholder="85.50"
+          testid="reference-mm"
         />
         <NumericField
           v-model="dpi"
           label="Scan resolution (dpi)"
           :step="100"
-          :min="50"
+          :min="150"
           :precision="0"
           hint="For best results scan at 600 dpi, and use the same resolution for your coupon."
           class="mt-3"
+          testid="scan-dpi"
         />
         <div class="mt-3">
           <div class="field-label mb-1">Sensor type</div>
@@ -269,7 +273,7 @@ watch([measuredMm, dpi, scannerType], () => {
       <div class="text-caption text-medium-emphasis text-center">
         PNG, JPG or TIFF. Works with most card colours; a pale card needs a dark sheet behind it.
       </div>
-      <div v-if="!canUpload" class="text-caption warn">Enter your measurement and a DPI of at least 50 first.</div>
+      <div v-if="!canUpload" class="text-caption warn">Enter your measurement and a DPI of at least 150 first.</div>
       <v-progress-linear v-if="detecting" indeterminate class="mt-2" style="max-width: 220px" />
     </label>
 

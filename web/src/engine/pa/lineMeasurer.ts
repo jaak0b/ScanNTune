@@ -4,6 +4,8 @@ import { couponGeometry } from './types'
 import type { PaAlignment } from './fiducialAligner'
 import { mmToPx } from './fiducialAligner'
 import { median } from '../math'
+import { assessMeasurementBackdrop, MIN_BACKDROP_CONTRAST } from '../measurementBackdrop'
+import type { BackdropAssessment } from '../measurementBackdrop'
 import { EDGE_REFINE_WINDOW_PX, gradientCentroid } from '../subpixelEdge'
 
 // Profiles a PA test line's extruded width along its length to sub-pixel precision. Every 0.25 mm
@@ -26,8 +28,8 @@ const END_SKIP_MM = 2
 const PROFILE_STEP_PX = 0.25
 // Minimum contrast between the line and the base for a line to be present at all: the profile
 // extremum must deviate at least this far from the profile median (in either direction), else the
-// sample is a gap.
-export const MIN_LINE_CONTRAST = 30
+// sample is a gap. The same brightness-separation floor as the shared backdrop gate.
+export const MIN_LINE_CONTRAST = MIN_BACKDROP_CONTRAST
 // Noise floor for a genuine edge, matching the card measurer's gradient gate.
 const MIN_EDGE_GRADIENT = 8
 
@@ -76,22 +78,22 @@ export function measureLineWidthProfile(
   return samples
 }
 
-// Estimates the brightness contrast between the test lines and the base, in gray levels. Base
-// tone is the median of samples taken half a line pitch off each line's centreline (between the
-// lines, always on the base); line tone samples sit on the line centrelines. Both medians are
-// robust order statistics, so a few gap or transition samples cannot bias them. The result is the
-// median absolute deviation of the line samples from the base median, which is polarity-free.
-export function estimateLineContrast(
+// Assesses the printed base as the measurement backdrop behind the test lines. Base tone samples
+// are taken half a line pitch off each line's centreline (between the lines, always on the base);
+// line tone samples sit on the line centrelines. Both medians are robust order statistics, so a
+// few gap or transition samples cannot bias them. The judgment (polarity-free contrast plus base
+// tone uniformity) is the shared measurement-backdrop gate.
+export function assessLineBackdrop(
   cv: OpenCv,
   gray: Mat,
   alignment: PaAlignment,
   spec: PaTestSpec,
-): number {
+): BackdropAssessment {
   if (!gray || gray.empty()) throw new Error('Image is null or empty.')
   if (gray.type() !== cv.CV_8UC1) {
-    throw new Error('estimateLineContrast expects a CV_8UC1 (single-channel 8-bit) image.')
+    throw new Error('assessLineBackdrop expects a CV_8UC1 (single-channel 8-bit) image.')
   }
-  if (!alignment.success) throw new Error('Cannot estimate contrast without a successful alignment.')
+  if (!alignment.success) throw new Error('Cannot assess the backdrop without a successful alignment.')
 
   const data = gray.data as Uint8Array
   const cols = gray.cols
@@ -114,9 +116,7 @@ export function estimateLineContrast(
       if (Number.isFinite(vBase)) baseSamples.push(vBase)
     }
   }
-  if (lineSamples.length === 0 || baseSamples.length === 0) return 0
-  const baseMedian = median(baseSamples)
-  return median(lineSamples.map((v) => Math.abs(v - baseMedian)))
+  return assessMeasurementBackdrop(lineSamples, baseSamples)
 }
 
 // Width in px of the line crossing the profile centred at (cx, cy), or NaN when no line or no

@@ -57,6 +57,10 @@ export interface IsTestSpec {
   contrastBase: boolean
 }
 
+/** Frequency search range of the ringing fit: the flow's measurable resonance band. */
+export const F_MIN_HZ = 20
+export const F_MAX_HZ = 150
+
 export const MIN_SPEED_TIERS = 1
 export const MAX_SPEED_TIERS = 3
 export const MIN_LINES_PER_SPEED = 3

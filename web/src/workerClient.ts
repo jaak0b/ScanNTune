@@ -55,6 +55,7 @@ export async function analyzeEmScan(
   bytes: Uint8Array,
   spec: EmTestSpec,
   scanPxPerMm: ScaleReference,
+  expectedDpi: number | null,
   onProgress?: EmProgressCallback,
 ): Promise<EmProcessing> {
   const b = bytes.slice().buffer
@@ -62,6 +63,7 @@ export async function analyzeEmScan(
     Comlink.transfer(b, [b]),
     spec,
     scanPxPerMm,
+    expectedDpi,
     onProgress ? Comlink.proxy(onProgress) : undefined,
   )
 }
@@ -74,10 +76,17 @@ export async function analyzeIsScans(
   bytesB: Uint8Array,
   spec: IsTestSpec,
   scanPxPerMm: ScaleReference,
+  expectedDpi: number | null,
 ): Promise<IsProcessing> {
   const a = bytesA.slice().buffer
   const b = bytesB.slice().buffer
-  return getApi().analyzeIsScans(Comlink.transfer(a, [a]), Comlink.transfer(b, [b]), spec, scanPxPerMm)
+  return getApi().analyzeIsScans(
+    Comlink.transfer(a, [a]),
+    Comlink.transfer(b, [b]),
+    spec,
+    scanPxPerMm,
+    expectedDpi,
+  )
 }
 
 export async function measureCardScan(

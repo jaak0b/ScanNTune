@@ -1,3 +1,5 @@
+import { median } from './math'
+
 // Shared scan-resolution gates for the calibration flows. The fiducial aligners use the
 // degenerate floor to reject blobs that cannot be a coupon at any usable resolution; the
 // analyzers use the measurement floor to refuse scans whose pixels are too coarse for the
@@ -33,6 +35,104 @@ export function insufficientResolutionReason(pxPerMm: number): string | null {
   if (pxPerMm >= MIN_MEASUREMENT_PX_PER_MM) return null
   return (
     `The scan resolution is about ${Math.round(pxPerMm * 25.4)} dpi, below the 150 dpi this ` +
-    'measurement needs to resolve the printed features. Rescan the coupon at 150 dpi or higher.'
+    'measurement needs to resolve the measured features. Rescan at 150 dpi or higher.'
   )
+}
+
+/**
+ * Relative px/mm tolerance for "these scans were taken at the same scanner resolution setting".
+ * This is a setting-mismatch detector, not a measurement: flatbed resolution settings are
+ * discrete (75/150/300/600 dpi, factors of two apart), while a real scanner's scale error is
+ * around one percent, so a 20 percent band cleanly separates same-setting jitter from a
+ * different-setting scan without ever judging the measurement itself.
+ */
+export const RESOLUTION_SETTING_TOLERANCE = 0.2
+
+/** The resolution verdict of one scan within an analyzed set. */
+export interface ScanResolutionVerdict {
+  ok: boolean
+  /** The geometrically measured resolution, rounded to whole dpi, for display. */
+  approxDpi: number
+  /** User-worded refusal when not ok; null when the scan passes. */
+  reason: string | null
+}
+
+const approxDpiOf = (pxPerMm: number): number => Math.round(pxPerMm * 25.4)
+
+const sameSetting = (pxPerMmA: number, pxPerMmB: number): boolean =>
+  Math.abs(pxPerMmA / pxPerMmB - 1) <= RESOLUTION_SETTING_TOLERANCE
+
+/**
+ * Judges the geometrically measured resolution of every scan in one analysis. Per scan, in
+ * order: the measurement floor (see MIN_MEASUREMENT_PX_PER_MM); against the expected resolution
+ * when one is known (a scanner calibration or an entered DPI); otherwise against the rest of the
+ * set, where the largest same-setting cluster is the baseline and scans outside it are refused
+ * (a tie between clusters refuses every scan, since no baseline exists). Driven only by measured
+ * px/mm figures, never by file metadata.
+ */
+export function evaluateScanSetResolution(
+  scans: { pxPerMm: number }[],
+  expected?: { pxPerMm: number; dpi: number } | null,
+): ScanResolutionVerdict[] {
+  const verdicts: ScanResolutionVerdict[] = scans.map((s) => {
+    const reason = insufficientResolutionReason(s.pxPerMm)
+    return { ok: reason === null, approxDpi: approxDpiOf(s.pxPerMm), reason }
+  })
+
+  if (expected && expected.pxPerMm > 0) {
+    scans.forEach((s, i) => {
+      if (!verdicts[i].ok || sameSetting(s.pxPerMm, expected.pxPerMm)) return
+      verdicts[i].ok = false
+      verdicts[i].reason =
+        `This scan measures about ${verdicts[i].approxDpi} dpi, but the expected resolution is ` +
+        `${Math.round(expected.dpi)} dpi. Rescan at the expected resolution, or recalibrate ` +
+        'the scanner at this one.'
+    })
+    return verdicts
+  }
+
+  // No expectation: the scans must agree among themselves. Cluster the floor-passing scans by
+  // the same setting tolerance (sorted, so each cluster is anchored at its smallest member).
+  const candidates = scans
+    .map((s, index) => ({ index, pxPerMm: s.pxPerMm }))
+    .filter((c) => verdicts[c.index].ok)
+    .sort((a, b) => a.pxPerMm - b.pxPerMm)
+  const clusters: { index: number; pxPerMm: number }[][] = []
+  for (const c of candidates) {
+    const current = clusters[clusters.length - 1]
+    if (current && sameSetting(c.pxPerMm, current[0].pxPerMm)) current.push(c)
+    else clusters.push([c])
+  }
+  if (clusters.length < 2) return verdicts
+
+  const largest = Math.max(...clusters.map((c) => c.length))
+  const majority = clusters.filter((c) => c.length === largest)
+  if (majority.length === 1) {
+    const baselineDpi = approxDpiOf(median(majority[0].map((c) => c.pxPerMm)))
+    for (const cluster of clusters) {
+      if (cluster === majority[0]) continue
+      for (const c of cluster) {
+        verdicts[c.index].ok = false
+        verdicts[c.index].reason =
+          `This scan measures about ${verdicts[c.index].approxDpi} dpi while the other scans ` +
+          `measure about ${baselineDpi} dpi. All scans in one analysis must use the same resolution.`
+      }
+    }
+    return verdicts
+  }
+
+  // A tie between the largest clusters: no majority to trust, so every scan is refused.
+  const list = clusters.map((c) => approxDpiOf(median(c.map((m) => m.pxPerMm))))
+  const listText =
+    list.length === 2 ? `${list[0]} and ${list[1]}` : `${list.slice(0, -1).join(', ')} and ${list[list.length - 1]}`
+  const reason =
+    `The scans measure different resolutions (about ${listText} dpi). All scans in one ` +
+    'analysis must use the same resolution.'
+  for (const cluster of clusters) {
+    for (const c of cluster) {
+      verdicts[c.index].ok = false
+      verdicts[c.index].reason = reason
+    }
+  }
+  return verdicts
 }

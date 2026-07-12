@@ -69,6 +69,8 @@ export interface PaResult {
   bestLineIndex: number | null
   /** Parabolic-interpolated PA at the score minimum, null on failure. */
   bestPa: number | null
+  /** Geometrically measured scan scale along the width-profile direction; null before alignment. */
+  measuredPxPerMm: number | null
   flipped: boolean
   rotationQuarterTurns: number
 }

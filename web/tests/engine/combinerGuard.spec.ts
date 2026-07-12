@@ -53,12 +53,40 @@ describe('combiner guards', () => {
 })
 
 describe('reconcile input guards', () => {
+  // A full skew-flow scan at a given px/mm and placement angle, for the resolution-gate cases.
+  function scanAt(pxPerMm: number, angleDegrees: number): AlignedResult {
+    const rad = (angleDegrees * Math.PI) / 180.0
+    return alignedResult({
+      plane: 'XY',
+      measuredPxPerMmX: pxPerMm,
+      measuredPxPerMmY: pxPerMm,
+      orientation: { flipped: false, originX: 0, originY: 0, xAxisX: Math.cos(rad), xAxisY: Math.sin(rad) },
+    })
+  }
+
   it('rejects a scan without a plane instead of dropping it', () => {
     expect(() => reconcileScans([alignedResult({ plane: null })], null)).toThrow(/plane/)
   })
 
   it('rejects a plane with a single scan instead of dropping it', () => {
     expect(() => reconcileScans([alignedResult({ plane: 'XY' })], null)).toThrow(/at least two/)
+  })
+
+  it('refuses a set mixing 150 and 300 dpi class scans and identifies the outlier', () => {
+    const scans = [scanAt(150 / 25.4, 0), scanAt(150 / 25.4, 90), scanAt(300 / 25.4, 45)]
+    expect(() => reconcileScans(scans, null)).toThrow(
+      /about 300 dpi while the other scans measure about 150 dpi/,
+    )
+  })
+
+  it('refuses scans mismatching the expected calibration resolution', () => {
+    const scans = [scanAt(150 / 25.4, 0), scanAt(150 / 25.4, 90)]
+    expect(() => reconcileScans(scans, 300 / 25.4, 300)).toThrow(/expected resolution is 300 dpi/)
+  })
+
+  it('accepts a same-resolution set matching the expected resolution', () => {
+    const scans = [scanAt(300 / 25.4, 0), scanAt(300 / 25.4, 90)]
+    expect(() => reconcileScans(scans, 300 / 25.4, 300)).not.toThrow()
   })
 
   it('rejects a non-positive px/mm reference', () => {

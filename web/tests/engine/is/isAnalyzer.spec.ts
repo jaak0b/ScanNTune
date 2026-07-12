@@ -114,10 +114,14 @@ describe('analyzeIsCoupon render recovery', () => {
       expect(y.frequencyHz).toBeNull()
       expect(y.refusals.some((m) => m.includes('below the detection threshold'))).toBe(true)
 
-      // Every line is reported individually: none accepted, each with its own reason and an
-      // image-space position the overlay can point at.
+      // Every line is reported individually: none accepted, each with its own reason and
+      // category and an image-space position the overlay can point at. The dominant category
+      // must be the amplitude one, matching the pooled advice.
       expect(y.lines).toHaveLength(ySpec.speedsMmS.length * ySpec.linesPerSpeed)
       expect(y.lines.every((l) => !l.accepted && l.refusalReason !== null)).toBe(true)
+      expect(y.lines.every((l) => l.refusalCategory !== null)).toBe(true)
+      const weak = y.lines.filter((l) => l.refusalCategory === 'weak-ringing').length
+      expect(weak * 2).toBeGreaterThan(y.lines.length)
       expect(y.lines.every((l) => l.startPx !== null && l.endPx !== null)).toBe(true)
     },
     240000,
@@ -156,7 +160,8 @@ describe('analyzeIsCoupon render recovery', () => {
       const y = axisOf(r, 'y')
       expect(y.accepted).toBe(false)
       expect(y.frequencyHz).toBeNull()
-      expect(y.refusals.some((m) => m.includes('search range'))).toBe(true)
+      expect(y.refusals.some((m) => m.includes('outside the measurable range'))).toBe(true)
+      expect(y.lines.some((l) => l.refusalCategory === 'out-of-band')).toBe(true)
     },
     240000,
   )
@@ -243,6 +248,29 @@ describe('analyzeIsCoupon render recovery', () => {
   )
 
   it(
+    'refuses a two-axis scan pair whose orientations differ by a half turn',
+    async () => {
+      // A 0/180 degree pair keeps both line groups on the same scanner axis, so one axis is
+      // unmeasurable in either scan; the pair is refused as a scanning mistake before any
+      // tracing, instead of surfacing later as a confusing per-axis refusal.
+      const truth = {
+        x: { frequencyHz: 62, dampingRatio: 0.08, ringAmpMm: 0.25 },
+        y: { frequencyHz: 75, dampingRatio: 0.05, ringAmpMm: 0.25 },
+      }
+      const r = await analyzePair(
+        baseSpec,
+        { truth, quarterTurns: 0, flipped: true },
+        { truth, quarterTurns: 2, flipped: true },
+      )
+      expect(r.aligned).toBe(false)
+      expect(r.failureReason).toContain('quarter turn')
+      expect(r.scans).toHaveLength(2)
+      expect(r.axes).toEqual([])
+    },
+    240000,
+  )
+
+  it(
     'refuses an unmirrored scan as the coupon bed side',
     async () => {
       const truth = {
@@ -307,8 +335,39 @@ describe('analyzeIsCoupon render recovery', () => {
       expect(r.failureReason).toContain('Scan 1')
       expect(r.failureReason).toContain('dpi')
       expect(r.failureReason).toContain('150')
-      expect(r.scans).toHaveLength(1)
+      // The resolution set check runs after both scans align, so both carry diagnostics.
+      expect(r.scans).toHaveLength(2)
       expect(r.axes).toEqual([])
+    },
+    240000,
+  )
+
+  it(
+    'refuses a pair whose second scan mismatches the expected calibration resolution',
+    async () => {
+      const truth = { y: { frequencyHz: 75, dampingRatio: 0.05, ringAmpMm: 0.25 } }
+      const cv = await getCv()
+      const a = rgbaToBgrMat(
+        cv,
+        renderIsScan({ pxPerMm: PX_PER_MM, spec: ySpec, truth, quarterTurns: 0, flipped: true }),
+      )
+      const b = rgbaToBgrMat(
+        cv,
+        renderIsScan({ pxPerMm: PX_PER_MM / 2, spec: ySpec, truth, quarterTurns: 1, flipped: true }),
+      )
+      try {
+        const expectedDpi = Math.round(PX_PER_MM * 25.4)
+        const r = analyzeIsCoupon(cv, a, b, ySpec, PX_PER_MM, expectedDpi)
+        expect(r.aligned).toBe(false)
+        expect(r.failureReason).toContain('Scan 2')
+        expect(r.failureReason).toContain('expected resolution')
+        expect(r.scans).toHaveLength(2)
+        expect(r.scans[1].measuredPxPerMm).not.toBeNull()
+        expect(r.axes).toEqual([])
+      } finally {
+        a.delete()
+        b.delete()
+      }
     },
     240000,
   )

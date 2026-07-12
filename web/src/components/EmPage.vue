@@ -5,6 +5,7 @@ import { useCalibration } from '../stores/useCalibration'
 import { usePrinterProfiles } from '../stores/usePrinterProfiles'
 import { readBytes } from '../util/preview'
 import { scaleReferenceAtDpi } from '../engine/scannerCalibration'
+import { resolutionRowValue } from '../util/scanResolution'
 import { analyzeEmScan } from '../workerClient'
 import type { EmProcessing } from '../workerClient'
 import { emCorrection } from '../engine/em/emCorrectionFormatter'
@@ -67,11 +68,15 @@ const partColorsItems = [
 ]
 const scanPlanNote = computed(() => {
   if (scanPlace.value === 'plate') {
-    return (
-      'Useful for filaments that are hard to remove, like TPU or PETG. The coupon is ' +
-      'printed at the front edge of the bed, so that edge of the build plate can lie on ' +
-      'the scanner glass. The plate color needs to contrast with the filament.'
-    )
+    const placement =
+      'The coupon is printed at the front edge of the bed, so that edge of the build ' +
+      'plate can lie on the scanner glass. Useful for filaments that are hard to remove, ' +
+      'like TPU or PETG.'
+    return partColors.value === 'base'
+      ? placement +
+          ' The contrasting base backs the measured gaps, so the build plate surface does not matter.'
+      : placement +
+          ' Use a light, even build plate; a dark or textured plate shows through the gaps and the scan is refused.'
   }
   return partColors.value === 'base'
     ? 'A base is printed in a second color underneath the coupon, with a filament swap ' +
@@ -101,7 +106,7 @@ const spec = computed<EmTestSpec>(() => ({
   linesPerBlock: linesPerBlock.value ?? specDefaults.value.linesPerBlock,
   printSpeedMmS: printSpeed.value ?? specDefaults.value.printSpeedMmS,
   placement: scanPlace.value === 'plate' ? 'front' : 'center',
-  contrastBase: scanPlace.value === 'part' && partColors.value === 'base',
+  contrastBase: partColors.value === 'base',
 }))
 
 const geometry = computed(() => emCouponGeometry(spec.value))
@@ -218,7 +223,7 @@ async function onPick(e: Event): Promise<void> {
     // The calibration's scale error holds across resolutions; the scan is expected at the
     // calibration DPI, so the calibration is priced at exactly that resolution.
     const scanPxPerMm = scaleReferenceAtDpi(cal, cal.dpi)
-    processing.value = await analyzeEmScan(bytes, usedSpec, scanPxPerMm, onProgress)
+    processing.value = await analyzeEmScan(bytes, usedSpec, scanPxPerMm, cal.dpi, onProgress)
     analyzedSpec.value = usedSpec
   } catch (err) {
     console.error('EM scan analysis failed', err)
@@ -255,6 +260,11 @@ const newSlicerFlow = computed(() => {
 const pitchScaleOff = computed(() => {
   const p = result.value?.pitchScale
   return p !== null && p !== undefined && Math.abs(p - 1) > 0.003
+})
+// Raw diagnostic: the resolution geometrically measured from the coupon itself.
+const resolutionText = computed(() => {
+  const px = result.value?.measuredPxPerMm
+  return px != null && px > 0 ? resolutionRowValue(px) : null
 })
 </script>
 
@@ -331,7 +341,6 @@ const pitchScaleOff = computed(() => {
             data-testid="em-scan-plan"
           />
           <v-select
-            v-if="scanPlace === 'part'"
             v-model="partColors"
             :items="partColorsItems"
             label="Colors"
@@ -489,15 +498,15 @@ const pitchScaleOff = computed(() => {
       <template v-if="result.success">
         <div class="tiles mb-3">
           <MetricTile
-            label="Measured line width"
-            :value="`${result.wMm!.toFixed(3)} mm`"
-            testid="em-width"
-          />
-          <MetricTile
             v-if="newSlicerFlow"
             label="New slicer flow"
             :value="newSlicerFlow"
             testid="em-flow"
+          />
+          <MetricTile
+            label="Measured line width"
+            :value="`${result.wMm!.toFixed(3)} mm`"
+            testid="em-width"
           />
           <MetricTile
             label="Blocks measured"
@@ -506,6 +515,15 @@ const pitchScaleOff = computed(() => {
           />
         </div>
         <div class="facts mb-3">
+          <v-chip
+            v-if="resolutionText"
+            size="small"
+            variant="tonal"
+            prepend-icon="mdi-magnify-scan"
+            data-testid="em-resolution"
+          >
+            resolution {{ resolutionText }}
+          </v-chip>
           <v-chip size="small" variant="tonal" prepend-icon="mdi-scale-balance" data-testid="em-bias">
             separator check {{ result.biasMm!.toFixed(3) }} mm
           </v-chip>

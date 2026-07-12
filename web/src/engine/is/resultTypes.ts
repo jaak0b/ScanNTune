@@ -1,5 +1,12 @@
 import type { IsAxis } from './types'
 import type { ShaperOption } from './shaperRecommender'
+import type { LineFitRefusalCategory } from './ringAnalyzer'
+
+/**
+ * Why a line contributed no measurement, as a category the UI can count and label:
+ * the fit-level categories plus 'not-traced' for a line the tracer never followed.
+ */
+export type IsLineRefusalCategory = LineFitRefusalCategory | 'not-traced'
 
 /** A point in scan-image pixels. Plain data so it survives the worker boundary. */
 export interface IsPointPx {
@@ -25,6 +32,9 @@ export interface IsLineOutcome {
   accepted: boolean
   /** User-worded reason the line was not used; null for an accepted line. */
   refusalReason: string | null
+  /** Refusal category for counting and labeling; null for an accepted line, and for a
+   *  line never attempted because its axis was not assigned a scan. */
+  refusalCategory: IsLineRefusalCategory | null
   startPx: IsPointPx | null
   endPx: IsPointPx | null
 }
@@ -34,7 +44,8 @@ export interface IsAxisResult {
   axis: IsAxis
   /** True when the axis produced a trustworthy frequency and damping estimate. */
   accepted: boolean
-  /** User-worded reasons the axis (or individual lines) could not be measured. */
+  /** User-worded axis-level reasons the axis could not be measured; per-line reasons live
+   *  in `lines`, summarized by their categories. */
   refusals: string[]
   frequencyHz: number | null
   dampingRatio: number | null
@@ -67,6 +78,8 @@ export interface IsScanInfo {
   orientationSolved: boolean
   flipped: boolean
   rotationQuarterTurns: number
+  /** Geometrically measured scan scale from the solved affine; null when no affine solved. */
+  measuredPxPerMm: number | null
 }
 
 /**

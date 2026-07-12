@@ -5,7 +5,7 @@ import {
   gaussianTrend,
   poolAxisFits,
 } from '../../../src/engine/is/ringAnalyzer'
-import type { LineFit, RingModelParams } from '../../../src/engine/is/ringAnalyzer'
+import type { LineFit, LineFitRefusalCategory, RingModelParams } from '../../../src/engine/is/ringAnalyzer'
 import type { TracedLine } from '../../../src/engine/is/lineTracer'
 
 // Unit-level validation of the ring fitting on synthetic 1-D traces (no imaging): the
@@ -102,6 +102,7 @@ describe('analyzeTracedLine', () => {
     const fit = analyzeTracedLine(makeTrace({ ...TRUE_PARAMS, ringAmpMm: 0.003, lobeAmpMm: 0 }, 0.01))
     expect(fit.accepted).toBe(false)
     expect(fit.refusalReason).toContain('below the detection threshold')
+    expect(fit.refusalCategory).toBe('weak-ringing')
   })
 
   it('recovers the frequency under a slow drift the record-length filter cannot remove', () => {
@@ -126,12 +127,14 @@ describe('analyzeTracedLine', () => {
     const fit = analyzeTracedLine({ speedMmS: 150, tS, lateralMm, noiseWindowStart: 2 })
     expect(fit.accepted).toBe(false)
     expect(fit.refusalReason).toContain('never settles')
+    expect(fit.refusalCategory).toBe('irregular-trace')
   })
 
   it('refuses a fit that lands at the frequency search bound', () => {
     const fit = analyzeTracedLine(makeTrace({ ...TRUE_PARAMS, frequencyHz: 152 }, 0.002))
     expect(fit.accepted).toBe(false)
     expect(fit.refusalReason).toContain('search range')
+    expect(fit.refusalCategory).toBe('out-of-band')
   })
 })
 
@@ -168,14 +171,19 @@ describe('poolAxisFits', () => {
   const goodFit = (f: number, se = 0.05): LineFit => ({
     accepted: true,
     refusalReason: null,
+    refusalCategory: null,
     params: goodParams(f),
     r2: 0.95,
     noiseRmsMm: 0.002,
     frequencySeHz: se,
   })
-  const refusedFit = (reason: string): LineFit => ({
+  const refusedFit = (
+    reason: string,
+    category: LineFitRefusalCategory = 'irregular-trace',
+  ): LineFit => ({
     accepted: false,
     refusalReason: reason,
+    refusalCategory: category,
     params: null,
     r2: 0,
     noiseRmsMm: 0.002,
@@ -192,17 +200,24 @@ describe('poolAxisFits', () => {
     expect(pool.linesUsed).toBe(5)
   })
 
-  it('refuses when fewer than three lines fit, surfacing the line-level reasons', () => {
+  it('refuses when fewer than three lines fit, without repeating the line-level reasons', () => {
     const fits = [goodFit(75), goodFit(75.1), refusedFit('line reason A'), refusedFit('line reason A')]
     const pool = poolAxisFits(fits, [150], [150, 150, 150, 150])
     expect(pool.accepted).toBe(false)
     expect(pool.refusals.some((r) => r.includes('usable ringing fit'))).toBe(true)
-    expect(pool.refusals).toContain('line reason A')
+    // Per-line reasons travel on the per-line outcomes (summarized by category in the UI),
+    // not in the pooled refusal list.
+    expect(pool.refusals).not.toContain('line reason A')
   })
 
   it('carries the rescan-then-reprint advice when most refused lines failed the amplitude gate', () => {
-    const amp = 'The ringing amplitude on this line is below the detection threshold'
-    const fits = [goodFit(75), refusedFit(amp), refusedFit(amp), refusedFit('line reason B')]
+    const amp = 'amplitude below threshold'
+    const fits = [
+      goodFit(75),
+      refusedFit(amp, 'weak-ringing'),
+      refusedFit(amp, 'weak-ringing'),
+      refusedFit('line reason B'),
+    ]
     const pool = poolAxisFits(fits, [150], [150, 150, 150, 150])
     expect(pool.accepted).toBe(false)
     const axisReason = pool.refusals.find((r) => r.includes('usable ringing fit'))!
@@ -211,8 +226,13 @@ describe('poolAxisFits', () => {
   })
 
   it('carries the out-of-range note when most refused lines hit the search-band edge', () => {
-    const edge = 'The frequency fitted on this line sits at the edge of the 20 to 150 Hz search range'
-    const fits = [goodFit(75), refusedFit(edge), refusedFit(edge), refusedFit('line reason B')]
+    const edge = 'frequency at search bound'
+    const fits = [
+      goodFit(75),
+      refusedFit(edge, 'out-of-band'),
+      refusedFit(edge, 'out-of-band'),
+      refusedFit('line reason B'),
+    ]
     const pool = poolAxisFits(fits, [150], [150, 150, 150, 150])
     expect(pool.accepted).toBe(false)
     const axisReason = pool.refusals.find((r) => r.includes('usable ringing fit'))!
@@ -221,8 +241,8 @@ describe('poolAxisFits', () => {
   })
 
   it('keeps the half-turn rescan advice when the refusals have no single dominant cause', () => {
-    const amp = 'The ringing amplitude on this line is below the detection threshold'
-    const fits = [goodFit(75), refusedFit(amp), refusedFit('line reason B'), refusedFit('line reason C')]
+    const amp = 'amplitude below threshold'
+    const fits = [goodFit(75), refusedFit(amp, 'weak-ringing'), refusedFit('line reason B'), refusedFit('line reason C')]
     const pool = poolAxisFits(fits, [150], [150, 150, 150, 150])
     expect(pool.accepted).toBe(false)
     const axisReason = pool.refusals.find((r) => r.includes('usable ringing fit'))!

@@ -2,7 +2,7 @@ import type { Mat, OpenCv } from '../opencv'
 import type { IsTestSpec } from './types'
 import type { IsCouponGeometry } from './couponGeometry'
 import { isCouponGeometry } from './couponGeometry'
-import { analyzeThresholdBands, valueChannel } from '../cvUtils'
+import { analyzeThresholdBands, majorityFilterBinary, valueChannel } from '../cvUtils'
 import { solveCornerHoleCandidates } from '../cornerFiducialSolver'
 import type { AffineMmToPx, CornerCandidate, Point } from '../cornerFiducialSolver'
 import { median } from '../math'
@@ -180,24 +180,65 @@ function tryAlign(cv: OpenCv, objectWhite: Mat, gray: Mat, g: IsCouponGeometry):
     // pockets (about 2.5 times the fiducial area).
     const estimatedPxPerMm = Math.sqrt(baseArea / nominalAreaMm2)
     const expectedHoleAreaPx = (g.fiducialSizeMm * estimatedPxPerMm) ** 2
+
+    // A coupon scanned on its textured build plate shows the plate's speckle through every
+    // opening, littering the binary with noise blobs; a majority filter well under the fiducial
+    // size removes them without moving the surviving centroids. The plate is re-located in the
+    // filtered binary (contour indices differ from the first pass).
+    const denoised = majorityFilterBinary(
+      cv,
+      objectWhite,
+      (g.fiducialSizeMm / 5) * estimatedPxPerMm,
+    )
     const holes: Point[] = []
-    for (let i = 0; i < count; i++) {
-      if (hierarchy.data32S[i * 4 + 3] !== baseIndex) continue // not a hole in the plate
-      const contour = contours.get(i)
-      try {
-        const area = cv.contourArea(contour)
-        if (area < expectedHoleAreaPx * 0.3 || area > expectedHoleAreaPx * 1.8) continue
-        // A fiducial is square, so its minimum-area rectangle is not elongated.
-        const rect = cv.minAreaRect(contour)
-        const long = Math.max(rect.size.width, rect.size.height)
-        const short = Math.min(rect.size.width, rect.size.height)
-        if (short <= 0 || long / short > 2) continue
-        const m = cv.moments(contour)
-        if (m.m00 <= 0) continue
-        holes.push({ x: m.m10 / m.m00, y: m.m01 / m.m00 })
-      } finally {
-        contour.delete()
+    const denoisedContours = new cv.MatVector()
+    const denoisedHierarchy = new cv.Mat()
+    try {
+      cv.findContours(
+        denoised,
+        denoisedContours,
+        denoisedHierarchy,
+        cv.RETR_CCOMP,
+        cv.CHAIN_APPROX_SIMPLE,
+      )
+      const denoisedCount = denoisedContours.size()
+      let denoisedBaseIndex = -1
+      let denoisedBaseArea = 0
+      for (let i = 0; i < denoisedCount; i++) {
+        if (denoisedHierarchy.data32S[i * 4 + 3] !== -1) continue
+        const contour = denoisedContours.get(i)
+        try {
+          const area = cv.contourArea(contour)
+          if (area > denoisedBaseArea) {
+            denoisedBaseArea = area
+            denoisedBaseIndex = i
+          }
+        } finally {
+          contour.delete()
+        }
       }
+      for (let i = 0; i < denoisedCount; i++) {
+        if (denoisedHierarchy.data32S[i * 4 + 3] !== denoisedBaseIndex) continue // not a hole in the plate
+        const contour = denoisedContours.get(i)
+        try {
+          const area = cv.contourArea(contour)
+          if (area < expectedHoleAreaPx * 0.3 || area > expectedHoleAreaPx * 1.8) continue
+          // A fiducial is square, so its minimum-area rectangle is not elongated.
+          const rect = cv.minAreaRect(contour)
+          const long = Math.max(rect.size.width, rect.size.height)
+          const short = Math.min(rect.size.width, rect.size.height)
+          if (short <= 0 || long / short > 2) continue
+          const m = cv.moments(contour)
+          if (m.m00 <= 0) continue
+          holes.push({ x: m.m10 / m.m00, y: m.m01 / m.m00 })
+        } finally {
+          contour.delete()
+        }
+      }
+    } finally {
+      denoised.delete()
+      denoisedContours.delete()
+      denoisedHierarchy.delete()
     }
     if (holes.length < 3) {
       return fail(

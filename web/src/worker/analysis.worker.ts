@@ -200,6 +200,7 @@ async function analyzeEmScan(
   bytes: ArrayBuffer,
   spec: EmTestSpec,
   scanPxPerMm: ScaleReference,
+  expectedDpi: number | null,
   onProgress?: EmProgressCallback,
 ): Promise<EmProcessing> {
   const { report, finish } = stageReporter('EM', onProgress)
@@ -208,7 +209,7 @@ async function analyzeEmScan(
   const img = await decodeToBgr(cv, bytes)
   try {
     const holder: { alignment?: EmAlignment } = {}
-    const result = analyzeEmCoupon(cv, img, spec, scanPxPerMm, holder, report)
+    const result = analyzeEmCoupon(cv, img, spec, scanPxPerMm, expectedDpi, holder, report)
     report({ stage: 'render' })
     const overlay = holder.alignment?.success
       ? await renderEmOverlayBitmap(cv, img, holder.alignment, spec, result)
@@ -255,6 +256,7 @@ async function analyzeIsScans(
   bytesB: ArrayBuffer,
   spec: IsTestSpec,
   scanPxPerMm: ScaleReference,
+  expectedDpi: number | null,
 ): Promise<IsProcessing> {
   const cv = await loadOpenCv()
   const imgA = await decodeToBgr(cv, bytesA)
@@ -262,7 +264,7 @@ async function analyzeIsScans(
     const imgB = await decodeToBgr(cv, bytesB)
     try {
       const holder: { alignments?: IsAlignment[] } = {}
-      const result = analyzeIsCoupon(cv, imgA, imgB, spec, scanPxPerMm, holder)
+      const result = analyzeIsCoupon(cv, imgA, imgB, spec, scanPxPerMm, expectedDpi, holder)
       const imgs = [imgA, imgB]
       const overlays: ImageBitmap[] = []
       try {

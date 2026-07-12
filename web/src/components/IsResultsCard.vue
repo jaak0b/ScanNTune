@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import type { Firmware } from '../engine/gcode/profileTypes'
-import type { IsAxisResult, IsResult } from '../engine/is/resultTypes'
+import type { IsAxisResult, IsLineRefusalCategory, IsResult } from '../engine/is/resultTypes'
+import { F_MIN_HZ, F_MAX_HZ } from '../engine/is/types'
 import {
   formatKlipperShaper,
   formatMarlinShaper,
@@ -31,16 +32,28 @@ function percent(v: number): string {
   return `${(100 * v).toFixed(1)}%`
 }
 
-// Several lines of an axis often fail for the same reason, and the engine reports each line;
-// verbatim repetition adds no information, so identical reasons are collapsed. With a single
-// distinct reason the count prefix is dropped too; per-reason counts only matter when the
-// reasons differ. Shown only for a refused axis: on a measured axis the per-line outcomes
-// are already visible on the scan cards and overlays.
-function dedupedRefusals(a: IsAxisResult): string[] {
-  const counts = new Map<string, number>()
-  for (const reason of a.refusals) counts.set(reason, (counts.get(reason) ?? 0) + 1)
-  if (counts.size === 1) return [...counts.keys()]
-  return [...counts.entries()].map(([reason, n]) => (n > 1 ? `${n} lines: ${reason}` : reason))
+// Per-line refusals are summarized as one labeled count per category, so a refused axis
+// reads as a short list of facts instead of repeated prose; each label describes what the
+// line looked like, not which internal gate refused it. The full per-line reason stays on
+// the line's overlay marker. Shown only for a refused axis: on a measured axis the per-line
+// outcomes are already visible on the scan cards and overlays.
+const CATEGORY_LABELS: Record<NonNullable<IsLineRefusalCategory>, string> = {
+  'weak-ringing': 'No ringing visible above the scan noise',
+  'irregular-trace': 'Trace too irregular to read as ringing',
+  'out-of-band': `Ringing outside the ${F_MIN_HZ} to ${F_MAX_HZ} Hz measurable range`,
+  'not-traced': 'Line not found in the scan',
+}
+
+function refusalCounts(a: IsAxisResult): string[] {
+  const counts = new Map<IsLineRefusalCategory, number>()
+  for (const line of a.lines) {
+    if (line.refusalCategory !== null) {
+      counts.set(line.refusalCategory, (counts.get(line.refusalCategory) ?? 0) + 1)
+    }
+  }
+  return (Object.keys(CATEGORY_LABELS) as IsLineRefusalCategory[])
+    .filter((c) => counts.has(c))
+    .map((c) => `${CATEGORY_LABELS[c]}: ${counts.get(c)} ${counts.get(c) === 1 ? 'line' : 'lines'}`)
 }
 
 // The ready-to-paste snippet in the selected firmware's own configuration language. Klipper
@@ -160,7 +173,8 @@ const snippet = computed(() => {
           class="soft-alert"
           :data-testid="`is-refusals-${axis.axis}`"
         >
-          <p v-for="(reason, i) in dedupedRefusals(axis)" :key="i" class="refusal">{{ reason }}</p>
+          <p v-for="(reason, i) in axis.refusals" :key="i" class="refusal">{{ reason }}</p>
+          <p v-for="(row, i) in refusalCounts(axis)" :key="`c${i}`" class="refusal count-row">{{ row }}</p>
         </v-alert>
       </div>
 
@@ -199,6 +213,10 @@ const snippet = computed(() => {
 }
 .refusal + .refusal {
   margin-top: 6px;
+}
+.refusal + .count-row,
+.count-row + .count-row {
+  margin-top: 2px;
 }
 .soft-alert {
   font-size: 0.875rem;

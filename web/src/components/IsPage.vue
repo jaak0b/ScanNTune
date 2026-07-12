@@ -5,6 +5,13 @@ import { useCalibration } from '../stores/useCalibration'
 import { usePrinterProfiles } from '../stores/usePrinterProfiles'
 import { readBytes } from '../util/preview'
 import { scaleReferenceAtDpi } from '../engine/scannerCalibration'
+import {
+  evaluateScanSetResolution,
+  expectedFromCalibration,
+  resolutionBadge,
+  resolutionRowValue,
+} from '../util/scanResolution'
+import type { ScanResolutionVerdict } from '../util/scanResolution'
 import { analyzeIsScans } from '../workerClient'
 import type { IsProcessing } from '../workerClient'
 import type { Firmware } from '../engine/gcode/profileTypes'
@@ -72,11 +79,14 @@ const partColorsItems = [
 ]
 const scanPlanNote = computed(() => {
   if (scanPlace.value === 'plate') {
-    return (
+    const placement =
       'The coupon prints at the front edge of the bed so the plate edge can rest on the ' +
-      'scanner glass. Use this for filaments that are hard to remove, like TPU or PETG. ' +
-      'The plate color must contrast with the filament.'
-    )
+      'scanner glass. Use this for filaments that are hard to remove, like TPU or PETG.'
+    return partColors.value === 'base'
+      ? placement +
+          ' The contrasting base backs the open window, so the build plate surface does not matter.'
+      : placement +
+          ' Use a light, even build plate; a dark or textured plate shows through the window and the scan is refused.'
   }
   return partColors.value === 'base'
     ? 'A base prints in a second color under the coupon, with a filament swap pause ' +
@@ -107,7 +117,7 @@ const spec = computed<IsTestSpec>(() => {
     linePitchMm: linePitch.value ?? specDefaults.value.linePitchMm,
     axes: ['x', 'y'] as IsAxis[],
     placement: (scanPlace.value === 'plate' ? 'front' : 'center') as IsTestSpec['placement'],
-    contrastBase: scanPlace.value === 'part' && partColors.value === 'base',
+    contrastBase: partColors.value === 'base',
   }
 })
 
@@ -249,7 +259,25 @@ interface ScanCard {
   fileName: string
   bitmap: ImageBitmap
   rows: ScanCardRow[]
+  /** Badge and explanation when this scan's resolution verdict failed; null otherwise. */
+  resolutionProblem: { text: string; explanation: string } | null
 }
+// Per-scan resolution verdicts over the analyzed pair, judged against the calibration's expected
+// resolution, so the offending scan's own card carries the badge. Scans without a solved affine
+// have no measured resolution and get no verdict.
+const resolutionVerdicts = computed<(ScanResolutionVerdict | null)[]>(() => {
+  const scans = processing.value?.result.scans ?? []
+  const withScale = scans
+    .map((s, index) => ({ index, pxPerMm: s.measuredPxPerMm }))
+    .filter((s): s is { index: number; pxPerMm: number } => s.pxPerMm != null && s.pxPerMm > 0)
+  const verdicts = evaluateScanSetResolution(
+    withScale.map((s) => ({ pxPerMm: s.pxPerMm })),
+    expectedFromCalibration(calibration.calibration),
+  )
+  const byIndex: (ScanResolutionVerdict | null)[] = scans.map(() => null)
+  withScale.forEach((s, i) => (byIndex[s.index] = verdicts[i]))
+  return byIndex
+})
 const scanCards = computed<ScanCard[]>(() => {
   const p = processing.value
   const r = p?.result
@@ -259,6 +287,7 @@ const scanCards = computed<ScanCard[]>(() => {
   return p.overlays.map((bitmap, i) => {
     const info = r.scans[i] ?? null
     const axes = r.axes.filter((a) => a.scanIndex === i)
+    const verdict = resolutionVerdicts.value[i] ?? null
     const rows: ScanCardRow[] = [
       {
         label: 'Fiducials',
@@ -274,6 +303,11 @@ const scanCards = computed<ScanCard[]>(() => {
         label: 'Rotation',
         value: info?.orientationSolved ? `${info.rotationQuarterTurns * 90} degrees` : 'Not resolved',
         sev: info?.orientationSolved ? 'ok' : 'mute',
+      },
+      {
+        label: 'Resolution',
+        value: resolutionRowValue(info?.measuredPxPerMm),
+        sev: info?.measuredPxPerMm == null ? 'mute' : verdict && !verdict.ok ? 'warn' : 'ok',
       },
       {
         label: 'Measures',
@@ -295,6 +329,7 @@ const scanCards = computed<ScanCard[]>(() => {
       fileName: scanFiles.value[i]?.name ?? '',
       bitmap,
       rows,
+      resolutionProblem: resolutionBadge(verdict),
     }
   })
 })
@@ -354,7 +389,7 @@ async function analyze(): Promise<void> {
     // The calibration's scale error holds across resolutions; the scan is expected at the
     // calibration DPI, so the calibration is priced at exactly that resolution.
     const scanPxPerMm = scaleReferenceAtDpi(cal, cal.dpi)
-    processing.value = await analyzeIsScans(bytesA, bytesB, usedSpec, scanPxPerMm)
+    processing.value = await analyzeIsScans(bytesA, bytesB, usedSpec, scanPxPerMm, cal.dpi)
     analyzedFirmware.value = store.selected?.firmware ?? 'Klipper'
   } catch (err) {
     console.error('Input shaper scan analysis failed', err)
@@ -457,7 +492,6 @@ async function analyze(): Promise<void> {
             data-testid="is-scan-plan"
           />
           <v-select
-            v-if="scanPlace === 'part'"
             v-model="partColors"
             :items="partColorsItems"
             label="Colors"
@@ -721,6 +755,14 @@ async function analyze(): Promise<void> {
             >
               {{ card.fileName }}
             </div>
+            <template v-if="card.resolutionProblem">
+              <span class="pill warn" :data-testid="`is-scan-resolution-pill-${card.index}`">
+                <span class="dot"></span>{{ card.resolutionProblem.text }}
+              </span>
+              <p class="pill-note" :data-testid="`is-scan-resolution-note-${card.index}`">
+                {{ card.resolutionProblem.explanation }}
+              </p>
+            </template>
             <div class="status">
               <template v-for="r in card.rows" :key="r.label">
                 <v-icon :color="CARD_COLOR[r.sev]" size="16">{{ CARD_ICON[r.sev] }}</v-icon>
@@ -902,6 +944,33 @@ async function analyze(): Promise<void> {
   overflow-wrap: anywhere;
   margin-top: -8px;
   margin-bottom: 10px;
+}
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  font-weight: 600;
+  padding: 3px 10px;
+  border-radius: 999px;
+  margin-bottom: 8px;
+}
+.pill .dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+}
+.pill.warn {
+  background: rgba(var(--v-theme-warning), 0.16);
+  color: rgb(var(--v-theme-warning));
+}
+.pill.warn .dot {
+  background: rgb(var(--v-theme-warning));
+}
+.pill-note {
+  font-size: 12px;
+  color: rgba(var(--v-theme-on-surface), 0.6);
+  margin: 0 0 10px;
 }
 .status {
   display: grid;

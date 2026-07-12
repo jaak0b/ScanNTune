@@ -38,8 +38,8 @@ import type { TracedLine } from './lineTracer'
 // The damped quadrature pair is the free response of the second-order underdamped machine
 // axis; reported amplitude is sqrt(a^2 + b^2) and phase atan2(-b, a).
 
-export const F_MIN_HZ = 20
-export const F_MAX_HZ = 150
+export { F_MIN_HZ, F_MAX_HZ } from './types'
+import { F_MIN_HZ, F_MAX_HZ } from './types'
 /** Grid step of the periodogram seed search. */
 export const PERIODOGRAM_GRID_HZ = 0.5
 /**
@@ -94,9 +94,18 @@ export interface RingModelParams {
   phaseRad: number
 }
 
+/**
+ * Why a traced line's fit was refused, as a category: 'weak-ringing' is an amplitude below
+ * the detection threshold (the line looks smooth), 'irregular-trace' is a trace that wiggles
+ * but not like a decaying ring (print defect or scan artifact), 'out-of-band' is a fit at
+ * the edge of the frequency search range (the resonance likely lies outside it).
+ */
+export type LineFitRefusalCategory = 'weak-ringing' | 'irregular-trace' | 'out-of-band'
+
 export interface LineFit {
   accepted: boolean
   refusalReason: string | null
+  refusalCategory: LineFitRefusalCategory | null
   params: RingModelParams | null
   r2: number
   noiseRmsMm: number
@@ -432,6 +441,7 @@ export function analyzeTracedLine(line: TracedLine): LineFit {
   const noFit = (reason: string): LineFit => ({
     accepted: false,
     refusalReason: reason,
+    refusalCategory: 'irregular-trace',
     params: null,
     r2: 0,
     noiseRmsMm,
@@ -483,9 +493,10 @@ export function analyzeTracedLine(line: TracedLine): LineFit {
   for (let i = 0; i < wN; i++) sst += (yw[i] - mean) * (yw[i] - mean)
   const r2 = sst > 0 ? 1 - fit.ssr / sst : 0
 
-  const refuse = (reason: string): LineFit => ({
+  const refuse = (reason: string, category: LineFitRefusalCategory): LineFit => ({
     accepted: false,
     refusalReason: reason,
+    refusalCategory: category,
     params,
     r2,
     noiseRmsMm,
@@ -498,12 +509,14 @@ export function analyzeTracedLine(line: TracedLine): LineFit {
     return refuse(
       'The ringing amplitude on this line is below the detection threshold (4 times the noise floor), ' +
         'so the line was skipped.',
+      'weak-ringing',
     )
   }
   if (r2 < MIN_R2) {
     return refuse(
       'The ringing model does not fit the traced line (low coefficient of determination). ' +
         'The trace may be corrupted by print defects or scan artifacts.',
+      'irregular-trace',
     )
   }
   if (
@@ -513,6 +526,7 @@ export function analyzeTracedLine(line: TracedLine): LineFit {
     return refuse(
       `The frequency fitted on this line sits at the edge of the ${F_MIN_HZ} to ${F_MAX_HZ} Hz ` +
         'search range, so it cannot be trusted.',
+      'out-of-band',
     )
   }
   // A polish that walks to the edge of the seed's search band contradicts the spectrum: the
@@ -524,11 +538,13 @@ export function analyzeTracedLine(line: TracedLine): LineFit {
     return refuse(
       'The model fit and the spectrum of the trace disagree on the ringing frequency, so the ' +
         'fit cannot be trusted. The trace may be corrupted by print defects or scan artifacts.',
+      'irregular-trace',
     )
   }
   if (params.dampingRatio <= ZETA_MIN || params.dampingRatio >= ZETA_MAX) {
     return refuse(
       'The fitted damping ratio sits at the edge of the physically plausible range, so the fit cannot be trusted.',
+      'irregular-trace',
     )
   }
 
@@ -549,7 +565,7 @@ export function analyzeTracedLine(line: TracedLine): LineFit {
     }
   }
 
-  return { accepted: true, refusalReason: null, params, r2, noiseRmsMm, frequencySeHz }
+  return { accepted: true, refusalReason: null, refusalCategory: null, params, r2, noiseRmsMm, frequencySeHz }
 }
 
 /**
@@ -557,16 +573,18 @@ export function analyzeTracedLine(line: TracedLine): LineFit {
  * frequency and damping, and the confidence gate on the pooled frequency.
  */
 export function poolAxisFits(fits: LineFit[], speedsMmS: number[], lineSpeeds: number[]): AxisPool {
-  const refusals: string[] = []
+  const refused: LineFit[] = []
   const accepted: { fit: LineFit; speed: number }[] = []
   for (let i = 0; i < fits.length; i++) {
     if (fits[i].accepted) accepted.push({ fit: fits[i], speed: lineSpeeds[i] })
-    else if (fits[i].refusalReason) refusals.push(fits[i].refusalReason!)
+    else refused.push(fits[i])
   }
 
+  // The pool's refusals carry only the axis-level verdict; the per-line reasons travel with
+  // the per-line outcomes, where the UI summarizes them by category.
   const refuse = (reason: string): AxisPool => ({
     accepted: false,
-    refusals: [...new Set([reason, ...refusals])],
+    refusals: [reason],
     frequencyHz: null,
     dampingRatio: null,
     frequencyCi95Hz: null,
@@ -580,17 +598,17 @@ export function poolAxisFits(fits: LineFit[], speedsMmS: number[], lineSpeeds: n
     // signal), a majority of band-edge refusals means the resonance is probably outside the
     // searchable band, and anything else most often points at the scanner's lamp shadow
     // crossing the measured edges.
-    const amplitudeCount = refusals.filter((r) => r.includes('below the detection threshold')).length
-    const bandEdgeCount = refusals.filter((r) => r.includes('search range')).length
+    const amplitudeCount = refused.filter((f) => f.refusalCategory === 'weak-ringing').length
+    const bandEdgeCount = refused.filter((f) => f.refusalCategory === 'out-of-band').length
     let advice =
       `When most lines of a scan are refused, the scanner's lamp shadow is often falling ` +
       `across the measured edges; rescan with the coupon rotated a half turn on the glass.`
-    if (amplitudeCount * 2 > refusals.length) {
+    if (amplitudeCount * 2 > refused.length) {
       advice =
         'The ringing amplitude is below the detection threshold on most lines. Rescan with ' +
         'the coupon rotated a half turn on the glass, since lamp shadow can weaken the traced ' +
         'ringing; if it still reads too weak, raise the corner speed or the acceleration and reprint.'
-    } else if (bandEdgeCount * 2 > refusals.length) {
+    } else if (bandEdgeCount * 2 > refused.length) {
       advice = 'The true resonance likely lies outside the measurable range.'
     }
     return refuse(
@@ -651,7 +669,7 @@ export function poolAxisFits(fits: LineFit[], speedsMmS: number[], lineSpeeds: n
 
   return {
     accepted: true,
-    refusals,
+    refusals: [],
     frequencyHz: fMedian,
     dampingRatio: medianOf(accepted.map((a) => a.fit.params!.dampingRatio)),
     frequencyCi95Hz: ci95,

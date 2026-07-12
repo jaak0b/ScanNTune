@@ -153,6 +153,86 @@ describe('alignEmCoupon', () => {
   )
 
   it(
+    'aligns a coupon scanned on its textured build plate',
+    async () => {
+      const cv = await getCv()
+      const pxPerMm = 8
+      const marginMm = 4
+      const plateGray = 150
+      const speckleGray = 60
+      // The coupon rendered directly on the plate tone: the margin and the fiducial holes show
+      // the plate, exactly as a print scanned without removal does.
+      const coupon = renderEmScan({
+        spec,
+        trueWidthMm: 0.42,
+        pxPerMm,
+        marginMm,
+        plasticGray: 20,
+        backgroundGray: plateGray,
+      })
+      // Composite onto a larger square plate with dark speckle (a textured PEI surface) on a
+      // white scanner-lid background: four intensity populations, so no two-level Otsu band
+      // isolates the plastic.
+      const plateMarginPx = Math.round(30 * pxPerMm)
+      const width = coupon.width + 2 * plateMarginPx
+      const height = coupon.height + 2 * plateMarginPx
+      const data = new Uint8ClampedArray(width * height * 4)
+      let seed = 987654321
+      const rand = () => {
+        seed = (seed * 1664525 + 1013904223) >>> 0
+        return seed / 4294967296
+      }
+      const platePadPx = Math.round(10 * pxPerMm)
+      for (let y = 0; y < height; y++) {
+        for (let x = 0; x < width; x++) {
+          const onPlate =
+            x >= plateMarginPx - platePadPx &&
+            x < width - plateMarginPx + platePadPx &&
+            y >= plateMarginPx - platePadPx &&
+            y < height - plateMarginPx + platePadPx
+          const inCoupon =
+            x >= plateMarginPx &&
+            x < width - plateMarginPx &&
+            y >= plateMarginPx &&
+            y < height - plateMarginPx
+          let g8: number
+          if (inCoupon) {
+            g8 = coupon.data[((y - plateMarginPx) * coupon.width + (x - plateMarginPx)) * 4]
+          } else if (onPlate) {
+            g8 = rand() < 0.3 ? speckleGray : plateGray
+          } else {
+            g8 = 250
+          }
+          const i = (y * width + x) * 4
+          data[i] = g8
+          data[i + 1] = g8
+          data[i + 2] = g8
+          data[i + 3] = 255
+        }
+      }
+      const img = rgbaToBgrMat(cv, { data, width, height })
+      try {
+        const al = alignEmCoupon(cv, img, spec)
+        expect(al.success).toBe(true)
+        expect(al.flipped).toBe(false)
+        for (const f of g.fiducials) {
+          const expected = renderedPx(f.xMm, f.yMm, pxPerMm, marginMm, 0, 0, false)
+          const actual = mmToPx(al, f.xMm, f.yMm)
+          expect(
+            Math.hypot(
+              actual.x - (expected.x + plateMarginPx),
+              actual.y - (expected.y + plateMarginPx),
+            ),
+          ).toBeLessThan(1.5)
+        }
+      } finally {
+        img.delete()
+      }
+    },
+    120000,
+  )
+
+  it(
     'fails with a user-worded reason on a blank image',
     async () => {
       const cv = await getCv()
