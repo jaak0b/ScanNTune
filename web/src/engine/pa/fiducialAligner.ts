@@ -1,7 +1,8 @@
 import type { Mat, OpenCv } from '../opencv'
 import type { PaTestSpec } from './types'
 import { couponGeometry } from './types'
-import { analyzeThresholdBands } from '../cvUtils'
+import { analyzeThresholdBands, majorityFilterBinary } from '../cvUtils'
+import { selectCornerHoles } from '../cornerFiducialSolver'
 import { MIN_ALIGN_PX_PER_MM } from '../resolutionGate'
 
 // Locates the PA coupon's three square corner-hole fiducials in a scan and solves the
@@ -143,6 +144,14 @@ function tryAlign(
     const estimatedPxPerMm = Math.sqrt(baseArea / nominalBaseAreaMm2)
     const expectedHoleAreaPx = (g.fiducialSizeMm * estimatedPxPerMm) ** 2
     const kernelPx = Math.max(3, Math.round((g.fiducialSizeMm / 2) * estimatedPxPerMm))
+    // A coupon scanned on its textured build plate shows the plate's speckle through every
+    // opening, littering the binary with noise blobs; a majority filter well under the fiducial
+    // size removes them without moving the surviving centroids.
+    const denoised = majorityFilterBinary(
+      cv,
+      objectWhite,
+      (g.fiducialSizeMm / 5) * estimatedPxPerMm,
+    )
     const closed = new cv.Mat()
     const holeContours = new cv.MatVector()
     const holeHierarchy = new cv.Mat()
@@ -153,7 +162,7 @@ function tryAlign(
       // lines narrower than the kernel while preserving the fiducial holes and their centroids, is
       // shape-independent for a symmetric kernel.
       const kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(kernelPx, kernelPx))
-      cv.morphologyEx(objectWhite, closed, cv.MORPH_CLOSE, kernel)
+      cv.morphologyEx(denoised, closed, cv.MORPH_CLOSE, kernel)
       kernel.delete()
       cv.findContours(closed, holeContours, holeHierarchy, cv.RETR_CCOMP, cv.CHAIN_APPROX_SIMPLE)
 
@@ -176,7 +185,6 @@ function tryAlign(
       }
 
       const holes: Point[] = []
-      let candidateCount = 0
       for (let i = 0; i < holeCount; i++) {
         if (holeHierarchy.data32S[i * 4 + 3] !== closedBaseIndex) continue // not a hole in the base
         const contour = holeContours.get(i)
@@ -188,7 +196,6 @@ function tryAlign(
           const long = Math.max(rect.size.width, rect.size.height)
           const short = Math.min(rect.size.width, rect.size.height)
           if (short <= 0 || long / short > 2) continue
-          candidateCount++
           const m = cv.moments(contour)
           if (m.m00 <= 0) continue
           holes.push({ x: m.m10 / m.m00, y: m.m01 / m.m00 })
@@ -196,14 +203,15 @@ function tryAlign(
           contour.delete()
         }
       }
-      if (candidateCount !== 3 || holes.length !== 3) {
-        return fail(
-          `Expected the coupon's 3 corner holes but found ${candidateCount}. Make sure the coupon is scanned face down with no hole covered.`,
-        )
-      }
+      // A plate-backed scan shows the plate's speckle through the openings, so hole-like blobs
+      // beyond the three fiducials survive the per-hole gates; the fiducial triple is selected
+      // by its mutual geometry.
+      const selected = selectCornerHoles(holes, g.fiducials, estimatedPxPerMm)
+      if (!selected.ok) return fail(selected.reason)
 
-      return solveFromHoles(holes, g)
+      return solveFromHoles(selected.holes, g)
     } finally {
+      denoised.delete()
       closed.delete()
       holeContours.delete()
       holeHierarchy.delete()

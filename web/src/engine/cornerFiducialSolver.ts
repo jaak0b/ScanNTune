@@ -125,6 +125,98 @@ export function solveCornerHoleCandidates(
   return { candidates, reason: null }
 }
 
+export type CornerSelectResult = { ok: true; holes: Point[] } | { ok: false; reason: string }
+
+// Selecting among more than this many hole candidates would mean the binary is mostly noise;
+// the O(n^3) triple search stays trivial below it.
+const MAX_HOLE_CANDIDATES = 40
+
+/**
+ * Selects the three fiducial holes among a larger set of hole candidates by matching the
+ * triple's pairwise distances against the nominal fiducial layout (point-pattern matching by
+ * invariant pairwise distances). A coupon scanned on its textured build plate shows the plate
+ * through every opening, so speckle blobs pass the per-hole size and shape gates and the
+ * fiducials must be identified by their mutual geometry instead of by count. The match must be
+ * unique up to shared holes; two disjoint matching triples mean the scene is ambiguous.
+ * `estimatedPxPerMm` (from the plate outline area) anchors the absolute scale so a
+ * similar-shaped triple of noise blobs at a different size cannot match.
+ */
+export function selectCornerHoles(
+  candidates: Point[],
+  nominal: { xMm: number; yMm: number }[],
+  estimatedPxPerMm: number,
+): CornerSelectResult {
+  if (candidates.length < 3) {
+    return {
+      ok: false,
+      reason: `Expected the coupon's 3 corner holes but found ${candidates.length}. Make sure the coupon is scanned face down with no hole covered.`,
+    }
+  }
+  if (candidates.length === 3) return { ok: true, holes: candidates }
+  if (candidates.length > MAX_HOLE_CANDIDATES) {
+    return {
+      ok: false,
+      reason:
+        'The scan shows too many hole-like shapes to identify the coupon fiducials. Clean the scanner glass and the coupon, then rescan.',
+    }
+  }
+
+  const nominalDists = [
+    Math.hypot(nominal[0].xMm - nominal[1].xMm, nominal[0].yMm - nominal[1].yMm),
+    Math.hypot(nominal[1].xMm - nominal[2].xMm, nominal[1].yMm - nominal[2].yMm),
+    Math.hypot(nominal[0].xMm - nominal[2].xMm, nominal[0].yMm - nominal[2].yMm),
+  ].sort((a, b) => a - b)
+
+  let best: { holes: Point[]; indices: number[]; score: number } | null = null
+  let ambiguousWith: number[] | null = null
+  for (let i = 0; i < candidates.length; i++) {
+    for (let j = i + 1; j < candidates.length; j++) {
+      for (let k = j + 1; k < candidates.length; k++) {
+        const p = [candidates[i], candidates[j], candidates[k]]
+        const dists = [
+          Math.hypot(p[0].x - p[1].x, p[0].y - p[1].y),
+          Math.hypot(p[1].x - p[2].x, p[1].y - p[2].y),
+          Math.hypot(p[0].x - p[2].x, p[0].y - p[2].y),
+        ].sort((a, b) => a - b)
+        const ratios = dists.map((d, n) => d / nominalDists[n])
+        const rMin = Math.min(...ratios)
+        const rMax = Math.max(...ratios)
+        // The same 10% scale-consistency tolerance the corner solver's anisotropy gate uses,
+        // plus an absolute-scale anchor against the plate-derived px/mm.
+        if (rMin <= 0 || rMax / rMin - 1 > 0.1) continue
+        const rMean = (ratios[0] + ratios[1] + ratios[2]) / 3
+        if (Math.abs(rMean / estimatedPxPerMm - 1) > 0.2) continue
+        const score = rMax / rMin - 1
+        const indices = [i, j, k]
+        const prev = best
+        if (!prev || score < prev.score) {
+          if (prev && indices.filter((n) => prev.indices.includes(n)).length < 2) {
+            ambiguousWith = prev.indices
+          }
+          best = { holes: p, indices, score }
+        } else if (indices.filter((n) => prev.indices.includes(n)).length < 2) {
+          ambiguousWith = indices
+        }
+      }
+    }
+  }
+  if (!best) {
+    return {
+      ok: false,
+      reason:
+        'No three of the detected holes match the coupon fiducial layout. Make sure the coupon is scanned face down with no hole covered.',
+    }
+  }
+  if (ambiguousWith && ambiguousWith.filter((n) => best.indices.includes(n)).length < 2) {
+    return {
+      ok: false,
+      reason:
+        'Several hole patterns in the scan match the coupon fiducial layout. Remove other objects from the glass and rescan.',
+    }
+  }
+  return { ok: true, holes: best.holes }
+}
+
 /**
  * Solves orientation and affine from the three detected fiducial hole centroids.
  * `nominal` is the coupon's fiducial layout in coupon mm where nominal[1] is the
