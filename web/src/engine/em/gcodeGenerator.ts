@@ -26,8 +26,15 @@ import {
 } from './types'
 
 export { EDGE_MARGIN_MM, HIGH_FLOW_WARNING_THRESHOLD_MM3_S }
-/** How far each comb line runs past its row boundary onto the band/rail perimeters. */
-export const ANCHOR_OVERLAP_MM = 1
+/**
+ * How far each comb line runs past its row boundary onto the band/rail perimeters.
+ * Long enough that the wall crossing sits past the acceleration ramp and the nozzle
+ * pressure lag after the preceding travel, so the bead is at full width where it
+ * welds onto the perimeter (a starved tip only kisses the bead and snaps off).
+ * Opposing rows overrun the 4 mm rail centreline by 0.5 mm each; the tips sit at
+ * distinct X positions on top of the solid rail, so they never cross.
+ */
+export const ANCHOR_OVERLAP_MM = 2.5
 export function generateEmGcode(
   profile: PrinterProfile,
   filament: FilamentProfile,
