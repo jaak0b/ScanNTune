@@ -7,9 +7,9 @@ describe('useApp', () => {
     setActivePinia(createPinia())
   })
 
-  it('starts on the scan screen', () => {
+  it('starts on the skew screen', () => {
     const app = useApp()
-    expect(app.screen).toBe('scan')
+    expect(app.screen).toBe('skew')
   })
 
   it('switches between screens', () => {
@@ -18,8 +18,8 @@ describe('useApp', () => {
     expect(app.screen).toBe('calibration')
     app.goPa()
     expect(app.screen).toBe('pa')
-    app.goScan()
-    expect(app.screen).toBe('scan')
+    app.goSkew()
+    expect(app.screen).toBe('skew')
   })
 
   it('opens the profile editor with the profile id to edit', () => {
