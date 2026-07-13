@@ -6,3 +6,8 @@ dist-ssr
 /playwright/.cache
 *.local
 *.tsbuildinfo
+
+# Stryker mutation testing output
+/reports
+/.stryker-tmp
+stryker.log

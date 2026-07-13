@@ -1,0 +1,32 @@
+name: Mutation Testing
+
+# Runs the full-scope Stryker mutation run over the core measurement engine. Manual trigger
+# only: a full run is far too slow for pull requests or pushes, and local machines must never
+# run it either (locally, `npm run mutation` mutates only the files changed against master).
+on:
+  workflow_dispatch:
+
+defaults:
+  run:
+    working-directory: web
+
+jobs:
+  mutation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true # the mutation suite reads the synthetic scan fixtures under web/e2e/fixtures
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - run: npm run mutation:full
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mutation-report
+          path: web/reports/mutation

@@ -9,7 +9,9 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
-    "e2e": "playwright test"
+    "e2e": "playwright test",
+    "mutation": "node scripts/mutation-changed.mjs",
+    "mutation:full": "stryker run"
   },
   "dependencies": {
     "@mdi/font": "^7.4.47",
@@ -22,6 +24,8 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.61.1",
+    "@stryker-mutator/core": "^9.6.1",
+    "@stryker-mutator/vitest-runner": "^9.6.1",
     "@types/node": "^26.1.0",
     "@types/pngjs": "^6.0.5",
     "@vitejs/plugin-vue": "^6.0.7",
