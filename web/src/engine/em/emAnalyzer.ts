@@ -50,7 +50,8 @@ export interface EmScanDiagnostics {
 export interface EmResult {
   success: boolean
   failureReason: string | null
-  /** Deposited bead width in true mm (median after MAD rejection), null on failure. */
+  /** Deposited bead width in true mm: each scan's median after MAD rejection, combined as
+   *  the equal-weight mean over the analyzed scans. Null on failure. */
   wMm: number | null
   /** Separator cross-check residual in mm; near zero when block and separator agree. */
   biasMm: number | null
@@ -113,12 +114,13 @@ export function analyzeEmCoupon(
 }
 
 /**
- * Analyzes one or two scans of the SAME printed EM coupon and pools their per-gap width samples
- * before the MAD cleaning and median summary (a standard pooled-sample estimator). The optional
- * second scan is the coupon rotated on the glass, typically 180 degrees: a one-sided scanner-lamp
- * bias then enters the two orientations with opposite signs and cancels in the pooled median.
- * With one image this is exactly the single-scan analysis. Each scan is aligned and measured
- * independently; `result.scans` reports each scan's own alignment, orientation, and resolution.
+ * Analyzes one or two scans of the SAME printed EM coupon. Each scan is aligned, measured,
+ * cleaned, and summarized independently, and the per-scan medians are combined with equal
+ * weight (the mean, a paired-design estimator). The optional second scan is the coupon
+ * rotated on the glass, typically 180 degrees: a one-sided scanner-lamp bias then enters the
+ * two orientations with opposite signs and cancels in the equal-weight combination. With one
+ * image this is exactly the single-scan analysis. `result.scans` reports each scan's own
+ * alignment, orientation, and resolution.
  */
 export function analyzeEmCoupons(
   cv: OpenCv,
@@ -226,26 +228,15 @@ export function analyzeEmCoupons(
     scans[i].pitchScale = measurement.pitchScale
   }
 
-  // One w sample per gap, pooled over all scans BEFORE the outlier cleaning and the median, so
-  // an orientation-dependent lamp bias contributes both of its signs to the same pooled
-  // estimator. Per gap: the measured local pitch (adjacent line centres) minus the gap.
-  const all: { row: 0 | 1; blockIndex: number; wMm: number }[] = []
-  for (const measurement of measurements) {
-    for (const b of measurement.blocks) {
-      for (let j = 0; j < b.gapsMm.length; j++) {
-        const localPitch = b.lineCentersMm[j + 1] - b.lineCentersMm[j]
-        all.push({ row: b.row, blockIndex: b.blockIndex, wMm: localPitch - b.gapsMm[j] })
-      }
-    }
-  }
-
-  const values = all.map((s) => s.wMm)
-  const center = median(values)
-  const mad = median(values.map((v) => Math.abs(v - center)))
-  const cutoff = MAD_CUTOFF * MAD_TO_SIGMA * mad
-  // A zero MAD means over half the samples agree exactly; keep those rather than reject all.
-  const samples =
-    mad > 0 ? all.filter((s) => Math.abs(s.wMm - center) <= cutoff) : all.filter((s) => s.wMm === center)
+  // Each scan is summarized on its own (the existing MAD cleaning, then the median of its
+  // per-gap w samples) and the scans are combined with equal weight, as the mean of the
+  // per-scan medians (a paired-design estimator). The two orientations of a 180 degree pair
+  // carry opposite-sign lamp biases, and equal weighting cancels them exactly even when the
+  // cleaning leaves the scans with unequal sample counts; a sample-level pool would lean
+  // toward whichever scan kept more samples. With a single scan this is the plain cleaned
+  // median, unchanged.
+  const perScan = measurements.map((m) => cleanedScanSamples(m))
+  const samples = perScan.flatMap((p) => p.samples)
 
   // Summary-stage refusals carry no single offending scan; they are reported on the last one.
   const lastScan = imagesBgr.length - 1
@@ -256,7 +247,7 @@ export function analyzeEmCoupons(
     )
   }
 
-  const wMm = median(samples.map((s) => s.wMm))
+  const wMm = mean(perScan.map((p) => p.wMm))
   if (!(wMm > W_MIN_MM && wMm < W_MAX_MM)) {
     return failAt(
       lastScan,
@@ -276,8 +267,9 @@ export function analyzeEmCoupons(
     // to zero; a one-sided lamp penumbra shifts one flank only, and that residual tracks
     // the bead-width bias (each gap loses the shift, w gains it). Warn once the implied error
     // exceeds one percent of the width, the smallest flow-ratio step a user acts on; a benign
-    // scan's baseline asymmetry sits an order of magnitude below that. The flank offsets are
-    // pooled over all scans, so a lamp bias that cancels between two orientations does not warn.
+    // scan's baseline asymmetry sits an order of magnitude below that. The per-scan asymmetries
+    // are combined with equal weight, so a lamp bias that cancels between two orientations does
+    // not warn.
     shadowWarning: flankAsymmetryMm !== null && Math.abs(flankAsymmetryMm) > 0.01 * wMm,
     pitchScale: median(measurements.map((m) => m.pitchScale)),
     samples,
@@ -400,14 +392,48 @@ function assessEmBackdrop(
   return assessMeasurementBackdrop(plastic.filter(Number.isFinite), detrendTones(backdrop))
 }
 
-// The flank offsets are pooled over all analyzed scans before the two medians, so a lamp-side
-// shift that enters two orientations with opposite signs cancels here the same way it cancels
-// in the pooled width samples.
+const mean = (values: number[]): number => values.reduce((s, v) => s + v, 0) / values.length
+
+/**
+ * One scan's cleaned width samples and their median: one w sample per gap (the measured
+ * local pitch between adjacent line centres minus the gap), MAD outlier cleaning, median.
+ * This is the original single-scan summary, factored out so multi-scan analyses can combine
+ * the per-scan medians with equal weight.
+ */
+function cleanedScanSamples(measurement: EmMeasurement): {
+  samples: { row: 0 | 1; blockIndex: number; wMm: number }[]
+  wMm: number
+} {
+  const all: { row: 0 | 1; blockIndex: number; wMm: number }[] = []
+  for (const b of measurement.blocks) {
+    for (let j = 0; j < b.gapsMm.length; j++) {
+      const localPitch = b.lineCentersMm[j + 1] - b.lineCentersMm[j]
+      all.push({ row: b.row, blockIndex: b.blockIndex, wMm: localPitch - b.gapsMm[j] })
+    }
+  }
+  const values = all.map((s) => s.wMm)
+  const center = median(values)
+  const mad = median(values.map((v) => Math.abs(v - center)))
+  const cutoff = MAD_CUTOFF * MAD_TO_SIGMA * mad
+  // A zero MAD means over half the samples agree exactly; keep those rather than reject all.
+  const samples =
+    mad > 0 ? all.filter((s) => Math.abs(s.wMm - center) <= cutoff) : all.filter((s) => s.wMm === center)
+  return { samples, wMm: median(samples.map((s) => s.wMm)) }
+}
+
+// Each scan's asymmetry (its median left flank offset plus median right flank offset) is
+// combined as an equal-weight mean, matching the width estimator: a lamp-side shift that
+// enters two orientations with opposite signs cancels here regardless of how many flank
+// samples each scan kept.
 function flankAsymmetry(measurements: EmMeasurement[]): number | null {
-  const leftFlankOffsetsMm = measurements.flatMap((m) => m.leftFlankOffsetsMm)
-  const rightFlankOffsetsMm = measurements.flatMap((m) => m.rightFlankOffsetsMm)
-  if (leftFlankOffsetsMm.length === 0 || rightFlankOffsetsMm.length === 0) return null
-  return median(leftFlankOffsetsMm) + median(rightFlankOffsetsMm)
+  const perScan = measurements
+    .map((m) =>
+      m.leftFlankOffsetsMm.length > 0 && m.rightFlankOffsetsMm.length > 0
+        ? median(m.leftFlankOffsetsMm) + median(m.rightFlankOffsetsMm)
+        : null,
+    )
+    .filter((v): v is number => v !== null)
+  return perScan.length === 0 ? null : mean(perScan)
 }
 
 function failure(

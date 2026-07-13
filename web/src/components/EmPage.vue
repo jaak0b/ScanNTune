@@ -312,7 +312,15 @@ const newSlicerFlow = computed(() => {
   const isPercent = entered > 5
   const factor = isPercent ? entered / 100 : entered
   const corrected = factor * (s.nominalLineWidthMm / r.wMm)
-  return isPercent ? `${(corrected * 100).toFixed(1)}%` : corrected.toFixed(3)
+  // The one-sided shading residual expressed as an uncertainty on the corrected flow,
+  // presented the same way the input shaper states its frequency confidence interval.
+  const uncertainty = r.flankAsymmetryMm !== null ? (Math.abs(r.flankAsymmetryMm) / r.wMm) * corrected : null
+  if (isPercent) {
+    const ci = uncertainty !== null ? ` ± ${(uncertainty * 100).toFixed(1)}` : ''
+    return `${(corrected * 100).toFixed(1)}${ci}%`
+  }
+  const ci = uncertainty !== null ? ` ± ${uncertainty.toFixed(3)}` : ''
+  return `${corrected.toFixed(3)}${ci}`
 })
 const pitchScaleOff = computed(() => {
   const p = result.value?.pitchScale
@@ -324,14 +332,14 @@ const resolutionText = computed(() => {
   return px != null && px > 0 ? resolutionRowValue(px) : null
 })
 
-// The shadow advice depends on how many scans went into the result: with one scan the fix is a
-// second scan rotated 180 degrees; with two pooled scans a surviving indication means the pair
-// did not cancel the lamp bias.
-const shadowWarningText = computed(() =>
-  (result.value?.scans.length ?? 0) > 1
-    ? 'One-sided gap shading is still detected after pooling both scans. Check that the second scan shows the same coupon rotated 180 degrees on the glass, with the test lines parallel to the lamp travel direction in both scans.'
-    : 'The scanner lamp shades one side of each gap in this scan, which biases the measured line width. Add a second scan of the same coupon rotated 180 degrees on the glass; the two orientations carry opposite biases that cancel in the combined result.',
-)
+// The shadow alert only fires on a single-scan result, where a second scan can fix it; for a
+// combined pair the surviving residual is already carried as the flow tile's uncertainty.
+const showShadowWarning = computed(() => {
+  const r = result.value
+  return !!r?.shadowWarning && r.scans.length <= 1
+})
+const shadowWarningText =
+  'The scanner lamp shades one side of each gap in this scan, which biases the measured line width. Add a second scan of the same coupon rotated 180 degrees on the glass; the two orientations carry opposite biases that cancel in the combined result.'
 
 // Per-scan card facts, shown when two scans were analyzed: each scan's own orientation,
 // resolution, and block tally from the result's per-scan diagnostics. A scan the engine never
@@ -786,7 +794,7 @@ const scanCards = computed<ScanCard[]>(() => {
           </v-chip>
         </div>
         <v-alert
-          v-if="result.shadowWarning"
+          v-if="showShadowWarning"
           type="warning"
           variant="tonal"
           class="mb-3"

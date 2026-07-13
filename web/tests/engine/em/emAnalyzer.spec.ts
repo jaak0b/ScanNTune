@@ -321,7 +321,8 @@ describe('analyzeEmCoupon render recovery', () => {
         expect(rB.success).toBe(true)
         expect(Math.sign(rA.wMm! - trueWidth)).toBe(-Math.sign(rB.wMm! - trueWidth))
 
-        // Pooled at the sample level, the bias cancels and the clean tolerance holds again.
+        // Combined with equal weight per scan, the bias cancels and the clean tolerance holds
+        // again.
         const pooled = analyzeEmCoupons(cv, [imgA, imgB], spec, PX_PER_MM)
         expect(pooled.success).toBe(true)
         expect(pooled.wMm).not.toBeNull()
@@ -332,6 +333,43 @@ describe('analyzeEmCoupon render recovery', () => {
         expect(pooled.blocksMeasured).toBe(
           pooled.scans[0].blocksMeasured + pooled.scans[1].blocksMeasured,
         )
+      } finally {
+        imgA.delete()
+        imgB.delete()
+      }
+    },
+    480000,
+  )
+
+  it(
+    'cancels the lamp bias even when one scan of the 180 degree pair keeps fewer samples',
+    async () => {
+      const trueWidth = 0.42
+      const cv = await getCv()
+      // The 180 degree scan is rendered much noisier, so the MAD cleaning drops more of its
+      // samples: a naive sample-level pool would lean toward the cleaner scan and leave part of
+      // the lamp bias uncancelled, while the equal-weight per-scan combination cancels it fully.
+      const render = (quarterTurns: 0 | 2, noiseSigma: number) =>
+        rgbaToBgrMat(
+          cv,
+          renderEmScan({
+            pxPerMm: PX_PER_MM,
+            spec,
+            trueWidthMm: trueWidth,
+            quarterTurns,
+            noiseSigma,
+            lampShading: { lampSide: 'left', extraSigmaMm: 0.16 },
+          }),
+        )
+      const imgA = render(0, 0)
+      const imgB = render(2, 10)
+      try {
+        const combined = analyzeEmCoupons(cv, [imgA, imgB], spec, PX_PER_MM)
+        expect(combined.success).toBe(true)
+        expect(combined.wMm).not.toBeNull()
+        expect(Math.abs(combined.wMm! - trueWidth)).toBeLessThanOrEqual(0.005)
+        expect(combined.shadowWarning).toBe(false)
+        expect(combined.scans).toHaveLength(2)
       } finally {
         imgA.delete()
         imgB.delete()
