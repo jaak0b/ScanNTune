@@ -114,3 +114,28 @@ describe('usePrinterProfiles', () => {
     expect(store.profiles).toHaveLength(0)
   })
 })
+
+describe('stored profile migration', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    setActivePinia(createPinia())
+  })
+
+  it('backfills fields added after a profile was stored instead of dropping it', () => {
+    const printer = defaultPrinterProfile() as unknown as Record<string, unknown>
+    const filament = defaultFilamentProfile() as unknown as Record<string, unknown>
+    delete printer.firstLayerSpeedMmS
+    delete filament.extrusionMultiplier
+    delete filament.maxVolumetricFlowMm3S
+    const stored = { ...printer, id: 'p1', filaments: [{ ...filament, id: 'f1' }] }
+    localStorage.setItem(
+      'scanntune.printerProfiles',
+      JSON.stringify({ profiles: [stored], selectedId: 'p1' }),
+    )
+    const store = usePrinterProfiles()
+    expect(store.profiles).toHaveLength(1)
+    expect(store.profiles[0].firstLayerSpeedMmS).toBe(30)
+    expect(store.profiles[0].filaments[0].extrusionMultiplier).toBe(1)
+    expect(store.profiles[0].filaments[0].maxVolumetricFlowMm3S).toBe(0)
+  })
+})

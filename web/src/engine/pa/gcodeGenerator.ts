@@ -92,7 +92,10 @@ function emitPaGcode(profile: PrinterProfile, filament: FilamentProfile, spec: P
   for (let layer = 0; layer < BASE_LAYERS; layer++) {
     const z = profile.layerHeightMm * (layer + 1)
     L.push(`G1 Z${z.toFixed(3)} F600`)
-    basePerimeters(e, profile, filament, spec.lineWidthMm, ox, oy, g.baseWidthMm, g.baseHeightMm, holes)
+    // The first base layer prints at the profile's first layer speed for bed adhesion.
+    const speed = layer === 0 ? profile.firstLayerSpeedMmS : undefined
+    basePerimeters(e, profile, filament, spec.lineWidthMm, ox, oy, g.baseWidthMm, g.baseHeightMm,
+      holes, extrude, speed)
     rasterBase(
       e,
       profile,
@@ -104,6 +107,8 @@ function emitPaGcode(profile: PrinterProfile, filament: FilamentProfile, spec: P
       g.baseHeightMm - 2 * infillInset,
       layer === 0,
       infillHoles,
+      extrude,
+      speed,
     )
   }
 

@@ -174,6 +174,21 @@ describe('importSlicerConfig Prusa edge cases', () => {
     expect(result.fields.filament.bedTempC).toBe(85)
   })
 
+  it('reads the extrusion multiplier and the max volumetric speed', () => {
+    const result = importSlicerConfig(
+      'config.ini',
+      'extrusion_multiplier = 0.93\nfilament_max_volumetric_speed = 11.5\n',
+    )
+    expect(result.fields.filament.extrusionMultiplier).toBe(0.93)
+    expect(result.fields.filament.maxVolumetricFlowMm3S).toBe(11.5)
+  })
+
+  it('treats a zero max volumetric speed (no limit) as not configured', () => {
+    const result = importSlicerConfig('config.ini', 'filament_max_volumetric_speed = 0\n')
+    expect(result.fields.filament.maxVolumetricFlowMm3S).toBeUndefined()
+    expect(result.missing).toContain('maxVolumetricFlowMm3S')
+  })
+
   it('uses default_acceleration when it is nonzero', () => {
     const result = importSlicerConfig(
       'config.ini',
@@ -286,6 +301,18 @@ describe('importSlicerConfig with an OrcaSlicer filament preset', () => {
 
   it('warns about inheritance because the preset carries inherits', () => {
     expect(result.warnings.some((w) => w.toLowerCase().includes('inherit'))).toBe(true)
+  })
+
+  it('reads the flow ratio and the max volumetric speed from Orca keys', () => {
+    const content = JSON.stringify({
+      type: 'filament',
+      name: 'PLA tuned',
+      filament_flow_ratio: ['0.96'],
+      filament_max_volumetric_speed: ['14'],
+    })
+    const r = importSlicerConfig('PLA tuned.json', content)
+    expect(r.fields.filament.extrusionMultiplier).toBe(0.96)
+    expect(r.fields.filament.maxVolumetricFlowMm3S).toBe(14)
   })
 })
 

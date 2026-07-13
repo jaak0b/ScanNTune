@@ -5,6 +5,7 @@ import {
   basePerimeters,
   type Emitter,
   extrude,
+  flowWarningLimitMm3S,
   frameBandLayer,
   HIGH_FLOW_WARNING_THRESHOLD_MM3_S,
   PERIMETER_LOOPS,
@@ -63,10 +64,14 @@ export function generateEmGcodeWithReport(
   } = prepareProfile(profile, filament, { includePause: spec.contrastBase })
 
   const flow = volumetricFlowMm3S(spec, profile.layerHeightMm)
-  if (flow > HIGH_FLOW_WARNING_THRESHOLD_MM3_S) {
+  const flowLimit = flowWarningLimitMm3S(filament)
+  if (flow > flowLimit) {
     warnings.push(
-      `Volumetric flow is ${flow.toFixed(1)} mm^3/s; typical hotends under-extrude above ` +
-        `${HIGH_FLOW_WARNING_THRESHOLD_MM3_S} mm^3/s. Intended for high-flow hotends only.`,
+      `Volumetric flow is ${flow.toFixed(1)} mm^3/s, above ` +
+        (filament.maxVolumetricFlowMm3S > 0
+          ? `the filament's configured ${flowLimit} mm^3/s maximum volumetric flow. `
+          : `the ${flowLimit} mm^3/s typical hotends under-extrude past. `) +
+        'Intended for high-flow hotends only.',
     )
   }
   const ramp = accelRampMm(spec.printSpeedMmS, profile.printAccelMmS2)
@@ -80,7 +85,10 @@ export function generateEmGcodeWithReport(
   return { gcode: emitEmGcode(substituted, filament, spec), unknownVariables, warnings }
 }
 
-function emitEmGcode(profile: PrinterProfile, filament: FilamentProfile, spec: EmTestSpec): string {
+function emitEmGcode(profile: PrinterProfile, rawFilament: FilamentProfile, spec: EmTestSpec): string {
+  // This test measures the extrusion multiplier, so it always prints at exactly 1.0: the
+  // measured ratio is then the absolute value to set, with no back-multiplication.
+  const filament: FilamentProfile = { ...rawFilament, extrusionMultiplier: 1 }
   const g = emCouponGeometry(spec)
   const { ox, oy } = couponOrigin(
     profile,
@@ -105,6 +113,8 @@ function emitEmGcode(profile: PrinterProfile, filament: FilamentProfile, spec: E
       `; nominal line width ${nominal.toFixed(3)} mm, comb speed ${spec.printSpeedMmS} mm/s`,
     ]),
   )
+  // Pin the firmware flow override to 100 percent: the test's baseline is exactly 1.0.
+  L.push('M221 S100')
 
   const totalLayers = PEDESTAL_LAYERS + MEASURED_LAYERS
   const infillInset = PERIMETER_LOOPS * nominal
@@ -122,11 +132,13 @@ function emitEmGcode(profile: PrinterProfile, filament: FilamentProfile, spec: E
     for (let layer = 0; layer < BASE_LAYERS; layer++) {
       const z = profile.layerHeightMm * (layer + 1)
       L.push(`G1 Z${z.toFixed(3)} F600`)
+      // The first base layer prints at the profile's first layer speed for bed adhesion.
+      const speed = layer === 0 ? profile.firstLayerSpeedMmS : undefined
       basePerimeters(e, profile, filament, nominal, ox, oy, g.couponWidthMm, g.couponHeightMm,
-        holes)
+        holes, extrude, speed)
       rasterBase(e, profile, filament, nominal, ox + infillInset, oy + infillInset,
         g.couponWidthMm - 2 * infillInset, g.couponHeightMm - 2 * infillInset,
-        layer % 2 === 0, baseRasterHoles)
+        layer % 2 === 0, baseRasterHoles, extrude, speed)
     }
     // Filament change to the contrasting color.
     retract(e, profile, 1)
@@ -149,10 +161,14 @@ function emitEmGcode(profile: PrinterProfile, filament: FilamentProfile, spec: E
       retract(e, profile, -1)
     }
 
+    // On the bed (no contrast base) the pedestal layer IS the first layer: everything on
+    // it prints at the profile's first layer speed for adhesion.
+    const firstLayerSpeed =
+      !spec.contrastBase && layer === 0 ? profile.firstLayerSpeedMmS : undefined
     // Frame band: outline + window perimeters, four band raster strips (never crossing the
     // open window), then the fiducial hole perimeters sealing the raster's ragged line-ends.
     frameBandLayer(e, profile, filament, nominal, ox, oy, g.couponWidthMm, g.couponHeightMm,
-      g.frameBandMm, holes, layer % 2 === 0)
+      g.frameBandMm, holes, layer % 2 === 0, extrude, firstLayerSpeed)
 
     // Center rail: perimeter loops flush with its edges give the comb line ends a continuous
     // bead to anchor into (a bare raster edge is a sawtooth the thin lines pull out of), with
@@ -168,12 +184,14 @@ function emitEmGcode(profile: PrinterProfile, filament: FilamentProfile, spec: E
     for (let k = 0; k < PERIMETER_LOOPS; k++) {
       const ins = (k + 0.5) * nominal
       rectLoop(e, profile, filament, nominal, railX0 + railW - ins, railY0 + ins,
-        railX0 + ins, railY0 + g.railWidthMm - ins, profile.travelSpeedMmS * RASTER_SPEED_FACTOR)
+        railX0 + ins, railY0 + g.railWidthMm - ins,
+        firstLayerSpeed ?? profile.travelSpeedMmS * RASTER_SPEED_FACTOR)
     }
     // Fixed 45 degrees: on a long thin strip the 135 degree raster starts at the far end,
     // which would mean a long dry travel from the perimeter corner.
     rasterBase(e, profile, filament, nominal, railX0 + infillInset, railY0 + infillInset,
-      railW - 2 * infillInset, g.railWidthMm - 2 * infillInset, true, [])
+      railW - 2 * infillInset, g.railWidthMm - 2 * infillInset, true, [], extrude,
+      firstLayerSpeed)
 
     // Comb lines: pedestal width below, nominal width on the measured layers. Each line
     // runs ANCHOR_OVERLAP_MM past the row boundary on both ends so its tip prints on top
@@ -195,7 +213,10 @@ function emitEmGcode(profile: PrinterProfile, filament: FilamentProfile, spec: E
           const x = ox + block.lineXsMm[j]
           const down = j % 2 === 1
           if (j > 0) travel(e, profile, x, down ? row.y1 : row.y0)
-          extrude(e, profile, filament, combWidth, x, down ? row.y0 : row.y1, spec.printSpeedMmS)
+          // Pedestal comb lines on the bed take the first layer cap; the measured layers
+          // keep the spec speed, which the bead width depends on.
+          extrude(e, profile, filament, combWidth, x, down ? row.y0 : row.y1,
+            Math.min(spec.printSpeedMmS, firstLayerSpeed ?? spec.printSpeedMmS))
         }
       }
     }

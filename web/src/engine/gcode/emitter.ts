@@ -25,6 +25,25 @@ export function travel(e: Emitter, p: PrinterProfile, x: number, y: number): voi
   e.y = y
 }
 
+/** One bead's filament length: the geometric extrusion scaled by the filament's
+ *  extrusion multiplier. Every printing move goes through this, so the multiplier has a
+ *  single home; a generator that must print at exactly 1.0 (the extrusion multiplier
+ *  test) passes a filament with the multiplier pinned to 1. */
+export function beadExtrusionMm(
+  p: PrinterProfile,
+  f: FilamentProfile,
+  lengthMm: number,
+  lineWidthMm: number,
+): number {
+  return f.extrusionMultiplier * extrusionMm(lengthMm, lineWidthMm, p.layerHeightMm, f.filamentDiameterMm)
+}
+
+/** The volumetric flow above which a high-flow warning fires: the filament's configured
+ *  maximum when set, else the conservative typical-hotend default. */
+export function flowWarningLimitMm3S(f: FilamentProfile): number {
+  return f.maxVolumetricFlowMm3S > 0 ? f.maxVolumetricFlowMm3S : HIGH_FLOW_WARNING_THRESHOLD_MM3_S
+}
+
 export function extrude(
   e: Emitter,
   p: PrinterProfile,
@@ -35,7 +54,7 @@ export function extrude(
   speedMmS: number,
 ): void {
   const len = Math.hypot(x - e.x, y - e.y)
-  const eAmt = extrusionMm(len, lineWidthMm, p.layerHeightMm, f.filamentDiameterMm)
+  const eAmt = beadExtrusionMm(p, f, len, lineWidthMm)
   e.lines.push(
     `G1 X${x.toFixed(3)} Y${y.toFixed(3)} E${eAmt.toFixed(5)} F${Math.round(speedMmS * 60)}`,
   )
@@ -151,8 +170,9 @@ export function basePerimeters(
   h: number,
   holes: Box[],
   doExtrude: ExtrudeFn = extrude,
+  speedMmS?: number,
 ): void {
-  const speed = p.travelSpeedMmS * RASTER_SPEED_FACTOR
+  const speed = speedMmS ?? p.travelSpeedMmS * RASTER_SPEED_FACTOR
   for (let k = 0; k < PERIMETER_LOOPS; k++) {
     const ins = (k + 0.5) * lineWidthMm
     rectLoop(e, p, f, lineWidthMm, x0 + ins, y0 + ins, x0 + w - ins, y0 + h - ins, speed, doExtrude)
@@ -178,7 +198,9 @@ export function rasterBase(
   angle45: boolean,
   holes: Box[],
   doExtrude: ExtrudeFn = extrude,
+  speedMmS?: number,
 ): void {
+  const speed = speedMmS ?? p.travelSpeedMmS * RASTER_SPEED_FACTOR
   const step = lineWidthMm * RASTER_STEP_FACTOR
   // Diagonal raster: iterate scanlines along the diagonal direction. Each
   // scanline is clipped against the rectangle and split around holes.
@@ -228,7 +250,7 @@ export function rasterBase(
     for (const [a, b] of ordered) {
       if (Math.abs(b - a) < lineWidthMm) continue
       travel(e, p, bx + a * ux, by + a * uy)
-      doExtrude(e, p, f, lineWidthMm, bx + b * ux, by + b * uy, p.travelSpeedMmS * RASTER_SPEED_FACTOR)
+      doExtrude(e, p, f, lineWidthMm, bx + b * ux, by + b * uy, speed)
     }
     scanIndex++
   }
@@ -254,11 +276,12 @@ export function frameBandLayer(
   holes: Box[],
   angle45: boolean,
   doExtrude: ExtrudeFn = extrude,
+  speedMmS?: number,
 ): void {
   // The interior window is a hole box: it turns the solid fill into a frame band.
   const windowBox: Box = { x0: x0 + bandMm, y0: y0 + bandMm, x1: x0 + w - bandMm, y1: y0 + h - bandMm }
-  basePerimeters(e, p, f, lineWidthMm, x0, y0, w, h, [windowBox], doExtrude)
-  frameBandInfill(e, p, f, lineWidthMm, x0, y0, w, h, bandMm, holes, angle45, doExtrude)
+  basePerimeters(e, p, f, lineWidthMm, x0, y0, w, h, [windowBox], doExtrude, speedMmS)
+  frameBandInfill(e, p, f, lineWidthMm, x0, y0, w, h, bandMm, holes, angle45, doExtrude, false, speedMmS)
 }
 
 /**
@@ -283,6 +306,7 @@ export function frameBandInfill(
   angle45: boolean,
   doExtrude: ExtrudeFn = extrude,
   startRetracted = false,
+  speedMmS?: number,
 ): void {
   const infillInset = PERIMETER_LOOPS * lineWidthMm
   // Raster clearance around a fiducial hole: past the outermost of its perimeter loops.
@@ -306,13 +330,13 @@ export function frameBandInfill(
     if (!(startRetracted && i === 0)) retract(e, p, 1)
     travel(e, p, s.sx, s.sy)
     retract(e, p, -1)
-    rasterBase(e, p, f, lineWidthMm, s.sx, s.sy, s.w, s.h, angle45, expanded, doExtrude)
+    rasterBase(e, p, f, lineWidthMm, s.sx, s.sy, s.w, s.h, angle45, expanded, doExtrude, speedMmS)
   })
   for (const hole of holes) {
     for (let k = 0; k < HOLE_PERIMETER_LOOPS; k++) {
       const out = (k + 0.5) * lineWidthMm
       rectLoop(e, p, f, lineWidthMm, hole.x0 - out, hole.y0 - out, hole.x1 + out, hole.y1 + out,
-        p.travelSpeedMmS * RASTER_SPEED_FACTOR, doExtrude)
+        speedMmS ?? p.travelSpeedMmS * RASTER_SPEED_FACTOR, doExtrude)
     }
   }
 }

@@ -29,9 +29,11 @@ describe('generateEmGcodeWithReport', () => {
     expect(zs).toEqual(['0.200', '0.400', '0.600', '10'])
   })
 
-  it('contains no pause and no flow commands', () => {
+  it('contains no pause and pins the firmware flow override to 100 percent', () => {
     expect(report.gcode).not.toContain('PAUSE')
-    expect(report.gcode).not.toContain('M221')
+    // The test's baseline is exactly 1.0, so a leftover flow override is neutralized and
+    // never re-applied elsewhere.
+    expect(lines.filter((l) => l.startsWith('M221'))).toEqual(['M221 S100'])
   })
 
   it('never travels far across the open window without retracting first', () => {
@@ -305,5 +307,47 @@ describe('placement', () => {
     expect(() =>
       generateEmGcodeWithReport(tiny, filament, { ...spec, placement: 'back' }),
     ).toThrow(/fit/i)
+  })
+})
+
+describe('extrusion multiplier pinning', () => {
+  it('prints identically for any filament extrusion multiplier (baseline is 1.0)', () => {
+    const rich = { ...filament, extrusionMultiplier: 1.25 }
+    expect(generateEmGcodeWithReport(profile, rich, spec).gcode).toBe(
+      generateEmGcodeWithReport(profile, filament, spec).gcode,
+    )
+  })
+
+  it('judges the high-flow warning against the filament limit when configured', () => {
+    // 120 mm/s at 0.42 mm width and 0.2 mm layers is 10.1 mm^3/s: silent by default,
+    // warned past a configured 8 mm^3/s filament limit, naming that limit.
+    const fast = { ...spec, printSpeedMmS: 120 }
+    expect(generateEmGcodeWithReport(profile, filament, fast).warnings
+      .some((w) => w.includes('mm^3/s'))).toBe(false)
+    const weak = { ...filament, maxVolumetricFlowMm3S: 8 }
+    expect(generateEmGcodeWithReport(profile, weak, fast).warnings
+      .some((w) => w.includes("filament's configured 8 mm^3/s"))).toBe(true)
+  })
+})
+
+describe('first layer speed', () => {
+  it('prints the whole first coupon layer at the profile first layer speed', () => {
+    const firstLayerFeed = profile.firstLayerSpeedMmS * 60
+    const lines = generateEmGcodeWithReport(profile, filament, spec).gcode.split('\n')
+    const chunks: string[][] = []
+    let current: string[] | null = null
+    for (const l of lines) {
+      if (/^G1 Z0\./.test(l)) {
+        current = []
+        chunks.push(current)
+      } else if (current) current.push(l)
+    }
+    const feedsOf = (chunk: string[]) =>
+      chunk
+        .map((l) => l.match(/^G1 X.*E[\d.]+ F(\d+)$/))
+        .filter((m): m is RegExpMatchArray => m !== null)
+        .map((m) => Number(m[1]))
+    expect(feedsOf(chunks[0]).every((f) => f === firstLayerFeed)).toBe(true)
+    expect(feedsOf(chunks[chunks.length - 1]).some((f) => f > firstLayerFeed)).toBe(true)
   })
 })

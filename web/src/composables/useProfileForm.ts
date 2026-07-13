@@ -24,6 +24,8 @@ export interface EditableFilament {
   nozzleTempC: number | null
   bedTempC: number | null
   chamberTempC: number | null
+  extrusionMultiplier: number | null
+  maxVolumetricFlowMm3S: number | null
 }
 
 export interface ImportSummary {
@@ -71,6 +73,7 @@ export function useProfileForm() {
   const bedDepthMm = ref<number | null>(null)
   const nozzleDiameterMm = ref<number | null>(null)
   const travelSpeedMmS = ref<number | null>(null)
+  const firstLayerSpeedMmS = ref<number | null>(null)
   const printAccelMmS2 = ref<number | null>(null)
   const squareCornerVelocityMmS = ref<number | null>(null)
   const layerHeightMm = ref<number | null>(null)
@@ -99,6 +102,7 @@ export function useProfileForm() {
       bedDepthMm: bedDepthMm.value,
       nozzleDiameterMm: nozzleDiameterMm.value,
       travelSpeedMmS: travelSpeedMmS.value,
+      firstLayerSpeedMmS: firstLayerSpeedMmS.value,
       printAccelMmS2: printAccelMmS2.value,
       squareCornerVelocityMmS: squareCornerVelocityMmS.value,
       layerHeightMm: layerHeightMm.value,
@@ -122,6 +126,7 @@ export function useProfileForm() {
     bedDepthMm.value = p.bedDepthMm
     nozzleDiameterMm.value = p.nozzleDiameterMm
     travelSpeedMmS.value = p.travelSpeedMmS
+    firstLayerSpeedMmS.value = p.firstLayerSpeedMmS
     printAccelMmS2.value = p.printAccelMmS2
     squareCornerVelocityMmS.value = p.squareCornerVelocityMmS
     layerHeightMm.value = p.layerHeightMm
@@ -185,6 +190,10 @@ export function useProfileForm() {
     if (fields.nozzleTempC !== undefined) target.nozzleTempC = fields.nozzleTempC
     if (fields.bedTempC !== undefined) target.bedTempC = fields.bedTempC
     if (fields.chamberTempC !== undefined) target.chamberTempC = fields.chamberTempC
+    if (fields.extrusionMultiplier !== undefined)
+      target.extrusionMultiplier = fields.extrusionMultiplier
+    if (fields.maxVolumetricFlowMm3S !== undefined)
+      target.maxVolumetricFlowMm3S = fields.maxVolumetricFlowMm3S
   }
 
   /** Names the profile after the imported preset, unless the user already chose a name. */
@@ -350,6 +359,7 @@ export function useProfileForm() {
     bedDepthMm.value,
     nozzleDiameterMm.value,
     travelSpeedMmS.value,
+    firstLayerSpeedMmS.value,
     printAccelMmS2.value,
     squareCornerVelocityMmS.value,
     layerHeightMm.value,
@@ -360,9 +370,14 @@ export function useProfileForm() {
     filaments.value.every(
       (f) =>
         f.name.trim() !== '' &&
-        [f.filamentDiameterMm, f.nozzleTempC, f.bedTempC, f.chamberTempC].every(
-          (n) => n !== null && Number.isFinite(n),
-        ),
+        [
+          f.filamentDiameterMm,
+          f.nozzleTempC,
+          f.bedTempC,
+          f.chamberTempC,
+          f.extrusionMultiplier,
+          f.maxVolumetricFlowMm3S,
+        ].every((n) => n !== null && Number.isFinite(n)),
     ),
   )
   const canSave = computed(
@@ -382,6 +397,8 @@ export function useProfileForm() {
       nozzleTempC: f.nozzleTempC!,
       bedTempC: f.bedTempC!,
       chamberTempC: f.chamberTempC!,
+      extrusionMultiplier: f.extrusionMultiplier!,
+      maxVolumetricFlowMm3S: f.maxVolumetricFlowMm3S!,
     }
   }
 
@@ -398,6 +415,7 @@ export function useProfileForm() {
       filaments: savedFilaments,
       selectedFilamentId: savedFilaments[filamentIndex.value]?.id || null,
       travelSpeedMmS: travelSpeedMmS.value!,
+      firstLayerSpeedMmS: firstLayerSpeedMmS.value!,
       printAccelMmS2: printAccelMmS2.value!,
       squareCornerVelocityMmS: squareCornerVelocityMmS.value!,
       layerHeightMm: layerHeightMm.value!,
@@ -420,6 +438,7 @@ export function useProfileForm() {
     bedDepthMm,
     nozzleDiameterMm,
     travelSpeedMmS,
+    firstLayerSpeedMmS,
     printAccelMmS2,
     squareCornerVelocityMmS,
     layerHeightMm,

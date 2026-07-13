@@ -9,6 +9,7 @@ const PRINTER_NUMERIC_FIELDS = [
   'bedDepthMm',
   'nozzleDiameterMm',
   'travelSpeedMmS',
+  'firstLayerSpeedMmS',
   'layerHeightMm',
   'retractMm',
   'retractSpeedMmS',
@@ -30,6 +31,8 @@ const FILAMENT_NUMERIC_FIELDS = [
   'nozzleTempC',
   'bedTempC',
   'chamberTempC',
+  'extrusionMultiplier',
+  'maxVolumetricFlowMm3S',
 ] as const
 
 const FILAMENT_STRING_FIELDS = ['id', 'name', 'filamentType'] as const
@@ -73,6 +76,25 @@ interface StoredState {
   selectedId: string | null
 }
 
+/**
+ * Fills fields added after a profile was stored with their defaults, so validation does
+ * not drop otherwise valid profiles saved by an older version of the app.
+ */
+function backfillNewFields(value: unknown): unknown {
+  if (typeof value !== 'object' || value === null) return value
+  const record = value as Record<string, unknown>
+  if (record.firstLayerSpeedMmS === undefined) record.firstLayerSpeedMmS = 30
+  if (Array.isArray(record.filaments)) {
+    for (const raw of record.filaments) {
+      if (typeof raw !== 'object' || raw === null) continue
+      const f = raw as Record<string, unknown>
+      if (f.extrusionMultiplier === undefined) f.extrusionMultiplier = 1
+      if (f.maxVolumetricFlowMm3S === undefined) f.maxVolumetricFlowMm3S = 0
+    }
+  }
+  return value
+}
+
 function loadFromStorage(): StoredState {
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
@@ -82,6 +104,7 @@ function loadFromStorage(): StoredState {
     const record = parsed as Record<string, unknown>
     const rawProfiles = Array.isArray(record.profiles) ? record.profiles : []
     const profiles = rawProfiles
+      .map(backfillNewFields)
       .filter((p): p is PrinterProfile => {
         if (isValidProfile(p)) return true
         console.warn('Dropping invalid stored printer profile', p)
