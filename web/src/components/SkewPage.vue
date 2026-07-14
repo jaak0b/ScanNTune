@@ -27,6 +27,7 @@ import { asAligned, defaultCouponSpec, planeAxes, xAxisAngleDegrees } from '../e
 import type { CouponSpec, Plane } from '../engine/types'
 import type { MetricRange } from './MetricTile.vue'
 import { ScanState, SkewCouponScan } from '../model/skewCouponScan'
+import { mirroredScanInvalid } from '../engine/scanDiagnostics'
 import {
   skewFlavours,
   sizeFlavours,
@@ -128,6 +129,19 @@ const resolutionBadCount = computed(
   () => [...resolutionVerdicts.value.values()].filter((v) => !v.ok).length,
 )
 
+// Measured flat-plate (XY) scans that read mirrored: each is rejected on its own card, because the
+// countersunk face was on the glass or the plate was printed mirrored (mirroredScanInvalid in the
+// engine's scan diagnostics owns the rule). The set feeds the card flag, the Analyze gate, and the
+// disabled-button reason, mirroring the resolution-verdict machinery.
+const mirroredIds = computed(() => {
+  const ids = new Set<number>()
+  for (const s of store.scans) {
+    if (s.isMeasured && mirroredScanInvalid(s.plane, s.flipped)) ids.add(s.id)
+  }
+  return ids
+})
+const mirroredBadCount = computed(() => mirroredIds.value.size)
+
 // Measured scans grouped by plane, each group carrying the angle figures the analyzability check
 // and the group header need. Scans that have not measured a plane (pending, unreadable, misaligned
 // or unlabeled) stay outside the groups and are listed separately.
@@ -165,9 +179,11 @@ const planeGroups = computed<PlaneGroup[]>(() => {
     const spreadOk = spreadDegrees >= MIN_TURN_SPREAD_DEGREES
     // Every measured scan carries its handedness, so a mirror-flip mismatch is detectable here,
     // before Analyze, and blocks with an actionable message instead of surfacing after the fact.
-    const flipMismatch = scans.some(
-      (s) => s.result!.orientation!.flipped !== scans[0].result!.orientation!.flipped,
-    )
+    // The flat XY plate is exempt: any mirrored XY scan is already hard-rejected on its own card
+    // (mirroredScanInvalid), so a relative comparison here would only duplicate that message.
+    const flipMismatch =
+      plane !== 'XY' &&
+      scans.some((s) => s.result!.orientation!.flipped !== scans[0].result!.orientation!.flipped)
     const ready = enough && spreadOk && !flipMismatch
     const statusText = !enough
       ? 'This plate needs a second scan, turned on the glass from the first.'
@@ -210,6 +226,7 @@ const canAnalyze = computed(() => {
     n <= MAX_SCANS &&
     notReady.value.length === 0 &&
     resolutionBadCount.value === 0 &&
+    mirroredBadCount.value === 0 &&
     planeGroups.value.length > 0 &&
     planeGroups.value.every((g) => g.ready)
   )
@@ -232,6 +249,11 @@ const analyzeReason = computed(() => {
     return wrongRes === 1
       ? 'One scan measures a wrong resolution; replace it to analyze.'
       : `${wrongRes} scans measure a wrong resolution; replace them to analyze.`
+  const mirrored = mirroredBadCount.value
+  if (mirrored > 0)
+    return mirrored === 1
+      ? 'One scan is mirrored; rescan or replace it to analyze.'
+      : `${mirrored} scans are mirrored; rescan or replace them to analyze.`
   const short = planeGroups.value.find((g) => !g.ready)
   if (short) return `${short.plane} plate: ${short.statusText}`
   return ''
@@ -633,8 +655,13 @@ function getCoupon(file: string): void {
         <span class="num">3</span><span class="step-title">Print the plate(s)</span>
       </div>
       <p class="tip mt-0 mb-1">
-        <strong>Print it exactly as downloaded. Do not rotate or mirror it.</strong> A flipped plate
-        reports the wrong X and Y directions, and the scan cannot detect that this happened.
+        <strong>Print it exactly as downloaded. Do not rotate or mirror it.</strong> A mirrored
+        plate reports the wrong X and Y directions. Mirroring is detected for the flat plate and its
+        scan is refused, but for the standing plates it cannot be detected.
+      </p>
+      <p class="tip mb-1">
+        <strong>Slice with a 0.2&nbsp;mm layer height.</strong> The flat plate's countersunk hole
+        rims are 0.4&nbsp;mm thick and need two full layers.
       </p>
       <v-item-group v-model="selectedPlates" multiple class="plate-select">
         <v-item v-for="c in plateCards" :key="c.key" :value="c.key" v-slot="{ isSelected, toggle }">
@@ -680,8 +707,9 @@ function getCoupon(file: string): void {
       </div>
       <p class="tip mb-2">
         Cover the plate with a backing that contrasts with its color: dark paper behind a light
-        plate, or the white lid behind a dark plate. Scan the plate once. Turn it on the glass and
-        scan it again. Use the same face down for every scan of a plate.
+        plate, or the white lid behind a dark plate. Scan the flat plate with its first-layer side
+        on the glass; the hole rims are countersunk on the other face. Scan the plate once. Turn
+        it on the glass and scan it again. Use the same face down for every scan of a plate.
       </p>
       <p class="tip mb-2" data-testid="scan-dpi-hint">
         <strong>{{ scanDpiHint || 'Scan at 600 dpi.' }}</strong>
@@ -749,6 +777,7 @@ function getCoupon(file: string): void {
             :scan="s"
             :removable="true"
             :resolution="resolutionVerdicts.get(s.id)"
+            :mirrored="mirroredIds.has(s.id)"
             @remove="store.remove(s.id)"
           />
         </div>
@@ -801,6 +830,7 @@ function getCoupon(file: string): void {
               :removable="true"
               :problem="planeProblems.get(s.id)"
               :resolution="resolutionVerdicts.get(s.id)"
+              :mirrored="mirroredIds.has(s.id)"
               @remove="store.remove(s.id)"
             />
           </div>

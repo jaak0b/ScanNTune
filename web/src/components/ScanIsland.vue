@@ -14,6 +14,8 @@ const props = defineProps<{
   problem?: 'duplicate'
   /** The scan's resolution verdict within the uploaded set; undefined until measured. */
   resolution?: ScanResolutionVerdict
+  /** True when the scan is rejected because a flat plate reads mirrored (mirroredScanInvalid). */
+  mirrored?: boolean
 }>()
 const emit = defineEmits<{ (e: 'remove'): void }>()
 
@@ -58,7 +60,12 @@ const rows = computed(() => {
       sev: (aligned ? 'ok' : 'mute') as Sev,
       testid: 'scan-angle',
     },
-    { label: 'Flip', value: flipValue, sev: (s.flipped === null ? 'mute' : 'ok') as Sev, testid: 'scan-flip' },
+    {
+      label: 'Flip',
+      value: flipValue,
+      sev: (s.flipped === null ? 'mute' : props.mirrored ? 'err' : 'ok') as Sev,
+      testid: 'scan-flip',
+    },
     {
       label: 'Resolution',
       value: resolutionRowValue(measuredPxPerMm),
@@ -84,6 +91,7 @@ const pill = computed<{ text: string; sev: Sev } | null>(() => {
       return { text: 'Plane not read', sev: 'warn' }
     case ScanState.Measured:
       if (badResolution.value) return { text: badResolution.value.text, sev: 'err' }
+      if (props.mirrored) return { text: 'Mirrored scan', sev: 'err' }
       if (props.problem === 'duplicate') return { text: 'Nearly same angle', sev: 'warn' }
       return { text: `${props.scan.plane} plane`, sev: 'ok' }
     default:
@@ -99,6 +107,11 @@ const stripe = computed<Sev | ''>(() => pill.value?.sev ?? '')
 const note = computed<string | null>(() => {
   if (props.scan.failureReason) return props.scan.failureReason
   if (badResolution.value) return badResolution.value.explanation
+  if (props.mirrored)
+    return (
+      'The scan is mirrored. Scan the plate with its first-layer side on the glass. If it still ' +
+      'reads mirrored, the plate was printed mirrored and cannot be measured.'
+    )
   if (props.scan.state === ScanState.Unlabeled)
     return (
       'The plane-identifying marks near the origin corner could not be read, so this scan ' +
@@ -167,7 +180,9 @@ const note = computed<string | null>(() => {
           v-if="pill"
           class="pill"
           :class="pill.sev"
-          :data-testid="badResolution ? 'scan-resolution-badge' : undefined"
+          :data-testid="
+            badResolution ? 'scan-resolution-badge' : mirrored ? 'scan-mirrored-badge' : undefined
+          "
         ><span class="dot"></span>{{ pill.text }}</span>
         <p v-if="note" class="muted" data-testid="failure-reason">
           {{ note }}

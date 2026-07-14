@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { ringSeverity, clippedSides } from '../../src/engine/scanDiagnostics'
+import { ringSeverity, clippedSides, mirroredScanInvalid } from '../../src/engine/scanDiagnostics'
 import { defaultCouponSpec } from '../../src/engine/types'
 import type { AffineModel, GridCorrespondence } from '../../src/engine/types'
 
@@ -84,5 +84,27 @@ describe('clippedSides', () => {
   it('is empty when no hole is missing', () => {
     const points = grid(60, 500, [])
     expect(clippedSides(spec, points, affine(60, 500), 1080, 2000)).toEqual([])
+  })
+})
+
+// mirroredScanInvalid rejects only the flat XY plate when it reads mirrored: the countersunk face
+// was on the glass or the plate was printed mirrored. Standing plates keep flip as diagnostics.
+describe('mirroredScanInvalid', () => {
+  it('rejects a mirrored XY scan', () => {
+    expect(mirroredScanInvalid('XY', true)).toBe(true)
+  })
+
+  it('accepts an unmirrored XY scan', () => {
+    expect(mirroredScanInvalid('XY', false)).toBe(false)
+  })
+
+  it('accepts mirrored standing-plate scans (XZ and YZ)', () => {
+    expect(mirroredScanInvalid('XZ', true)).toBe(false)
+    expect(mirroredScanInvalid('YZ', true)).toBe(false)
+  })
+
+  it('accepts a scan with no plane or no resolved flip', () => {
+    expect(mirroredScanInvalid(null, true)).toBe(false)
+    expect(mirroredScanInvalid('XY', null)).toBe(false)
   })
 })

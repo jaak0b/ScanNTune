@@ -1,4 +1,4 @@
-import type { AffineModel, ClipSide, CouponSpec, GridCorrespondence, RingSeverity } from './types'
+import type { AffineModel, ClipSide, CouponSpec, GridCorrespondence, Plane, RingSeverity } from './types'
 import { couponInnerDiameterMm, projectMmToPx } from './types'
 
 // Pure per-scan diagnostics derived from detection and the fitted grid model. The ring tally is a
@@ -12,6 +12,15 @@ import { couponInnerDiameterMm, projectMmToPx } from './types'
 export function ringSeverity(ringsFound: number, ringsExpected: number, aligned: boolean): RingSeverity {
   if (!aligned) return 'error'
   return ringsFound >= ringsExpected ? 'ok' : 'warning'
+}
+
+// A flat XY plate scan that reads mirrored is invalid: the plate's hole rims are countersunk, so
+// only the first-layer face is a valid scan face, and a face-down first layer never reads mirrored.
+// A mirrored read therefore means the countersunk face was on the glass or the plate was printed
+// mirrored; either way the scan cannot be measured. The standing plates (XZ/YZ) scan validly either
+// way up, so their flip stays legitimate diagnostic information, never a rejection.
+export function mirroredScanInvalid(plane: Plane | null, flipped: boolean | null): boolean {
+  return plane === 'XY' && flipped === true
 }
 
 // The image sides an undetected hole would cross: for every expected grid vertex with no detected

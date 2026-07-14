@@ -1,5 +1,6 @@
 import { test, expect, type Page, type Locator } from '@playwright/test'
 import fs from 'node:fs'
+import { PNG } from 'pngjs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { seedCalibration } from '../helpers/seedCalibration'
@@ -461,6 +462,75 @@ test('rejection 3.5: a uniform resolution mismatch flags both scans and blocks A
   )
   await expect(page.getByTestId('scale-X')).toHaveCount(0)
 })
+
+test('rejection 3.7: a mirrored flat-plate scan is flagged on its card and blocks Analyze', async ({
+  page,
+}) => {
+  test.setTimeout(ANALYSIS_TEST_TIMEOUT_MS)
+
+  await seedCalibration(page, SEED_150DPI)
+  await page.goto('/')
+
+  // Fixture per skew.flow.md 3.7: a horizontally flipped copy of the 0-degree 150 dpi golden,
+  // produced here in the test (display-independent preprocessing of the test input, not a
+  // measurement-path resample), plus the untouched 90-degree golden.
+  await page.getByTestId('scans-input').setInputFiles([
+    {
+      name: 'xy_0d_150dpi_mirrored.png',
+      mimeType: 'image/png',
+      buffer: flipHorizontally(golden('xy_0d_150dpi.png')),
+    },
+    {
+      name: 'xy_90d_150dpi.png',
+      mimeType: 'image/png',
+      buffer: fs.readFileSync(golden('xy_90d_150dpi.png')),
+    },
+  ])
+
+  const ringCounts = page.getByTestId('ring-count')
+  await expect(ringCounts).toHaveCount(2, { timeout: RESULT_VISIBLE_TIMEOUT_MS })
+  await expect(ringCounts.nth(0)).toHaveText('23 of 23', { timeout: RESULT_VISIBLE_TIMEOUT_MS })
+  await expect(ringCounts.nth(1)).toHaveText('23 of 23', { timeout: RESULT_VISIBLE_TIMEOUT_MS })
+
+  // Exactly one card reads mirrored; island order within the plane group follows the circular-angle
+  // sort, not upload order, so the assertions are index-independent.
+  await expect(page.getByTestId('scan-flip').filter({ hasText: 'Mirrored' })).toHaveCount(1)
+  await expect(page.getByTestId('scan-flip').filter({ hasText: 'None' })).toHaveCount(1)
+  await expect(page.getByTestId('scan-mirrored-badge')).toHaveCount(1)
+  await expect(page.getByTestId('scan-mirrored-badge')).toHaveText('Mirrored scan')
+  await expect(page.getByTestId('failure-reason')).toHaveText(
+    'The scan is mirrored. Scan the plate with its first-layer side on the glass. If it still reads mirrored, the plate was printed mirrored and cannot be measured.',
+  )
+
+  // The per-scan rejection carries the block; the plane group's own status stays clean (the old
+  // relative flip-consistency message no longer applies to the XY plane).
+  await expect(page.getByTestId('plane-status-XY')).toHaveText('Ready to analyze.')
+
+  await expect(page.getByTestId('analyze-btn')).toBeDisabled()
+  await expect(page.getByTestId('analyze-reason')).toHaveText(
+    'One scan is mirrored; rescan or replace it to analyze.',
+  )
+  await expect(page.getByTestId('scale-X')).toHaveCount(0)
+})
+
+/** Mirrors a PNG fixture about its vertical axis (each pixel row reversed), returning PNG bytes. */
+function flipHorizontally(file: string): Buffer {
+  const png = PNG.sync.read(fs.readFileSync(file))
+  const { width, height, data } = png
+  for (let y = 0; y < height; y++) {
+    const row = y * width * 4
+    for (let x = 0; x < width >> 1; x++) {
+      const a = row + x * 4
+      const b = row + (width - 1 - x) * 4
+      for (let k = 0; k < 4; k++) {
+        const t = data[a + k]
+        data[a + k] = data[b + k]
+        data[b + k] = t
+      }
+    }
+  }
+  return PNG.sync.write(png)
+}
 
 test('rejection 3.6: wrong declared coupon geometry is a hard refusal before Analyze', async ({
   page,

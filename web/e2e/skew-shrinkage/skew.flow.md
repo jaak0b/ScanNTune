@@ -279,6 +279,34 @@ Seed the 300 dpi calibration. Before uploading, set "Rings per side" to `6` and 
 5. Assert no `plane-status-XY` element renders (no plane group forms, since neither scan reached the
    measured state).
 
+### 3.7 Mirrored flat-plate scan (per-scan hard block, one scan flagged)
+
+The flat XY plate's hole rims are countersunk, so only the first-layer face is a valid scan face;
+a mirrored XY read means the countersunk face was on the glass or the plate was printed mirrored.
+The app rejects such a scan on its own card, the same hard-block pattern as the resolution
+verdicts of 3.4/3.5.
+
+Fixture: a horizontally flipped copy of `golden/xy_0d_150dpi.png`, produced by the test itself
+(flipping the pixel rows of the fixture in the test helper is display-independent preprocessing of
+the test input, not a measurement-path resample; no derived file is committed). Seed the 150 dpi
+calibration. Upload the flipped copy plus the untouched `golden/xy_90d_150dpi.png` in one
+`setInputFiles` call.
+
+Journey: identical steps 1 through 6 above, then:
+
+1. Wait for both scans' `ring-count` to become visible; assert both read `23 of 23` (detection and
+   alignment still succeed; this is purely an orientation rejection).
+2. Exactly one card's `scan-flip` row reads `Mirrored`; the other reads `None`.
+3. On the mirrored card, assert the rejection badge (`data-testid="scan-mirrored-badge"`) reads
+   `Mirrored scan`, and its `failure-reason` reads exactly:
+   `The scan is mirrored. Scan the plate with its first-layer side on the glass. If it still reads mirrored, the plate was printed mirrored and cannot be measured.`
+4. Assert `plane-status-XY` reads `Ready to analyze.`: the per-scan rejection replaces the old
+   relative flip-consistency group message for the XY plane, so the group status stays clean while
+   the card and the Analyze gate carry the block.
+5. Assert `analyze-btn` is disabled and `analyze-reason` reads exactly:
+   `One scan is mirrored; rescan or replace it to analyze.` (singular).
+6. Assert no result panel renders: `scale-X` has element count 0.
+
 ## Notes for the phase 2 implementer
 
 - **Testid gaps to close before implementation** (see `PROVENANCE.md`'s "Open items for the owner"
