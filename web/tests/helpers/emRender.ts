@@ -152,6 +152,54 @@ function boxCoverage(
   return softEdge(Math.min(dx, dy), sigma)
 }
 
+/** One comb row's test-line centers, pre-scaled and sorted, for windowed lookup per sample. */
+interface RowLines {
+  y0: number
+  y1: number
+  centers: Float64Array
+}
+
+// Precomputes the per-row sorted line centers and the widest x-window (mm) within which a line
+// can still influence a sample: half the bead width plus the larger of the edge blur and any
+// disturbance reach. Outside that window a line's contribution is exactly zero, so culling by
+// the window leaves the rendered image bit-identical while skipping almost every line.
+function precomputeRows(
+  g: ReturnType<typeof emCouponGeometry>,
+  o: Resolved,
+  effects: FlankEffects,
+): { rows: RowLines[]; windowMm: number } {
+  const rows: RowLines[] = [
+    { blocks: g.topRow, y0: g.topRowY0Mm - ANCHOR_OVERLAP_MM, y1: g.topRowY1Mm + ANCHOR_OVERLAP_MM },
+    {
+      blocks: g.bottomRow,
+      y0: g.bottomRowY0Mm - ANCHOR_OVERLAP_MM,
+      y1: g.bottomRowY1Mm + ANCHOR_OVERLAP_MM,
+    },
+  ].map((row) => {
+    const centers = row.blocks.flatMap((block) => block.lineXsMm.map((x) => x * o.pitchScale))
+    centers.sort((a, b) => a - b)
+    return { y0: row.y0, y1: row.y1, centers: Float64Array.from(centers) }
+  })
+  const reach = Math.max(
+    o.blurSigmaMm,
+    effects.left?.reachMm ?? 0,
+    effects.right?.reachMm ?? 0,
+  )
+  return { rows, windowMm: o.trueWidthMm / 2 + reach }
+}
+
+/** Index of the first element of the sorted array not below `value`. */
+function lowerBound(sorted: Float64Array, value: number): number {
+  let lo = 0
+  let hi = sorted.length
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1
+    if (sorted[mid] < value) lo = mid + 1
+    else hi = mid
+  }
+  return lo
+}
+
 /**
  * Fractional plastic coverage (0..1) at a coupon-frame point, per the EM coupon model in
  * `src/engine/em/types.ts`: an outer frame band, a center rail, two comb rows of test lines,
@@ -164,6 +212,8 @@ function couponCoverage(
   g: ReturnType<typeof emCouponGeometry>,
   o: Resolved,
   effects: FlankEffects,
+  rowLines: RowLines[],
+  windowMm: number,
 ): { plastic: number; hole: number } {
   const sigma = o.blurSigmaMm
   const scaleX = (xMm: number) => xMm * o.pitchScale
@@ -180,51 +230,43 @@ function couponCoverage(
   const railCoverage = boxCoverage(x, y, scaleX(band), g.railY0Mm, Wc - scaleX(band), g.railY1Mm, sigma)
   coverage = Math.max(coverage, railCoverage)
 
-  const rows: { blocks: typeof g.topRow; y0: number; y1: number }[] = [
-    { blocks: g.topRow, y0: g.topRowY0Mm - ANCHOR_OVERLAP_MM, y1: g.topRowY1Mm + ANCHOR_OVERLAP_MM },
-    {
-      blocks: g.bottomRow,
-      y0: g.bottomRowY0Mm - ANCHOR_OVERLAP_MM,
-      y1: g.bottomRowY1Mm + ANCHOR_OVERLAP_MM,
-    },
-  ]
-  for (const row of rows) {
+  for (const row of rowLines) {
     if (y < row.y0 - sigma || y > row.y1 + sigma) continue
     const rowCoverage = softEdge(Math.min(y - row.y0, row.y1 - y), sigma)
     if (rowCoverage <= 0) continue
-    for (const block of row.blocks) {
-      for (const lineX of block.lineXsMm) {
-        const c = scaleX(lineX)
-        const half = o.trueWidthMm / 2
-        // Signed distance into the line (positive inside plastic, negative in the adjacent gap).
-        const d = half - Math.abs(x - c)
-        const effect = x < c ? effects.left : effects.right
-        const reach = effect?.kind === 'shadow' ? effect.reachMm : 0
-        if (d < -sigma && d < -reach) continue
-        // The real plastic edge stays sharp (the mid-level crossing sits on the true edge). The
-        // disturbances stay on the far side of the 0.5 mid level, confined to the band from
-        // `sigma` (just past the sharp edge, so the two samples straddling the mid-level crossing
-        // stay clean and the crossing stays on the true edge) out to the effect's reach (kept
-        // inside the centroid window). A smooth triangular deviation peaks mid-band; its gradient,
-        // seen by the wider centroid window but not by the local crossing, pulls the centroid
-        // without moving the crossing: the sub-pixel bias a real lamp imprints.
-        let edge = softEdge(d, sigma)
-        if (effect && effect.reachMm > sigma) {
-          if (effect.kind === 'shadow' && d < -sigma && d > -effect.reachMm) {
-            // Sub-mid shadow skirt in the gap next to this flank: pulls the centroid outward into
-            // the gap, so the gap reads narrower and the bead wider.
-            const u = (-d - sigma) / (effect.reachMm - sigma) // 0 at the inner band edge, 1 outer
-            edge = Math.max(edge, SKIRT_PEAK * (1 - Math.abs(2 * u - 1)))
-          } else if (effect.kind === 'glare' && d > sigma && d < effect.reachMm) {
-            // Above-mid glare fringe on the plastic slope facing the lamp: pulls the centroid
-            // inward into the plastic, so the gap reads wider and the bead narrower.
-            const u = (d - sigma) / (effect.reachMm - sigma)
-            edge = Math.min(edge, 1 - SKIRT_PEAK * (1 - Math.abs(2 * u - 1)))
-          }
+    // Only line centers within the influence window of x can contribute; the rest are the
+    // exact zero-contribution cases the per-line distance check would have skipped.
+    const from = lowerBound(row.centers, x - windowMm)
+    for (let li = from; li < row.centers.length && row.centers[li] <= x + windowMm; li++) {
+      const c = row.centers[li]
+      const half = o.trueWidthMm / 2
+      // Signed distance into the line (positive inside plastic, negative in the adjacent gap).
+      const d = half - Math.abs(x - c)
+      const effect = x < c ? effects.left : effects.right
+      const reach = effect?.kind === 'shadow' ? effect.reachMm : 0
+      if (d < -sigma && d < -reach) continue
+      // The real plastic edge stays sharp (the mid-level crossing sits on the true edge). The
+      // disturbances stay on the far side of the 0.5 mid level, confined to the band from
+      // `sigma` (just past the sharp edge, so the two samples straddling the mid-level crossing
+      // stay clean and the crossing stays on the true edge) out to the effect's reach (kept
+      // inside the centroid window). A smooth triangular deviation peaks mid-band; its gradient,
+      // seen by the wider centroid window but not by the local crossing, pulls the centroid
+      // without moving the crossing: the sub-pixel bias a real lamp imprints.
+      let edge = softEdge(d, sigma)
+      if (effect && effect.reachMm > sigma) {
+        if (effect.kind === 'shadow' && d < -sigma && d > -effect.reachMm) {
+          // Sub-mid shadow skirt in the gap next to this flank: pulls the centroid outward into
+          // the gap, so the gap reads narrower and the bead wider.
+          const u = (-d - sigma) / (effect.reachMm - sigma) // 0 at the inner band edge, 1 outer
+          edge = Math.max(edge, SKIRT_PEAK * (1 - Math.abs(2 * u - 1)))
+        } else if (effect.kind === 'glare' && d > sigma && d < effect.reachMm) {
+          // Above-mid glare fringe on the plastic slope facing the lamp: pulls the centroid
+          // inward into the plastic, so the gap reads wider and the bead narrower.
+          const u = (d - sigma) / (effect.reachMm - sigma)
+          edge = Math.min(edge, 1 - SKIRT_PEAK * (1 - Math.abs(2 * u - 1)))
         }
-        const lineCoverage = Math.min(rowCoverage, edge)
-        coverage = Math.max(coverage, lineCoverage)
       }
+      coverage = Math.max(coverage, Math.min(rowCoverage, edge))
     }
   }
 
@@ -255,6 +297,7 @@ export function renderEmScan(options: EmRenderOptions): RgbaImage {
   const cos = Math.cos(rad)
   const sin = Math.sin(rad)
   const effects = resolveFlankEffects(o, cos)
+  const { rows, windowMm } = precomputeRows(g, o, effects)
   const wMm = Math.abs(cos) * w0Mm + Math.abs(sin) * h0Mm
   const hMm = Math.abs(sin) * w0Mm + Math.abs(cos) * h0Mm
   const width = Math.round(wMm * o.pxPerMm)
@@ -280,7 +323,7 @@ export function renderEmScan(options: EmRenderOptions): RgbaImage {
           if (bx < 0 || by < 0 || bx > Wc || by > Hc) {
             acc += o.backgroundGray
           } else {
-            const { plastic, hole } = couponCoverage(bx, by, g, o, effects)
+            const { plastic, hole } = couponCoverage(bx, by, g, o, effects, rows, windowMm)
             // The stack, top to bottom: plastic, then the contrasting base (if any) backing
             // the window interior, then the scanner background showing through the fiducial
             // through-holes and where there is no base.
