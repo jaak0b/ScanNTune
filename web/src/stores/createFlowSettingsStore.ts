@@ -1,6 +1,23 @@
 import { defineStore } from 'pinia'
 import { computed, shallowRef } from 'vue'
 import { usePrinterProfiles } from './usePrinterProfiles'
+import { PART_COLORS, SCAN_PLACES, type PartColors, type ScanPlace } from '../model/scanPlan'
+
+/**
+ * The scan-place / part-colors fields shared by every flow that scans a printed coupon off the
+ * glass. Pressure advance legitimately lacks these: its coupon is scanned photo-side up on a
+ * contrasting base with no scan-place or part-color choice, so `usePaSettings` does not spread
+ * this fragment.
+ */
+export type ScanPlanSettings = {
+  scanPlace: ScanPlace
+  partColors: PartColors
+}
+
+export const SCAN_PLAN_FIELDS: FieldKinds<ScanPlanSettings> = {
+  scanPlace: { kind: 'enum', values: SCAN_PLACES },
+  partColors: { kind: 'enum', values: PART_COLORS },
+}
 
 /** How a stored settings field is validated when it is loaded back from localStorage. */
 export type FieldKind =

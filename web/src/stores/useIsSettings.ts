@@ -1,8 +1,7 @@
-import { createFlowSettingsStore, type FieldKinds } from './createFlowSettingsStore'
-import { PART_COLORS, SCAN_PLACES, type PartColors, type ScanPlace } from '../model/scanPlan'
+import { createFlowSettingsStore, SCAN_PLAN_FIELDS, type FieldKinds, type ScanPlanSettings } from './createFlowSettingsStore'
 
 /** User-adjustable settings of the input shaper flow; defaults come from `defaultIsTestSpec`. */
-export type IsSettings = {
+export type IsSettings = ScanPlanSettings & {
   lineSpeedMmS: number | null
   cornerSpeedMmS: number | null
   linesPerSpeed: number | null
@@ -12,8 +11,6 @@ export type IsSettings = {
   sweepFromHz: number | null
   sweepToHz: number | null
   sweepCycles: number | null
-  scanPlace: ScanPlace
-  partColors: PartColors
 }
 
 const FIELDS: FieldKinds<IsSettings> = {
@@ -26,8 +23,7 @@ const FIELDS: FieldKinds<IsSettings> = {
   sweepFromHz: { kind: 'nullableNumber' },
   sweepToHz: { kind: 'nullableNumber' },
   sweepCycles: { kind: 'nullableNumber' },
-  scanPlace: { kind: 'enum', values: SCAN_PLACES },
-  partColors: { kind: 'enum', values: PART_COLORS },
+  ...SCAN_PLAN_FIELDS,
 }
 
 export const useIsSettings = createFlowSettingsStore<IsSettings>({
