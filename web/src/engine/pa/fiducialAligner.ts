@@ -2,7 +2,7 @@ import type { Mat, OpenCv } from '../opencv'
 import type { PaTestSpec } from './types'
 import { couponGeometry } from './types'
 import { analyzeThresholdBands, deepestFailure, majorityFilterBinary, roiAround } from '../cvUtils'
-import { rotationDegreesFromAffine, selectCornerHoles } from '../cornerFiducialSolver'
+import { selectCornerHoles, solveFromCornerHoles } from '../cornerFiducialSolver'
 import { MIN_ALIGN_PX_PER_MM } from '../resolutionGate'
 
 // Locates the PA coupon's three square corner-hole fiducials in a scan and solves the
@@ -246,138 +246,19 @@ function tryAlign(
   }
 }
 
-// Identifies the corner-adjacent hole, resolves the mirror flip and the neighbour correspondence,
-// and solves the exact 3-point affine.
+// Solves orientation and the exact 3-point affine from the detected holes via the shared
+// corner-fiducial solver; the PA layout puts the corner-adjacent hole at fiducials[1] with
+// fiducials[0] and fiducials[2] as its neighbours (derived from couponGeometry, not assumed).
 function solveFromHoles(holes: Point[], g: ReturnType<typeof couponGeometry>): AlignAttempt {
-  // The corner-adjacent hole sees the other two at a right angle: pick the hole whose neighbour
-  // vectors have the cosine closest to zero.
-  let cornerIdx = -1
-  let bestCos = Infinity
-  for (let i = 0; i < 3; i++) {
-    const u = sub(holes[(i + 1) % 3], holes[i])
-    const v = sub(holes[(i + 2) % 3], holes[i])
-    const lu = Math.hypot(u.x, u.y)
-    const lv = Math.hypot(v.x, v.y)
-    if (lu < 1 || lv < 1) return fail('The detected coupon holes overlap; the scan is unreadable. Rescan at a higher resolution.', 3)
-    const cos = Math.abs((u.x * v.x + u.y * v.y) / (lu * lv))
-    if (cos < bestCos) {
-      bestCos = cos
-      cornerIdx = i
-    }
-  }
-  if (bestCos > 0.2) {
-    return fail(
-      'The three detected holes do not form the coupon corner pattern. Check for debris or reflections on the scan and try again.',
-      3,
-    )
-  }
-
-  // Nominal layout: fiducials[1] is the corner-adjacent hole, with fiducials[0] and fiducials[2]
-  // as its neighbours (derived from couponGeometry, not assumed).
-  const nCorner = g.fiducials[1]
-  const nA = g.fiducials[0]
-  const nB = g.fiducials[2]
-  const lenNA = Math.hypot(nA.xMm - nCorner.xMm, nA.yMm - nCorner.yMm)
-  const lenNB = Math.hypot(nB.xMm - nCorner.xMm, nB.yMm - nCorner.yMm)
-
-  const corner = holes[cornerIdx]
-  const p = holes[(cornerIdx + 1) % 3]
-  const q = holes[(cornerIdx + 2) % 3]
-  const lenP = Math.hypot(p.x - corner.x, p.y - corner.y)
-  const lenQ = Math.hypot(q.x - corner.x, q.y - corner.y)
-
-  // Ambiguity gate: the two candidate correspondences are only distinguishable at all because
-  // the nominal arm lengths differ (the assignment is chosen by comparing per-arm px/mm scales
-  // against lenNA and lenNB). If the coupon spec makes the nominal arms nearly equal, both
-  // candidates fit any scan almost equally well, so the choice is a coin flip baked into the
-  // coupon's geometry, not something a better scan could resolve: refuse rather than silently
-  // guess. The threshold is derived purely from the nominal geometry (never a magic constant
-  // fitted to a scan): a quarter of the observed measurement-noise floor implied by the fiducial
-  // detection tolerance used elsewhere (the anisotropy gate's 10%) is used as the minimum
-  // separation the nominal arm-length ratio must clear.
-  const nominalArmRatioDiff = Math.abs(lenNA - lenNB) / Math.max(lenNA, lenNB)
-  if (nominalArmRatioDiff < 0.25 * 0.1) {
-    return fail(
-      "The coupon's two fiducial arms are too similar in length to orient the scan reliably. Use a coupon spec with distinct fiducial arm lengths.",
-      3,
-    )
-  }
-
-  // Correspondence: assign the detected neighbours so the per-arm px/mm scales agree best.
-  const mismatch = (l1: number, l2: number) => Math.abs(l1 / lenNA - l2 / lenNB)
-  const [dA, dB] = mismatch(lenP, lenQ) <= mismatch(lenQ, lenP) ? [p, q] : [q, p]
-
-  // Anisotropy gate: the two arms must imply consistent scales.
-  const sA = Math.hypot(dA.x - corner.x, dA.y - corner.y) / lenNA
-  const sB = Math.hypot(dB.x - corner.x, dB.y - corner.y) / lenNB
-  if (Math.abs(sA / sB - 1) > 0.1) {
-    return fail(
-      'The detected holes do not match the coupon proportions. The scan may show a different object or a distorted coupon.',
-      3,
-    )
-  }
-
-  // Mirror flip: the cross-product sign of the corner's neighbour vectors, compared between the
-  // nominal layout and the detection. A rotation preserves the sign; a flip inverts it.
-  const nominalCross =
-    (nA.xMm - nCorner.xMm) * (nB.yMm - nCorner.yMm) - (nA.yMm - nCorner.yMm) * (nB.xMm - nCorner.xMm)
-  const detectedCross = (dA.x - corner.x) * (dB.y - corner.y) - (dA.y - corner.y) * (dB.x - corner.x)
-  if (nominalCross === 0 || detectedCross === 0) {
-    return fail('The detected coupon holes are collinear, so the coupon orientation could not be determined.', 3)
-  }
-  const flipped = Math.sign(detectedCross) !== Math.sign(nominalCross)
-
-  const affine = solveAffine(
-    [nCorner, nA, nB].map((f) => ({ x: f.xMm, y: f.yMm })),
-    [corner, dA, dB],
-  )
-  if (!affine) {
-    return fail('The detected coupon holes are collinear, so the coupon orientation could not be determined.', 3)
-  }
-
-  // Diagnostic rotation of the coupon's +X axis: the exact angle and its quarter-turn estimate.
-  const angle = Math.atan2(affine.c, affine.a)
-  const rotationQuarterTurns = ((Math.round(angle / (Math.PI / 2)) % 4) + 4) % 4
-
+  const solved = solveFromCornerHoles(holes, g.fiducials)
+  if (!solved.ok) return fail(solved.reason, 3)
   return {
     success: true,
     failureReason: null,
-    ...affine,
-    flipped,
-    rotationQuarterTurns,
-    rotationDegrees: rotationDegreesFromAffine(affine),
+    ...solved.affine,
+    flipped: solved.flipped,
+    rotationQuarterTurns: solved.rotationQuarterTurns,
+    rotationDegrees: solved.rotationDegrees,
     stage: 4,
   }
-}
-
-function sub(p: Point, q: Point): Point {
-  return { x: p.x - q.x, y: p.y - q.y }
-}
-
-// The exactly-determined affine from 3 point correspondences (mm -> px), via Cramer's rule on the
-// 3x3 system with rows (x_i, y_i, 1); one solve each for the x' and y' components. Returns null
-// when the source points are collinear (zero determinant).
-function solveAffine(
-  src: Point[],
-  dst: Point[],
-): { a: number; b: number; c: number; d: number; tx: number; ty: number } | null {
-  const [p0, p1, p2] = src
-  const det =
-    p0.x * (p1.y - p2.y) - p0.y * (p1.x - p2.x) + (p1.x * p2.y - p2.x * p1.y)
-  if (Math.abs(det) < 1e-9) return null
-
-  const cramer = (r0: number, r1: number, r2: number) => {
-    // System: [x_i y_i 1] * [u v w]^T = r_i
-    const d1 = r0 * (p1.y - p2.y) - p0.y * (r1 - r2) + (r1 * p2.y - r2 * p1.y)
-    const d2 = p0.x * (r1 - r2) - r0 * (p1.x - p2.x) + (p1.x * r2 - p2.x * r1)
-    const d3 =
-      p0.x * (p1.y * r2 - r1 * p2.y) -
-      p0.y * (p1.x * r2 - r1 * p2.x) +
-      r0 * (p1.x * p2.y - p2.x * p1.y)
-    return [d1 / det, d2 / det, d3 / det]
-  }
-
-  const [a, b, tx] = cramer(dst[0].x, dst[1].x, dst[2].x)
-  const [c, d, ty] = cramer(dst[0].y, dst[1].y, dst[2].y)
-  return { a, b, c, d, tx, ty }
 }
