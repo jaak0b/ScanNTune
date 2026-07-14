@@ -1,11 +1,13 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, shallowRef } from 'vue'
+import { computed, ref, shallowRef } from 'vue'
 import { useApp } from '../stores/useApp'
-import { useCalibration } from '../stores/useCalibration'
 import { usePrinterProfiles } from '../stores/usePrinterProfiles'
 import { useEmSettings } from '../stores/useEmSettings'
+import { useCalibrationGate } from '../composables/useCalibrationGate'
 import { useFlowSettingsForm } from '../composables/useFlowSettingsForm'
-import type { PartColors, ScanPlace } from '../model/scanPlan'
+import { useScanAnalysis } from '../composables/useScanAnalysis'
+import { PART_COLORS_ITEMS, SCAN_PLACE_ITEMS, scanPlanNoteText } from '../model/scanPlan'
+import type { PartColors, ScanPlace, ScanPlanTexts } from '../model/scanPlan'
 import { readBytes } from '../util/preview'
 import { scaleReferenceAtDpi } from '../engine/scannerCalibration'
 import { resolutionRowValue } from '../util/scanResolution'
@@ -30,19 +32,14 @@ import NumericField from './NumericField.vue'
 import OverlayCanvas from './OverlayCanvas.vue'
 import CodeBlock from './CodeBlock.vue'
 import MetricTile from './MetricTile.vue'
+import ResolutionChip from './ResolutionChip.vue'
 
 const app = useApp()
 const store = usePrinterProfiles()
 
 // Scanner calibration is a hard requirement: the analysis measures pitch and gap in true
 // millimetres (axis-scale and shrinkage immune), which needs the card-derived px/mm.
-const calibration = useCalibration()
-const isCalibrated = computed(() => calibration.calibration !== null)
-const calibrationLine = computed(() =>
-  isCalibrated.value
-    ? `${Math.round(calibration.calibration!.dpi)} dpi`
-    : 'Not calibrated',
-)
+const { calibration, isCalibrated, calibrationLine } = useCalibrationGate()
 
 // Spec defaults follow the selected printer. The fields are persisted per printer profile;
 // with nothing stored for the selected profile they fall back to the spec defaults, and a
@@ -81,32 +78,27 @@ const {
   scanPlace,
   partColors,
 } = settingsForm
-const scanPlaceItems = [
-  { title: 'Scan the removed part', value: 'part' },
-  { title: 'Scan with the build plate', value: 'plate' },
-]
-const partColorsItems = [
-  { title: 'Single color', value: 'single' },
-  { title: 'Two colors (contrasting base)', value: 'base' },
-]
-const scanPlanNote = computed(() => {
-  if (scanPlace.value === 'plate') {
-    const placement =
-      'The coupon is printed at the front edge of the bed, so that edge of the build ' +
-      'plate can lie on the scanner glass. Useful for filaments that are hard to remove, ' +
-      'like TPU or PETG.'
-    return partColors.value === 'base'
-      ? placement +
-          ' The contrasting base backs the measured gaps, so the build plate surface does not matter.'
-      : placement +
-          ' Use a light, even build plate; a dark or textured plate shows through the gaps and the scan is refused.'
-  }
-  return partColors.value === 'base'
-    ? 'A base is printed in a second color underneath the coupon, with a filament swap ' +
-        'pause between the two. The two filaments need to differ in brightness.'
-    : 'The removed part is scanned face down on the glass. The filament color needs to ' +
-        'contrast with the backing, either the scanner lid or a sheet of paper.'
-})
+const scanPlaceItems = SCAN_PLACE_ITEMS
+const partColorsItems = PART_COLORS_ITEMS
+const scanPlanTexts: ScanPlanTexts = {
+  platePlacement:
+    'The coupon is printed at the front edge of the bed, so that edge of the build ' +
+    'plate can lie on the scanner glass. Useful for filaments that are hard to remove, ' +
+    'like TPU or PETG.',
+  plateBase:
+    ' The contrasting base backs the measured gaps, so the build plate surface does not matter.',
+  plateSingle:
+    ' Use a light, even build plate; a dark or textured plate shows through the gaps and the scan is refused.',
+  partBase:
+    'A base is printed in a second color underneath the coupon, with a filament swap ' +
+    'pause between the two. The two filaments need to differ in brightness.',
+  partSingle:
+    'The removed part is scanned face down on the glass. The filament color needs to ' +
+    'contrast with the backing, either the scanner lid or a sheet of paper.',
+}
+const scanPlanNote = computed(() =>
+  scanPlanNoteText(scanPlace.value, partColors.value, scanPlanTexts),
+)
 
 const spec = computed<EmTestSpec>(() => ({
   ...specDefaults.value,
@@ -178,14 +170,7 @@ function generate(): void {
 // Scan step state: one scan is required, a second scan of the same coupon rotated 180 degrees
 // on the glass is optional (it cancels one-sided scanner-lamp shading in the pooled estimate).
 // While an analysis runs, the upload and flow controls are locked.
-const scanFiles = ref<File[]>([])
-const scanPickHint = ref('')
-const analyzing = ref(false)
-// True once "Analyze" was clicked; the per-file delete buttons give way to the "Start over"
-// reset until the step is cleared again.
-const analysisStarted = ref(false)
 const progressText = ref('')
-const scanError = ref('')
 // The user's CURRENT slicer flow, entered either as a factor (PrusaSlicer extrusion
 // multiplier / Orca flow ratio, e.g. 0.96) or as a percent (Cura-style, e.g. 96). Values
 // above 5 are read as percent; real factors live near 1 and real percents near 100, so the
@@ -212,57 +197,36 @@ function onProgress(p: EmProgress): void {
   }
 }
 
-const processing = shallowRef<EmProcessing | null>(null)
 // The spec the current `processing` result was actually analyzed against, so the result card
 // stays consistent even if the form fields above change afterwards.
 const analyzedSpec = shallowRef<EmTestSpec | null>(null)
 
-function resetProcessing(): void {
-  zoomed.value = null
-  processing.value?.overlays.forEach((bitmap) => bitmap.close())
-  processing.value = null
-  analyzedSpec.value = null
-}
-
-onBeforeUnmount(resetProcessing)
-
-// The overlay a scan card was clicked on, shown full size in a dialog; null when closed.
-const zoomed = shallowRef<ImageBitmap | null>(null)
-
-function onPickScans(e: Event): void {
-  const input = e.target as HTMLInputElement
-  const picked = Array.from(input.files ?? [])
-  // Clear the input so picking the same file again still fires change.
-  input.value = ''
-  // A disabled input still receives drops in some browsers; the calibration is a hard
-  // requirement and a running analysis must not be doubled up.
-  if (picked.length === 0 || analyzing.value || analysisStarted.value || !calibration.calibration)
-    return
-  scanPickHint.value = ''
-  const room = 2 - scanFiles.value.length
-  if (picked.length > room) {
-    scanPickHint.value =
-      'The analysis uses at most two scan images. The files beyond the first two were not added.'
-  }
-  scanFiles.value = [...scanFiles.value, ...picked.slice(0, Math.max(0, room))]
-}
-
-function removeScan(index: number): void {
-  if (analyzing.value || analysisStarted.value) return
-  scanFiles.value = scanFiles.value.filter((_, i) => i !== index)
-  scanPickHint.value = ''
-}
-
-// Clears the whole scan step (files, result, overlays, and errors) so new scans can be picked
-// and analyzed from a clean slate.
-function startOver(): void {
-  if (analyzing.value) return
-  resetProcessing()
-  scanFiles.value = []
-  scanPickHint.value = ''
-  scanError.value = ''
-  analysisStarted.value = false
-}
+// The calibration is a hard requirement, so the pick guard refuses files without one.
+const {
+  scanFiles,
+  scanPickHint,
+  analyzing,
+  analysisStarted,
+  scanError,
+  processing,
+  zoomed,
+  onPickScans,
+  removeScan,
+  startOver,
+  analyzeWith,
+} = useScanAnalysis<EmProcessing>({
+  maxFiles: 2,
+  tooManyHint:
+    'The analysis uses at most two scan images. The files beyond the first two were not added.',
+  errorLabel: 'EM scan analysis failed',
+  canPick: () => calibration.calibration !== null,
+  onReset: () => {
+    analyzedSpec.value = null
+  },
+  onSettled: () => {
+    progressText.value = ''
+  },
+})
 
 const canAnalyze = computed(
   () =>
@@ -274,25 +238,16 @@ async function analyze(): Promise<void> {
   const cal = calibration.calibration
   if (files.length === 0 || analyzing.value || !cal || !currentFlowValid.value) return
   const usedSpec = spec.value
-  analyzing.value = true
-  analysisStarted.value = true
   progressText.value = 'Reading the scan'
-  scanError.value = ''
-  resetProcessing()
-  try {
+  await analyzeWith(async () => {
     const bytesList = await Promise.all(files.map((file) => readBytes(file)))
     // The calibration's scale error holds across resolutions; the scan is expected at the
     // calibration DPI, so the calibration is priced at exactly that resolution.
     const scanPxPerMm = scaleReferenceAtDpi(cal, cal.dpi)
-    processing.value = await analyzeEmScans(bytesList, usedSpec, scanPxPerMm, cal.dpi, onProgress)
+    const p = await analyzeEmScans(bytesList, usedSpec, scanPxPerMm, cal.dpi, onProgress)
     analyzedSpec.value = usedSpec
-  } catch (err) {
-    console.error('EM scan analysis failed', err)
-    scanError.value = err instanceof Error ? err.message : String(err)
-  } finally {
-    analyzing.value = false
-    progressText.value = ''
-  }
+    return p
+  })
 }
 
 // Result card state, derived from the analyzedSpec snapshot, never the live form state.
@@ -332,12 +287,6 @@ const pitchScaleOff = computed(() => {
   const p = result.value?.pitchScale
   return p !== null && p !== undefined && Math.abs(p - 1) > 0.003
 })
-// Raw diagnostic: the resolution geometrically measured from the coupon itself.
-const resolutionText = computed(() => {
-  const px = result.value?.measuredPxPerMm
-  return px != null && px > 0 ? resolutionRowValue(px) : null
-})
-
 // The shadow alert only fires on a single-scan result, where a second scan can fix it; for a
 // combined pair the surviving residual is already carried as the flow tile's uncertainty.
 const showShadowWarning = computed(() => {
@@ -765,15 +714,7 @@ const scanCards = computed<ScanCard[]>(() => {
           />
         </div>
         <div class="facts mb-3">
-          <v-chip
-            v-if="resolutionText"
-            size="small"
-            variant="tonal"
-            prepend-icon="mdi-magnify-scan"
-            data-testid="em-resolution"
-          >
-            resolution {{ resolutionText }}
-          </v-chip>
+          <ResolutionChip :measured-px-per-mm="result.measuredPxPerMm" testid="em-resolution" />
           <v-chip size="small" variant="tonal" prepend-icon="mdi-scale-balance" data-testid="em-bias">
             separator check {{ result.biasMm!.toFixed(3) }} mm
           </v-chip>

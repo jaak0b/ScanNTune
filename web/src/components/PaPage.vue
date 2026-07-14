@@ -3,8 +3,9 @@ import { computed, onBeforeUnmount, ref, shallowRef } from 'vue'
 import { usePrinterProfiles } from '../stores/usePrinterProfiles'
 import { usePaSettings } from '../stores/usePaSettings'
 import { useFlowSettingsForm } from '../composables/useFlowSettingsForm'
+import { runGuardedAnalysis } from '../composables/useScanAnalysis'
 import { readBytes } from '../util/preview'
-import { resolutionRowValue } from '../util/scanResolution'
+import { hasMeasuredResolution } from '../util/scanResolution'
 import { analyzePaScan } from '../workerClient'
 import type { PaProcessing } from '../workerClient'
 import { generatePaGcodeWithReport } from '../engine/pa/gcodeGenerator'
@@ -24,6 +25,7 @@ import OverlayCanvas from './OverlayCanvas.vue'
 import CodeBlock from './CodeBlock.vue'
 import MetricTile from './MetricTile.vue'
 import PrinterProfileCard from './PrinterProfileCard.vue'
+import ResolutionChip from './ResolutionChip.vue'
 
 const store = usePrinterProfiles()
 
@@ -192,23 +194,22 @@ async function analyzeUpload(
   input.value = ''
   // A disabled input still receives drops in some browsers; never start a second analysis.
   if (!file || analyzing.value) return
-  analyzing.value = true
   analyzeKind.value = kind
   progressText.value = 'Reading the scan'
-  sink.error.value = ''
   sink.reset()
-  try {
-    const bytes = await readBytes(file)
-    sink.processing.value = await analyzePaScan(bytes, usedSpec, onProgress)
-    sink.analyzedSpec.value = usedSpec
-  } catch (err) {
-    console.error('PA scan analysis failed', err)
-    sink.error.value = err instanceof Error ? err.message : String(err)
-  } finally {
-    analyzing.value = false
-    analyzeKind.value = null
-    progressText.value = ''
-  }
+  await runGuardedAnalysis(
+    { analyzing, error: sink.error },
+    'PA scan analysis failed',
+    async () => {
+      const bytes = await readBytes(file)
+      sink.processing.value = await analyzePaScan(bytes, usedSpec, onProgress)
+      sink.analyzedSpec.value = usedSpec
+    },
+    () => {
+      analyzeKind.value = null
+      progressText.value = ''
+    },
+  )
 }
 
 async function onPick(e: Event): Promise<void> {
@@ -235,10 +236,7 @@ const correction = computed(() => {
   return paCorrection(store.selected?.firmware ?? 'Klipper', r.bestPa)
 })
 // Raw diagnostic: the resolution geometrically measured from the coupon itself.
-const resolutionText = computed(() => {
-  const px = result.value?.measuredPxPerMm
-  return px != null && px > 0 ? resolutionRowValue(px) : null
-})
+const hasResolution = computed(() => hasMeasuredResolution(result.value?.measuredPxPerMm))
 
 const edgeShift = computed<{ start: number; end: number } | null>(() => {
   const r = result.value
@@ -550,15 +548,8 @@ const stCorrection = computed(() => {
           />
         </div>
 
-        <div v-if="resolutionText" class="facts mb-3">
-          <v-chip
-            size="small"
-            variant="tonal"
-            prepend-icon="mdi-magnify-scan"
-            data-testid="pa-resolution"
-          >
-            resolution {{ resolutionText }}
-          </v-chip>
+        <div v-if="hasResolution" class="facts mb-3">
+          <ResolutionChip :measured-px-per-mm="result.measuredPxPerMm" testid="pa-resolution" />
         </div>
 
         <div v-if="edgeShift" class="warn-box mb-3" data-testid="pa-edge-warning">

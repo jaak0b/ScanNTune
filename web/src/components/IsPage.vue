@@ -1,11 +1,13 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, shallowRef } from 'vue'
+import { computed, ref } from 'vue'
 import { useApp } from '../stores/useApp'
-import { useCalibration } from '../stores/useCalibration'
 import { usePrinterProfiles } from '../stores/usePrinterProfiles'
 import { useIsSettings } from '../stores/useIsSettings'
+import { useCalibrationGate } from '../composables/useCalibrationGate'
 import { useFlowSettingsForm } from '../composables/useFlowSettingsForm'
-import type { PartColors, ScanPlace } from '../model/scanPlan'
+import { useScanAnalysis } from '../composables/useScanAnalysis'
+import { PART_COLORS_ITEMS, SCAN_PLACE_ITEMS, scanPlanNoteText } from '../model/scanPlan'
+import type { PartColors, ScanPlace, ScanPlanTexts } from '../model/scanPlan'
 import { readBytes } from '../util/preview'
 import { scaleReferenceAtDpi } from '../engine/scannerCalibration'
 import {
@@ -44,13 +46,7 @@ const store = usePrinterProfiles()
 
 // The scan step measures the ringing wavelength in true millimetres, which needs the
 // card-derived px/mm; generation itself does not depend on the calibration.
-const calibration = useCalibration()
-const isCalibrated = computed(() => calibration.calibration !== null)
-const calibrationLine = computed(() =>
-  isCalibrated.value
-    ? `${Math.round(calibration.calibration!.dpi)} dpi`
-    : 'Not calibrated',
-)
+const { calibration, isCalibrated, calibrationLine } = useCalibrationGate()
 
 // Spec defaults follow the selected printer. The fields are persisted per printer profile;
 // with nothing stored for the selected profile they fall back to the spec defaults, and a
@@ -97,30 +93,25 @@ const {
   scanPlace,
   partColors,
 } = settingsForm
-const scanPlaceItems = [
-  { title: 'Scan the removed part', value: 'part' },
-  { title: 'Scan with the build plate', value: 'plate' },
-]
-const partColorsItems = [
-  { title: 'Single color', value: 'single' },
-  { title: 'Two colors (contrasting base)', value: 'base' },
-]
-const scanPlanNote = computed(() => {
-  if (scanPlace.value === 'plate') {
-    const placement =
-      'The coupon prints at the front edge of the bed so the plate edge can rest on the ' +
-      'scanner glass. Use this for filaments that are hard to remove, like TPU or PETG.'
-    return partColors.value === 'base'
-      ? placement +
-          ' The contrasting base backs the open window, so the build plate surface does not matter.'
-      : placement +
-          ' Use a light, even build plate; a dark or textured plate shows through the window and the scan is refused.'
-  }
-  return partColors.value === 'base'
-    ? 'A base prints in a second color under the coupon, with a filament swap pause ' +
-        'between them. The two filaments must differ in brightness.'
-    : 'The filament color must contrast with the backing, either the lid or a sheet of paper.'
-})
+const scanPlaceItems = SCAN_PLACE_ITEMS
+const partColorsItems = PART_COLORS_ITEMS
+const scanPlanTexts: ScanPlanTexts = {
+  platePlacement:
+    'The coupon prints at the front edge of the bed so the plate edge can rest on the ' +
+    'scanner glass. Use this for filaments that are hard to remove, like TPU or PETG.',
+  plateBase:
+    ' The contrasting base backs the open window, so the build plate surface does not matter.',
+  plateSingle:
+    ' Use a light, even build plate; a dark or textured plate shows through the window and the scan is refused.',
+  partBase:
+    'A base prints in a second color under the coupon, with a filament swap pause ' +
+    'between them. The two filaments must differ in brightness.',
+  partSingle:
+    'The filament color must contrast with the backing, either the lid or a sheet of paper.',
+}
+const scanPlanNote = computed(() =>
+  scanPlanNoteText(scanPlace.value, partColors.value, scanPlanTexts),
+)
 
 const spec = computed<IsTestSpec>(() => {
   return {
@@ -237,29 +228,28 @@ function generate(): void {
 // flows hold their scan state. Each axis group is only read along the scanner's sensor rows,
 // which is why the part is scanned twice, a quarter turn apart. The analyzer assigns each
 // axis group to the scan that reads it along the sensor rows, so the pick order is free.
-const scanFiles = ref<File[]>([])
-const scanPickHint = ref('')
-const analyzing = ref(false)
-// True once "Analyze scans" was clicked; the per-file delete buttons give way to the
-// "Start over" reset until the step is cleared again.
-const analysisStarted = ref(false)
-const scanError = ref('')
-const processing = shallowRef<IsProcessing | null>(null)
+const {
+  scanFiles,
+  scanPickHint,
+  analyzing,
+  analysisStarted,
+  scanError,
+  processing,
+  zoomed,
+  onPickScans,
+  removeScan,
+  startOver,
+  analyzeWith,
+} = useScanAnalysis<IsProcessing>({
+  maxFiles: 2,
+  tooManyHint:
+    'The analysis uses exactly two scan images. The files beyond the first two were not added.',
+  errorLabel: 'Input shaper scan analysis failed',
+})
 const result = computed(() => processing.value?.result ?? null)
 // The firmware the current result was analyzed under, so the snippet stays consistent even if
 // the profile selection changes afterwards.
 const analyzedFirmware = ref<Firmware>('Klipper')
-
-function resetProcessing(): void {
-  zoomed.value = null
-  processing.value?.overlays.forEach((bitmap) => bitmap.close())
-  processing.value = null
-}
-
-onBeforeUnmount(resetProcessing)
-
-// The overlay a scan card was clicked on, shown full size in a dialog; null when closed.
-const zoomed = shallowRef<ImageBitmap | null>(null)
 
 // Per-scan card facts, derived from the result: the alignment (fiducials), the resolved
 // orientation, and which axis group this scan measured with its line tally. The engine stops
@@ -358,38 +348,6 @@ const scanCards = computed<ScanCard[]>(() => {
   })
 })
 
-function onPickScans(e: Event): void {
-  const input = e.target as HTMLInputElement
-  const picked = Array.from(input.files ?? [])
-  // Clear the input so picking the same file again still fires change.
-  input.value = ''
-  if (picked.length === 0 || analyzing.value || analysisStarted.value) return
-  scanPickHint.value = ''
-  const room = 2 - scanFiles.value.length
-  if (picked.length > room) {
-    scanPickHint.value =
-      'The analysis uses exactly two scan images. The files beyond the first two were not added.'
-  }
-  scanFiles.value = [...scanFiles.value, ...picked.slice(0, Math.max(0, room))]
-}
-
-function removeScan(index: number): void {
-  if (analyzing.value || analysisStarted.value) return
-  scanFiles.value = scanFiles.value.filter((_, i) => i !== index)
-  scanPickHint.value = ''
-}
-
-// Clears the whole scan step (files, result, overlays, and errors) so a new pair of scans
-// can be picked and analyzed from a clean slate.
-function startOver(): void {
-  if (analyzing.value) return
-  resetProcessing()
-  scanFiles.value = []
-  scanPickHint.value = ''
-  scanError.value = ''
-  analysisStarted.value = false
-}
-
 const canAnalyze = computed(
   () =>
     scanFiles.value.length === 2 &&
@@ -404,23 +362,15 @@ async function analyze(): Promise<void> {
   // The analysis measures the print as generated, so it runs against the bed-fitted spec.
   const usedSpec = fittedSpec.value
   if (!fileA || !fileB || !cal || !usedSpec || analyzing.value) return
-  analyzing.value = true
-  analysisStarted.value = true
-  scanError.value = ''
-  resetProcessing()
-  try {
+  await analyzeWith(async () => {
     const [bytesA, bytesB] = await Promise.all([readBytes(fileA), readBytes(fileB)])
     // The calibration's scale error holds across resolutions; the scan is expected at the
     // calibration DPI, so the calibration is priced at exactly that resolution.
     const scanPxPerMm = scaleReferenceAtDpi(cal, cal.dpi)
-    processing.value = await analyzeIsScans(bytesA, bytesB, usedSpec, scanPxPerMm, cal.dpi)
+    const p = await analyzeIsScans(bytesA, bytesB, usedSpec, scanPxPerMm, cal.dpi)
     analyzedFirmware.value = store.selected?.firmware ?? 'Klipper'
-  } catch (err) {
-    console.error('Input shaper scan analysis failed', err)
-    scanError.value = err instanceof Error ? err.message : String(err)
-  } finally {
-    analyzing.value = false
-  }
+    return p
+  })
 }
 </script>
 
