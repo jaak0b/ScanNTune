@@ -126,10 +126,11 @@ ref_dot_d = 2.5;    // reference dot diameter (mm)
 $fn = 96;
 
 // ---- Test render ----------------------------------------------------
-// When true, emit a flat 2D projection of the scanned face (dark on light)
-// instead of the pre-oriented STL. Used to generate synthetic "scan" images
-// for the engine tests: the ring/hole/diagonal centres are exactly the model's, so
-// the pipeline and plane-ID can be verified against known geometry.
+// When true, emit a flat 2D projection of the scanned face AS SEEN BY THE SCANNER
+// (dark on light, mirrored view from below the glass) instead of the pre-oriented STL.
+// Used to generate synthetic "scan" images for the engine tests: the ring/hole/diagonal
+// centres are exactly the model's, so the pipeline and plane-ID can be verified against
+// known geometry.
 scan_view = false;
 scan_rotate = 0;    // in-plane rotation (deg) of the scan_view image, for a quarter-turn pair
 
@@ -304,7 +305,10 @@ module plate() {
 // =====================================================================
 //  Export orientation  (pre-oriented so it loads sitting on the bed)
 // =====================================================================
-if (scan_view)          rotate([0, 0, scan_rotate]) color([0.12, 0.12, 0.12]) projection(cut = false) plate();
+// The scan_view render is the scanned face as a flatbed scanner sees it: the scanner images the
+// face on the glass from BELOW, so the projection is mirrored. scan_rotate then rotates the
+// resulting scanned image in-plane.
+if (scan_view)          rotate([0, 0, scan_rotate]) mirror([1, 0, 0]) color([0.12, 0.12, 0.12]) projection(cut = false) plate();
 else if (plane == "XY") plate();
 else if (plane == "XZ") translate([0, 0, zlift]) rotate([90, 0, 0]) plate();
 else /* YZ */           rotate([0, 0, 90]) translate([0, 0, zlift]) rotate([90, 0, 0]) plate();

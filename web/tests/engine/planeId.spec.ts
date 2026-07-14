@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, it, expect, beforeAll } from 'vitest'
-import { getCv, decodeFixtureBgr, blankBgr } from '../helpers/cv'
+import { getCv, decodeFixtureBgr, blankGray } from '../helpers/cv'
 import { analyzeCoupon } from '../../src/engine/couponAnalyzer'
 import { readPlaneId } from '../../src/engine/planeIdReader'
 import { asAligned, defaultCouponSpec } from '../../src/engine/types'
@@ -44,6 +44,12 @@ describe('plane-ID and detection on rendered plates', () => {
     expect(results[plane].ringsDetected).toBeGreaterThanOrEqual(22)
   })
 
+  it.each(cases)('a $plane render of the scanned face reads flipped false', ({ plane }) => {
+    // The scan_view fixtures are mirrored the way a flatbed images the face on the glass, so the
+    // designed scan face must read as NOT flipped; the old top-view convention read the opposite.
+    expect(results[plane].orientation?.flipped).toBe(false)
+  })
+
   it.each(cases)('a perfect $plane render has near-zero skew', ({ plane }) => {
     expect(Math.abs(results[plane].skewDegrees)).toBeLessThanOrEqual(0.1)
   })
@@ -54,15 +60,15 @@ describe('plane-ID and detection on rendered plates', () => {
   })
 
   it('refuses a grid too small to carry the largest code (gridN < 4)', () => {
-    const img = blankBgr(cv)
+    const mask = blankGray(cv)
     try {
       const affine = { a: 5, b: 0, c: 0, d: 5, tx: 50, ty: 50 }
       const spec = { ...defaultCouponSpec(), gridN: 3 }
       expect(
-        readPlaneId(cv, img, spec, { ...affine, scaleXPxPerMm: 5, scaleYPxPerMm: 5, skewDegrees: 0, rmsResidualPx: 0, pointCount: 7 }, true),
+        readPlaneId(mask, spec, { ...affine, scaleXPxPerMm: 5, scaleYPxPerMm: 5, skewDegrees: 0, rmsResidualPx: 0, pointCount: 7 }),
       ).toBeNull()
     } finally {
-      img.delete()
+      mask.delete()
     }
   })
 })

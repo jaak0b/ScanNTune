@@ -1,68 +1,58 @@
 import type { Mat, OpenCv } from './opencv'
 import type { DetectedRing } from './types'
 import { median } from './math'
-import { analyzeBothPolarities } from './cvUtils'
-import type { Polarity } from './cvUtils'
+import { analyzeThresholdBands } from './cvUtils'
 
-// Thresholds the image on the HSV value channel (Otsu), finds the enclosed holes, and keeps the ring
-// centres (the binary area centroid, immune to over/under extrusion). Ring holes are separated from
-// the much larger square lattice cells by a size cluster (radius-median filter), so circularity is
-// only a loose gate to drop slivers (real holes are rough, circularity ~0.2 to 0.8).
+// Finds the enclosed holes of a part-white binary and keeps the ring centres (the binary area
+// centroid, immune to over/under extrusion). Ring holes are separated from the much larger square
+// lattice cells by a size cluster (radius-median filter), so circularity is only a loose gate to
+// drop slivers (real holes are rough, circularity ~0.2 to 0.8).
 //
-// Which side of the threshold is the part is NOT guessed here. A border statistic proved unreliable:
+// Which binarisation shows the part is NOT guessed here. A border statistic proved unreliable:
 // a backing sheet that stops short of the scan bed leaves bright scanner-lid margins on the image
 // border, flipping the guess and turning dust specks into the only "holes". Instead detection runs
-// under BOTH polarities and the caller validates each candidate set against the coupon's known grid
-// and orientation marker (model selection against the coupon model), keeping the one that fits.
+// on every threshold-band hypothesis (analyzeThresholdBands: single-Otsu polarities, multi-level
+// value bands, saturation bands for color input) and the caller validates each candidate set
+// against the coupon's known grid and orientation marker (model selection against the coupon
+// model), keeping the first that fits.
 
-/** Whether the part is assumed brighter or darker than what is behind it. */
-export type RingPolarity = Polarity
-
-export interface DualDetection {
-  bright: DetectedRing[]
-  dark: DetectedRing[]
+/** One threshold band's detection: the ring candidates and the binary the hole search ran on. */
+export interface RingBandDetection {
+  rings: DetectedRing[]
+  /** The searched binary (part white, morphologically closed), full frame. `evaluate` owns it. */
+  mask: Mat
 }
 
-// When `masksOut` is passed, the binary mask each polarity ran findContours on (the value channel
-// thresholded, oriented part-white, and morphologically closed) is cloned into it so the caller can
-// show the user exactly what the detector searched. The caller owns and must delete both masks.
-export function detectRingsDual(
+// Runs ring detection on every threshold-band hypothesis of the image, handing each band's rings
+// and searched mask to `evaluate`. `evaluate` takes ownership of the mask the moment it is
+// called, including when it throws, so mask ownership is never split between caller and sweep.
+// The sweep stops as soon as `isDone` accepts a result; the results collected so far are
+// returned in band order.
+export function detectRingsOnBands<T>(
   cv: OpenCv,
   image: Mat,
+  evaluate: (detection: RingBandDetection) => T,
+  isDone?: (result: T) => boolean,
   minHoleAreaPx = 40.0,
   minCircularity = 0.2,
-  masksOut?: { bright?: Mat; dark?: Mat },
-): DualDetection {
-  const wantMasks = masksOut !== undefined
-  try {
-    return analyzeBothPolarities(cv, image, (partWhite, polarity) => {
-      const { rings, mask } = detectOnBinary(cv, partWhite, minHoleAreaPx, minCircularity, wantMasks)
-      // Hand each mask over as soon as it exists, so the catch below can free it if the other
-      // polarity's pass throws.
-      if (masksOut && mask) masksOut[polarity] = mask
-      return rings
-    })
-  } catch (e) {
-    masksOut?.bright?.delete()
-    masksOut?.dark?.delete()
-    if (masksOut) {
-      delete masksOut.bright
-      delete masksOut.dark
-    }
-    throw e
-  }
+): T[] {
+  return analyzeThresholdBands(
+    cv,
+    image,
+    (partWhite) => evaluate(detectOnBinary(cv, partWhite, minHoleAreaPx, minCircularity)),
+    isDone,
+  )
 }
 
 // Runs the hole search on one part-white binary. Closes small gaps first (on a copy; the input is
-// reused for the other polarity), clones the searched mask when asked, then keeps the interior
-// contours that pass the area and circularity gates and the radius cluster. The caller owns `mask`.
+// reused by the band sweep), clones the searched mask, then keeps the interior contours that pass
+// the area and circularity gates and the radius cluster. The caller owns the returned mask.
 function detectOnBinary(
   cv: OpenCv,
   partWhite: Mat,
   minHoleAreaPx: number,
   minCircularity: number,
-  wantMask: boolean,
-): { rings: DetectedRing[]; mask: Mat | null } {
+): RingBandDetection {
   const closed = new cv.Mat()
   const contours = new cv.MatVector()
   const hierarchy = new cv.Mat()
@@ -73,7 +63,7 @@ function detectOnBinary(
     kernel.delete()
 
     // Capture the mask before findContours, which can mutate its input.
-    if (wantMask) mask = closed.clone()
+    mask = closed.clone()
 
     // CHAIN_APPROX_SIMPLE drops only collinear boundary points, so contourArea, arcLength, and the
     // moments (all polygon integrals) are unchanged while large lattice-cell contours shrink a lot.
@@ -128,4 +118,3 @@ function filterByRadius(candidates: DetectedRing[]): DetectedRing[] {
   const med = median(candidates.map((c) => c.radiusPx))
   return candidates.filter((c) => c.radiusPx >= med * 0.5 && c.radiusPx <= med * 1.8)
 }
-

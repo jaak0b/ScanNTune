@@ -47,7 +47,11 @@ export interface DetectedRing {
   circularity: number
 }
 
-/** The coupon's pose in the image: origin fiducial and the +X unit vector (image-y downward). */
+/**
+ * The coupon's pose in the image: origin fiducial and the +X unit vector (image-y downward).
+ * `flipped` is false when the plate's designed scan face (the first layer, for the flat plate)
+ * was on the scanner glass, true when it was scanned on the wrong face.
+ */
 export interface Orientation {
   flipped: boolean
   originX: number
