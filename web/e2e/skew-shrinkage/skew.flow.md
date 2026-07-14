@@ -286,11 +286,12 @@ a mirrored XY read means the countersunk face was on the glass or the plate was 
 The app rejects such a scan on its own card, the same hard-block pattern as the resolution
 verdicts of 3.4/3.5.
 
-Fixture: a horizontally flipped copy of `golden/xy_0d_150dpi.png`, produced by the test itself
-(flipping the pixel rows of the fixture in the test helper is display-independent preprocessing of
-the test input, not a measurement-path resample; no derived file is committed). Seed the 150 dpi
-calibration. Upload the flipped copy plus the untouched `golden/xy_90d_150dpi.png` in one
-`setInputFiles` call.
+Fixture: the untouched `golden/xy_0d_150dpi.png` serves as the mirrored input (the historical
+goldens were scanned on the wrong face, so under the face-on-glass flip convention the raw golden
+reads mirrored), plus a horizontally flipped copy of `golden/xy_90d_150dpi.png` produced by the
+test itself as the valid input (flipping the pixel rows of the fixture in the test helper is
+display-independent preprocessing of the test input, not a measurement-path resample; no derived
+file is committed). Seed the 150 dpi calibration. Upload both in one `setInputFiles` call.
 
 Journey: identical steps 1 through 6 above, then:
 

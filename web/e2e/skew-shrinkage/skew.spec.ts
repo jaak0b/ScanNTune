@@ -471,19 +471,20 @@ test('rejection 3.7: a mirrored flat-plate scan is flagged on its card and block
   await seedCalibration(page, SEED_150DPI)
   await page.goto('/')
 
-  // Fixture per skew.flow.md 3.7: a horizontally flipped copy of the 0-degree 150 dpi golden,
-  // produced here in the test (display-independent preprocessing of the test input, not a
-  // measurement-path resample), plus the untouched 90-degree golden.
+  // Fixture per skew.flow.md 3.7: the raw 0-degree 150 dpi golden (scanned on the wrong face,
+  // so it reads mirrored under the face-on-glass flip convention), plus a horizontally flipped
+  // copy of the 90-degree golden produced here in the test (display-independent preprocessing
+  // of the test input, not a measurement-path resample), which reads as a valid scan.
   await page.getByTestId('scans-input').setInputFiles([
     {
-      name: 'xy_0d_150dpi_mirrored.png',
+      name: 'xy_0d_150dpi.png',
       mimeType: 'image/png',
-      buffer: flipHorizontally(golden('xy_0d_150dpi.png')),
+      buffer: fs.readFileSync(golden('xy_0d_150dpi.png')),
     },
     {
-      name: 'xy_90d_150dpi.png',
+      name: 'xy_90d_150dpi_unmirrored.png',
       mimeType: 'image/png',
-      buffer: fs.readFileSync(golden('xy_90d_150dpi.png')),
+      buffer: flipHorizontally(golden('xy_90d_150dpi.png')),
     },
   ])
 

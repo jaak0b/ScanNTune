@@ -109,12 +109,12 @@ export function mapGrid(rings: readonly DetectedRing[], spec: CouponSpec): GridM
   if (perp.x * (geo.cx - originPx.x) + perp.y * (geo.cy - originPx.y) < 0) perp = { x: -perp.x, y: -perp.y }
   const yHat = perp
 
-  // Flip (informational): the marker's +X agrees with the rotation-only guess for this corner on a
-  // normal scan, and points along its perpendicular (a swap) when mirror-flipped.
-  const cornerAxes = cornerRuleAxes(marker.origin, maxCol, maxRow, colHat, rowHat)
-  const flipped =
-    Math.abs(xHat.x * cornerAxes.yHat.x + xHat.y * cornerAxes.yHat.y) >
-    Math.abs(xHat.x * cornerAxes.xHat.x + xHat.y * cornerAxes.xHat.y)
+  // Flip (informational): the chirality of the recovered (+X, +Y) pair in image coordinates.
+  // A flatbed scanner images the face lying on the glass from below, which mirrors the coupon:
+  // with image y pointing down, the designed scan face on the glass (the first layer, for the
+  // flat plate) makes cross(xHat, yHat) positive. A negative cross means the plate was scanned
+  // on its wrong face, so flipped = true.
+  const flipped = xHat.x * yHat.y - xHat.y * yHat.x < 0
 
   const pitchMm = couponPitchMm(spec)
   const mapped: GridCorrespondence[] = new Array(n)
@@ -180,21 +180,6 @@ function findMarker(occupied: Set<string>, maxCol: number, maxRow: number): Mark
 
 function isCorner(c: number, r: number, maxCol: number, maxRow: number): boolean {
   return (c === 0 || c === maxCol) && (r === 0 || r === maxRow)
-}
-
-// Rotation-only axis assignment from a corner (used only to flag a mirror-flip).
-function cornerRuleAxes(
-  corner: { c: number; r: number },
-  maxCol: number,
-  maxRow: number,
-  colHat: Vec,
-  rowHat: Vec,
-): { xHat: Vec; yHat: Vec } {
-  const neg = (v: Vec): Vec => ({ x: -v.x, y: -v.y })
-  if (corner.c === 0 && corner.r === maxRow) return { xHat: colHat, yHat: neg(rowHat) }
-  if (corner.c === 0 && corner.r === 0) return { xHat: rowHat, yHat: colHat }
-  if (corner.c === maxCol && corner.r === 0) return { xHat: neg(colHat), yHat: rowHat }
-  return { xHat: neg(rowHat), yHat: neg(colHat) } // (maxCol, maxRow)
 }
 
 function originOfIndexSpace(

@@ -44,6 +44,12 @@ describe('plane-ID and detection on rendered plates', () => {
     expect(results[plane].ringsDetected).toBeGreaterThanOrEqual(22)
   })
 
+  it.each(cases)('a $plane render of the scanned face reads flipped false', ({ plane }) => {
+    // The scan_view fixtures are mirrored the way a flatbed images the face on the glass, so the
+    // designed scan face must read as NOT flipped; the old top-view convention read the opposite.
+    expect(results[plane].orientation?.flipped).toBe(false)
+  })
+
   it.each(cases)('a perfect $plane render has near-zero skew', ({ plane }) => {
     expect(Math.abs(results[plane].skewDegrees)).toBeLessThanOrEqual(0.1)
   })
