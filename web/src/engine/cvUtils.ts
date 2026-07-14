@@ -1,35 +1,6 @@
 import type { Mat, OpenCv } from './opencv'
 import type { BackdropAssessment } from './measurementBackdrop'
 
-/** Which side of the threshold the object of interest is assumed to be on. */
-export type Polarity = 'bright' | 'dark'
-
-// Otsu-thresholds the image's value channel and runs `analyze` on both polarities of the binary
-// (object above the threshold, then below). Which polarity is right is NOT guessed from image
-// statistics (a border mean flips when the backing sheet stops short of the scan bed and bright
-// scanner-lid margins reach the border); the caller validates each result against the geometry it
-// knows (coupon grid, card shape) and keeps the one that fits: model selection, no tuned guess.
-// `analyze` gets the object rendered white and must not mutate the binary (it is reused inverted).
-export function analyzeBothPolarities<T>(
-  cv: OpenCv,
-  image: Mat,
-  analyze: (objectWhite: Mat, polarity: Polarity) => T,
-): { bright: T; dark: T } {
-  if (!image || image.empty()) throw new Error('Image is null or empty.')
-  const value = image.channels() === 1 ? image : valueChannel(cv, image)
-  const binary = new cv.Mat()
-  try {
-    cv.threshold(value, binary, 0, 255, cv.THRESH_BINARY + cv.THRESH_OTSU)
-    const bright = analyze(binary, 'bright')
-    cv.bitwise_not(binary, binary)
-    const dark = analyze(binary, 'dark')
-    return { bright, dark }
-  } finally {
-    if (value !== image) value.delete()
-    binary.delete()
-  }
-}
-
 // The HSV value channel (V = max(B, G, R)) as a fresh single-channel Mat the caller deletes. A
 // single-channel input is copied as-is. Note: this build of OpenCV.js does not export extractChannel,
 // so the channel is taken via split; MatVector.get(i) hands out a wrapper sharing the vector's native
@@ -279,8 +250,10 @@ export function selectMeasurementChannel(
 // backing sheet, the object, a bright scanner-lid margin) has no single threshold that isolates the
 // object; one of the three-class bands does. A part scanned on its textured build plate adds a
 // fourth population (the plate's dark speckle between the plate bulk and the plastic), which only
-// a four-class band separates. As with analyzeBothPolarities, the caller validates
-// each hypothesis against known geometry and keeps what fits. Duplicate bands are analysed once.
+// a four-class band separates. Which hypothesis is right is NOT guessed from image statistics
+// (a border mean flips when the backing sheet stops short of the scan bed and bright scanner-lid
+// margins reach the border); the caller validates each hypothesis against known geometry and
+// keeps what fits: model selection, no tuned guess. Duplicate bands are analysed once.
 // For a color input the same band sweep then runs over the saturation channel: a saturated coupon
 // on a white backdrop matches it in value but not in saturation, so only an S band isolates it.
 // The first validated hypothesis wins, whichever channel it came from. `analyze` must not retain

@@ -8,6 +8,20 @@ import { median } from './math'
 // origin -> neighbour is the coupon's +X, which pins orientation at ANY rotation and flip. The
 // marker is required; if it can't be located the scan is rejected (no rotation-only fallback).
 
+// A grid-fit rejection carrying how far through the mapping pipeline the ring set got (higher
+// stage means further: enough rings, pitch estimated, grid populated, marker located). The
+// analyzer uses the stage to pick which failed threshold-band hypothesis to report, the same
+// deepest-failure model the other flows apply to their band sweeps.
+export class GridMapError extends Error {
+  constructor(
+    message: string,
+    readonly stage: number,
+  ) {
+    super(message)
+    this.name = 'GridMapError'
+  }
+}
+
 interface Vec {
   x: number
   y: number
@@ -23,12 +37,12 @@ interface Geometry {
 
 export function mapGrid(rings: readonly DetectedRing[], spec: CouponSpec): GridMapping {
   if (rings.length < 4)
-    throw new Error(`Need at least 4 rings to fit a grid, found ${rings.length}.`)
+    throw new GridMapError(`Need at least 4 rings to fit a grid, found ${rings.length}.`, 0)
 
   const points: Vec[] = rings.map((r) => ({ x: r.centerX, y: r.centerY }))
   const n = points.length
   const geo = estimateGeometry(points)
-  if (geo.pitchPx <= 0) throw new Error('Could not estimate a positive grid pitch.')
+  if (geo.pitchPx <= 0) throw new GridMapError('Could not estimate a positive grid pitch.', 1)
 
   // theta is folded into (-45, 45], so colHat points +x and rowHat points +y (image-y down).
   const colHat = geo.u
@@ -60,22 +74,25 @@ export function mapGrid(rings: readonly DetectedRing[], spec: CouponSpec): GridM
   // SPECIFIED grid, not the detected extent (a fully missed outer row shrinks the extent).
   const missing = spec.gridN * spec.gridN - occupied.size
   if (missing > 3)
-    throw new Error(
+    throw new GridMapError(
       `${missing} grid positions are missing a detected ring; only the two solid marker ` +
         'rings plus one stray miss are tolerated. Check the scan quality and contrast.',
+      2,
     )
 
   const marker = findMarker(occupied, maxCol, maxRow)
   if (marker.found === 0)
-    throw new Error(
+    throw new GridMapError(
       'Could not locate the two solid orientation rings (an origin corner plus its neighbour). ' +
         'Check the scan quality and that the coupon carries the orientation marker.',
+      3,
     )
   if (marker.found > 1)
-    throw new Error(
+    throw new GridMapError(
       'The orientation marker is ambiguous: more than one corner has a missing neighbour, ' +
         'so the +X direction cannot be determined (a hole next to a corner may have gone ' +
         'undetected). Rescan with better contrast.',
+      4,
     )
 
   const g00 = originOfIndexSpace(points, col, row, colHat, rowHat, geo.pitchPx)

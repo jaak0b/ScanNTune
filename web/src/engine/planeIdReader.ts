@@ -1,23 +1,23 @@
-import type { Mat, OpenCv } from './opencv'
+import type { Mat } from './opencv'
 import type { AffineModel, CouponSpec, Plane } from './types'
 import { couponPitchMm, projectMmToPx } from './types'
-import { valueChannel } from './cvUtils'
 
 // Reads the plane-ID code: 1/2/3 solid diagonal ribs across the bottom-row lattice cells,
 // starting at the origin marker (XY=1, XZ=2, YZ=3). Cell k's diagonal runs from ring (k,0) to
-// ring (k+1,1) in grid coordinates. A diagonal is additive dark geometry the full width of a rib,
-// so stringing, scanner shadow and over-extrusion (which only ADD dark to a scan) cannot erase
+// ring (k+1,1) in grid coordinates. A diagonal is additive part geometry the full width of a rib,
+// so stringing, scanner shadow and over-extrusion (which only ADD part to a scan) cannot erase
 // it; this replaced the drilled dot code that closed up on rough on-edge prints.
 //
-// The read projects each cell diagonal into the image through the fitted affine (the same model
-// the measurement uses) and takes an intensity line profile along the middle of the segment,
-// binarised with Otsu's threshold over the code region. A cell counts as filled or empty only
-// when the profile is decisive; anything in between, or a non-contiguous fill pattern, returns
-// null so the caller leaves the plate unidentified rather than mislabelling it.
+// The read projects each cell diagonal into the part-white binary through the fitted affine (the
+// same model the measurement uses) and takes a foreground line profile along the middle of the
+// segment. The binary is the threshold band the ring grid already validated (the analyzer's
+// winning mask), so the read shares the measurement's single binarisation source: no local
+// re-threshold that could disagree with the validated global read (a value-channel Otsu here is
+// blind on a coupon that only a saturation band separates from its backdrop).
 //
-// `partBright` is the polarity ring detection already validated against the whole coupon grid,
-// so no local polarity vote is needed (a local guess could disagree with the validated global
-// read and mislabel the plane).
+// A cell counts as filled or empty only when the profile is decisive; anything in between, or a
+// non-contiguous fill pattern, returns null so the caller leaves the plate unidentified rather
+// than mislabelling it.
 
 // Cell classification is a two-class read with a reject option (Chow's rule): the nominal states
 // are fraction 1 (a rib covers the entire profile by construction) and fraction 0 (the cell
@@ -32,24 +32,20 @@ const EMPTY_MAX_FRACTION = 1 / 3
 const PROFILE_SAMPLES = 41
 
 export function readPlaneId(
-  cv: OpenCv,
-  image: Mat,
+  partWhite: Mat,
   coupon: CouponSpec,
   affine: AffineModel,
-  partBright: boolean,
 ): Plane | null {
-  const n = countPlaneDiagonals(cv, image, coupon, affine, partBright)
+  const n = countPlaneDiagonals(partWhite, coupon, affine)
   return n === 1 ? 'XY' : n === 2 ? 'XZ' : n === 3 ? 'YZ' : null
 }
 
 // Exposed for tests: the number of leading filled bottom-row cell diagonals, or null when any
 // cell is indecisive or the fill pattern is not a contiguous run starting at the origin cell.
 export function countPlaneDiagonals(
-  cv: OpenCv,
-  image: Mat,
+  partWhite: Mat,
   coupon: CouponSpec,
   affine: AffineModel,
-  partBright: boolean,
 ): number | null {
   const pitchMm = couponPitchMm(coupon)
   const maxCode = 3
@@ -70,8 +66,9 @@ export function countPlaneDiagonals(
   // Perpendicular to the cell diagonal direction (1,1)/sqrt(2) in the mm frame.
   const perpMm = { x: -Math.SQRT1_2, y: Math.SQRT1_2 }
 
-  // Each cell's sample points, projected into the image.
-  const cells = Array.from({ length: maxCode }, (_, k) => {
+  let count = 0
+  let runEnded = false
+  for (let k = 0; k < maxCode; k++) {
     const points: Array<{ x: number; y: number }> = []
     for (const o of offsetsMm) {
       for (let i = 0; i < PROFILE_SAMPLES; i++) {
@@ -85,79 +82,33 @@ export function countPlaneDiagonals(
         )
       }
     }
-    return points
-  })
-
-  // Binarise the region containing all code cells once, with Otsu's threshold.
-  const margin = Math.max(4, Math.round(0.1 * affine.scaleXPxPerMm * pitchMm))
-  let x0 = Infinity
-  let y0 = Infinity
-  let x1 = -Infinity
-  let y1 = -Infinity
-  for (const points of cells)
-    for (const p of points) {
-      x0 = Math.min(x0, p.x)
-      y0 = Math.min(y0, p.y)
-      x1 = Math.max(x1, p.x)
-      y1 = Math.max(y1, p.y)
+    const fraction = profileForegroundFraction(partWhite, points)
+    if (fraction === null) return null // profile leaves the image: cannot certify the code
+    const filled = fraction >= FILLED_MIN_FRACTION
+    const empty = fraction <= EMPTY_MAX_FRACTION
+    if (!filled && !empty) return null // indecisive cell: refuse to guess
+    if (filled) {
+      if (runEnded) return null // filled after empty: not a contiguous run from the origin
+      count++
+    } else {
+      runEnded = true
     }
-  x0 = Math.max(0, Math.floor(x0) - margin)
-  y0 = Math.max(0, Math.floor(y0) - margin)
-  x1 = Math.min(image.cols, Math.ceil(x1) + margin)
-  y1 = Math.min(image.rows, Math.ceil(y1) + margin)
-  if (x1 - x0 < 8 || y1 - y0 < 8) return null
-
-  const roiView = image.roi(new cv.Rect(x0, y0, x1 - x0, y1 - y0))
-  // copyTo, not clone: OpenCV.js clone() of a ROI keeps the source's row stride, which leaves
-  // the flat `data` view misaligned. copyTo always allocates a continuous Mat.
-  const roi = new cv.Mat()
-  roiView.copyTo(roi)
-  roiView.delete()
-  let gray: Mat | null = null
-  const binary = new cv.Mat()
-  try {
-    gray = valueChannel(cv, roi)
-    cv.threshold(gray, binary, 0, 255, cv.THRESH_BINARY + cv.THRESH_OTSU)
-    // Make the part the white foreground, matching the polarity ring detection validated.
-    if (!partBright) cv.bitwise_not(binary, binary)
-
-    let count = 0
-    let runEnded = false
-    for (const points of cells) {
-      const fraction = profileForegroundFraction(binary, points, x0, y0)
-      if (fraction === null) return null // profile leaves the image: cannot certify the code
-      const filled = fraction >= FILLED_MIN_FRACTION
-      const empty = fraction <= EMPTY_MAX_FRACTION
-      if (!filled && !empty) return null // indecisive cell: refuse to guess
-      if (filled) {
-        if (runEnded) return null // filled after empty: not a contiguous run from the origin
-        count++
-      } else {
-        runEnded = true
-      }
-    }
-    return count
-  } finally {
-    roi.delete()
-    gray?.delete()
-    binary.delete()
   }
+  return count
 }
 
 // Fraction of part-foreground samples among the cell's projected profile points, read from the
-// binarised ROI. Returns null when any sample falls outside the ROI.
+// part-white binary. Returns null when any sample falls outside the image.
 function profileForegroundFraction(
-  binary: Mat,
+  partWhite: Mat,
   points: ReadonlyArray<{ x: number; y: number }>,
-  roiX: number,
-  roiY: number,
 ): number | null {
   let foreground = 0
   for (const p of points) {
-    const x = Math.round(p.x - roiX)
-    const y = Math.round(p.y - roiY)
-    if (x < 0 || y < 0 || x >= binary.cols || y >= binary.rows) return null
-    foreground += binary.ucharPtr(y, x)[0] > 0 ? 1 : 0
+    const x = Math.round(p.x)
+    const y = Math.round(p.y)
+    if (x < 0 || y < 0 || x >= partWhite.cols || y >= partWhite.rows) return null
+    foreground += partWhite.ucharPtr(y, x)[0] > 0 ? 1 : 0
   }
   return foreground / points.length
 }

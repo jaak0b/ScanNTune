@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { describe, it, expect } from 'vitest'
-import { getCv, syntheticCard, blankGray, decodeFixtureBgr, decodeE2eFixtureBgr } from '../helpers/cv'
+import { fileURLToPath } from 'node:url'
+import { getCv, syntheticCard, blankGray, decodeE2eFixtureBgr, decodePngFileBgr } from '../helpers/cv'
 import { measureCard } from '../../src/engine/cardEdgeMeasurer'
 import type { Mat, OpenCv } from '../../src/engine/opencv'
 
@@ -152,12 +153,16 @@ describe('card edge measurer', () => {
 
   // Real 300 dpi scan, byte-for-byte: the two overlapping logo circles on the card face form a
   // card-ratio rectangle in one dark-threshold band, so before the containment and size gates the
-  // measurer refused the scan as ambiguous. The card must be recovered at about 11.81 px/mm.
+  // measurer refused the scan as ambiguous. Golden fixture from e2e/card-calibration; per its
+  // PROVENANCE.md the owner-caliper long side is 85.55 mm and the app displayed 11.796 px/mm.
   it('a real 300 dpi scan with a card-ratio logo on the card recovers px/mm', async () => {
     const cv = await getCv()
-    const img = decodeFixtureBgr(cv, 'card_300dpi.png')
+    const img = decodePngFileBgr(
+      cv,
+      fileURLToPath(new URL('../../e2e/card-calibration/golden/card_300dpi.png', import.meta.url)),
+    )
     try {
-      const r = measureCard(cv, img, LongMm, 300)
+      const r = measureCard(cv, img, 85.55, 300)
       expect(r.success).toBe(true)
       expect(Math.abs(r.pxPerMm - 300 / 25.4)).toBeLessThanOrEqual(0.12) // ~1% dpi error allowance
       expect(r.parallelismDegrees).toBeLessThan(0.5)

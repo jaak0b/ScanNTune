@@ -1,8 +1,7 @@
 import type { Mat, OpenCv } from './opencv'
 import type { AlignedResult, AnalysisOptions, CalibrationResult, DetectedRing } from './types'
-import { detectRingsDual } from './ringDetector'
-import type { RingPolarity } from './ringDetector'
-import { mapGrid } from './gridMapper'
+import { detectRingsOnBands } from './ringDetector'
+import { GridMapError, mapGrid } from './gridMapper'
 import type { GridMapping } from './types'
 import { solveAffine } from './affineSolver'
 import type { AffineSolverOptions } from './affineSolver'
@@ -16,20 +15,23 @@ import type { ScaleReference } from './scannerCalibration'
 // (rotation AND flip) is fully resolved from the two-solid marker, so the X/Y labels and the skew
 // sign are already correct.
 //
-// The threshold polarity (part brighter or darker than what's behind it) is resolved by hypothesis
-// testing: detection runs under both polarities and each candidate set is validated against the
-// coupon's grid and orientation marker. Exactly one fitting is the normal case; none (or both, which
-// no physical scan produces) yields an unaligned result whose failureReason says why.
+// Which binarisation shows the part is resolved by hypothesis testing: detection runs on every
+// threshold-band hypothesis (value and, for color input, saturation bands) and each candidate ring
+// set is validated against the coupon's grid and orientation marker. The first band whose rings
+// map onto the grid wins; when none does, the result is unaligned and its failureReason says why.
 //
 // A scan that cannot be aligned (marker not found, too few rings) is NOT an error: it returns a result
 // with the detection fields set and the measurement fields null, so the UI can show what was found and
-// gate the Analyze button on it. Only a genuinely unreadable image throws (from detectRingsDual).
+// gate the Analyze button on it. Only a genuinely unreadable image throws (from the band sweep).
 
-interface PolarityHypothesis {
-  polarity: RingPolarity
+interface BandHypothesis {
   rings: DetectedRing[]
+  /** The searched binary of this band (part white, morphologically closed). */
+  mask: Mat
   mapping: GridMapping | null
   mapError: string | null
+  /** How far the grid fit got: a GridMapError stage, or Infinity for a successful fit. */
+  mapStage: number
 }
 
 export function analyzeCoupon(
@@ -39,46 +41,79 @@ export function analyzeCoupon(
   solverOptions?: AffineSolverOptions,
   maskOut?: { mask?: Mat },
 ): CalibrationResult {
-  const masks: { bright?: Mat; dark?: Mat } | undefined = maskOut ? {} : undefined
-  const detected = detectRingsDual(cv, image, undefined, undefined, masks)
   const gridN = options.coupon.gridN
   const ringsExpected = gridN * gridN - 2 // two vertices are the solid orientation markers, no hole
 
-  const hypotheses: PolarityHypothesis[] = (['bright', 'dark'] as const).map((polarity) => {
-    const rings = detected[polarity]
-    try {
-      return { polarity, rings, mapping: mapGrid(rings, options.coupon), mapError: null }
-    } catch (e) {
-      return { polarity, rings, mapping: null, mapError: e instanceof Error ? e.message : String(e) }
-    }
-  })
-  const fitting = hypotheses.filter(
-    (h): h is PolarityHypothesis & { mapping: GridMapping } => h.mapping !== null,
-  )
+  // Every threshold band is a hypothesis; mapping its rings onto the coupon grid is the
+  // validation. The sweep stops at the first band whose grid fit succeeds. Only the best attempt
+  // so far keeps its full-frame mask (a beaten band's mask is freed the moment it is beaten, so a
+  // 35 MP scan never holds one mask per band): the winner beats everything. Among failed bands,
+  // model selection against the declared geometry ranks the report: the coupon cannot produce
+  // more holes than it has ring vertices, so a hypothesis detecting more than ringsExpected is
+  // known to contain noise and ranks below every physically consistent one (a noisy band can
+  // shatter into hundreds of blob "rings" that would otherwise win any progress comparison).
+  // Within the same consistency class the grid fit that progressed furthest (the deepest
+  // GridMapError stage) wins, the same deepest-failure model the other flows apply to their band
+  // sweeps; earlier bands win ties, preserving band order.
+  let best: BandHypothesis | null = null
+  let bandCount = 0
+  try {
+    detectRingsOnBands(
+      cv,
+      image,
+      ({ rings, mask }) => {
+        bandCount++
+        let mapping: GridMapping | null = null
+        let mapError: string | null = null
+        let mapStage = Infinity // a successful fit outranks every failure stage
+        try {
+          mapping = mapGrid(rings, options.coupon)
+        } catch (e) {
+          mapError = e instanceof Error ? e.message : String(e)
+          mapStage = e instanceof GridMapError ? e.stage : -1
+        }
+        const consistent = rings.length <= ringsExpected
+        const bestConsistent = best !== null && best.rings.length <= ringsExpected
+        const better =
+          best === null ||
+          mapping !== null ||
+          (consistent !== bestConsistent ? consistent : mapStage > best.mapStage)
+        if (better) {
+          best?.mask.delete()
+          best = { rings, mask, mapping, mapError, mapStage }
+        } else {
+          mask.delete()
+        }
+        return mapping !== null
+      },
+      (mapped) => mapped,
+    )
+  } catch (e) {
+    const kept = best as BandHypothesis | null
+    kept?.mask.delete()
+    throw e
+  }
 
-  if (fitting.length !== 1) {
-    // Neither polarity produced the coupon (or, physically implausibly, both did): a normal
-    // "couldn't align" outcome carrying the reason, not an error. Show the hypothesis that found
-    // more rings so the overlay reflects the best interpretation of the scan.
-    const shown = hypotheses.reduce((a, b) => (b.rings.length > a.rings.length ? b : a))
-    // Worded for a non-technical user; the per-polarity detail goes to the debug log below.
-    const failureReason =
-      fitting.length === 0
-        ? `The coupon pattern was not found: only ${shown.rings.length} of its ${ringsExpected} ` +
-          'measurement rings were detected. Make sure the whole coupon lies inside the scan area ' +
-          'on a plain, single-colour background, then scan again.'
-        : 'The coupon could not be told apart from the background. Scan it again on a plain, ' +
-          'single-colour background.'
+  // Control-flow analysis does not track assignments made inside the sweep callback, so the
+  // declared type is restated here.
+  const chosen = best as BandHypothesis | null
+  if (chosen === null || chosen.mapping === null) {
+    // No band produced the coupon: a normal "couldn't align" outcome carrying the reason, not an
+    // error. The hypothesis whose grid fit got furthest is shown so the overlay reflects the
+    // best interpretation of the scan.
+    const shownRings = chosen?.rings ?? []
+    // Worded for a non-technical user; the per-band detail goes to the debug log below.
+    const failureReason = alignmentFailureReason(shownRings.length, ringsExpected)
     console.debug(
       'coupon did not align:',
       failureReason,
-      `bright hypothesis: ${describe(hypotheses[0])}`,
-      `dark hypothesis: ${describe(hypotheses[1])}`,
+      `best of ${bandCount} threshold-band hypotheses: ` +
+        (chosen ? describe(chosen) : 'no band hypothesis was produced'),
     )
-    keepMask(maskOut, masks, shown.polarity)
+    handMask(maskOut, chosen?.mask)
     return {
-      rings: shown.rings,
-      ringsDetected: shown.rings.length,
+      rings: shownRings,
+      ringsDetected: shownRings.length,
       ringsExpected,
       // Without a fitted grid there is no model to project missing holes through, so no clipping
       // claim is made; the failureReason already tells the user to check the coupon placement.
@@ -96,15 +131,23 @@ export function analyzeCoupon(
     }
   }
 
-  const chosen = fitting[0]
   const mapping = chosen.mapping
-  keepMask(maskOut, masks, chosen.polarity)
 
-  const affine = solveAffine(mapping.points, solverOptions)
-
-  // Read the plane-ID diagonals in the bottom-row cells. Non-fatal: a plate without them (the
-  // original XY-only coupon) simply leaves the plane null.
-  const plane = readPlaneId(cv, image, options.coupon, affine, chosen.polarity === 'bright')
+  // The winning mask is still owned here until it is handed off, so a throw from the affine fit
+  // or the plane-ID read must free it.
+  let affine: ReturnType<typeof solveAffine>
+  let plane: ReturnType<typeof readPlaneId>
+  try {
+    affine = solveAffine(mapping.points, solverOptions)
+    // Read the plane-ID diagonals in the bottom-row cells from the winning band's binary (the
+    // single binarisation the grid already validated). Non-fatal: a plate without them (the
+    // original XY-only coupon) simply leaves the plane null.
+    plane = readPlaneId(chosen.mask, options.coupon, affine)
+  } catch (e) {
+    chosen.mask.delete()
+    throw e
+  }
+  handMask(maskOut, chosen.mask)
 
   const base: UnpricedResult = {
     rings: chosen.rings,
@@ -131,22 +174,35 @@ export function analyzeCoupon(
   return applyReference(base, options.pxPerMm ?? null)
 }
 
-// One line of "what this hypothesis saw" for the failure reason shown to the user.
-function describe(h: PolarityHypothesis): string {
+// The user-facing explanation for a scan whose best hypothesis did not fit the declared grid.
+// Under-detection means the coupon's rings were not all seen; over-detection means the shown
+// hypothesis contains more ring-like shapes than the declared coupon can produce, so the scan
+// could not be told apart from its background. Exported so tests can pin both wordings.
+export function alignmentFailureReason(ringsDetected: number, ringsExpected: number): string {
+  if (ringsDetected > ringsExpected) {
+    return (
+      `The coupon could not be told apart from the background: ${ringsDetected} ring-like ` +
+      `shapes were detected where the coupon has only ${ringsExpected} measurement rings. ` +
+      'Scan it again on a plain, single-colour background.'
+    )
+  }
+  return (
+    `The coupon pattern was not found: only ${ringsDetected} of its ${ringsExpected} ` +
+    'measurement rings were detected. Make sure the whole coupon lies inside the scan area ' +
+    'on a plain, single-colour background, then scan again.'
+  )
+}
+
+// One line of "what this hypothesis saw" for the debug log behind a failed alignment.
+function describe(h: BandHypothesis): string {
   return `${h.rings.length} ring candidates; ${h.mapError ?? 'grid fit succeeded'}`
 }
 
-// Hand the searched mask of the reported polarity to the caller (who owns it) and free the other.
-function keepMask(
-  maskOut: { mask?: Mat } | undefined,
-  masks: { bright?: Mat; dark?: Mat } | undefined,
-  polarity: RingPolarity,
-): void {
-  if (!maskOut || !masks) return
-  const keep = masks[polarity]
-  const drop = masks[polarity === 'bright' ? 'dark' : 'bright']
-  drop?.delete()
-  if (keep) maskOut.mask = keep
+// Hand the reported hypothesis's searched mask to the caller (who then owns it), or free it when
+// the caller did not ask for the mask.
+function handMask(maskOut: { mask?: Mat } | undefined, mask: Mat | undefined): void {
+  if (maskOut && mask) maskOut.mask = mask
+  else mask?.delete()
 }
 
 /** An aligned measurement before the reference prices its scale percentages. */

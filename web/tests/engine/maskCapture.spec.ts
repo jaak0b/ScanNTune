@@ -1,36 +1,39 @@
 // @vitest-environment node
 import { describe, it, expect } from 'vitest'
 import { getCv, decodeFixtureBgr } from '../helpers/cv'
-import { detectRingsDual } from '../../src/engine/ringDetector'
+import { detectRingsOnBands } from '../../src/engine/ringDetector'
+import type { RingBandDetection } from '../../src/engine/ringDetector'
 import { analyzeCoupon } from '../../src/engine/couponAnalyzer'
 import { defaultCouponSpec } from '../../src/engine/types'
 import type { Mat } from '../../src/engine/opencv'
 
-// The Scan/Threshold toggle shows the binary mask the detector searched. The detector hands back one
-// mask per polarity on request; the analyzer keeps the one that fit the grid and frees the other.
+// The Scan/Threshold toggle shows the binary mask the detector searched. The detector hands each
+// band's mask to the evaluator; the analyzer keeps the one whose rings fit the grid and frees the
+// rest.
 describe('threshold mask capture', () => {
-  it('captures a full-frame single-channel mask per polarity alongside the rings', async () => {
+  it('hands a full-frame single-channel mask to the evaluator for every band', async () => {
     const cv = await getCv()
     const image = decodeFixtureBgr(cv, 'TestData_2solid.png')
-    const masks: { bright?: Mat; dark?: Mat } = {}
+    let ringCounts: number[] = []
     try {
-      const detected = detectRingsDual(cv, image, undefined, undefined, masks)
-      // One hypothesis is the part, the other is noise: the ring set rides on exactly one of them.
-      expect(Math.max(detected.bright.length, detected.dark.length)).toBe(23)
-      for (const mask of [masks.bright, masks.dark]) {
-        expect(mask).toBeDefined()
-        expect(mask!.rows).toBe(image.rows)
-        expect(mask!.cols).toBe(image.cols)
-        expect(mask!.channels()).toBe(1)
-      }
+      ringCounts = detectRingsOnBands(cv, image, (detection: RingBandDetection) => {
+        try {
+          expect(detection.mask.rows).toBe(image.rows)
+          expect(detection.mask.cols).toBe(image.cols)
+          expect(detection.mask.channels()).toBe(1)
+          return detection.rings.length
+        } finally {
+          detection.mask.delete()
+        }
+      })
+      // One of the band hypotheses is the part; the ring grid rides on it.
+      expect(Math.max(...ringCounts)).toBe(23)
     } finally {
-      masks.bright?.delete()
-      masks.dark?.delete()
       image.delete()
     }
   }, 60000)
 
-  it('analyzeCoupon hands back exactly the fitting polarity mask', async () => {
+  it('analyzeCoupon hands back exactly the winning band mask', async () => {
     const cv = await getCv()
     const image = decodeFixtureBgr(cv, 'TestData_2solid.png')
     const maskHolder: { mask?: Mat } = {}
