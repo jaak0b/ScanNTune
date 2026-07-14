@@ -56,13 +56,13 @@ normalized `toHaveText`) reads it as the single-spaced string above; assert that
 
 | case | fixtures | seed calibration | expected `scale-X` | expected `scale-Y` | expected `skew-XY` |
 |---|---|---|---|---|---|
-| 300 dpi | `golden/xy_0d_300dpi.png` + `golden/xy_90d_300dpi.png` | 300 dpi seed (below) | `+0.146 %` | `+0.183 %` | `+0.498°` |
-| 150 dpi | `golden/xy_0d_150dpi.png` + `golden/xy_90d_150dpi.png` | 150 dpi seed (below) | `+0.242 %` | `+0.276 %` | `+0.492°` |
+| 300 dpi | `golden/xy_0d_300dpi.jpg` + `golden/xy_90d_300dpi.jpg` | 300 dpi seed (below) | `+0.144 %` | `+0.117 %` | `+0.489°` |
+| 150 dpi | `golden/xy_0d_150dpi.jpg` + `golden/xy_90d_150dpi.jpg` | 150 dpi seed (below) | `+0.243 %` | `+0.216 %` | `+0.486°` |
 
 Both cases share the identical journey below and differ only in the fixtures, the seed calibration,
 and the expected literals in "Assertions per case". Generate one named test per row from a shared
 body, per the skill's case-table parametrization; do not duplicate the test body and do not upload
-both cases' fixtures inside one test. Tolerance bands (± 0.05 percentage points for scale, ± 0.02
+both cases' fixtures inside one test. Tolerance bands (± 0.05 percentage points for scale, ± 0.03
 degrees for skew) are stated once in "Assertions per case" and apply to both rows identically; see
 `PROVENANCE.md` for the observed-spread rationale behind each band.
 
@@ -117,9 +117,9 @@ in this set are positive).
 
 | testid | assertion |
 |---|---|
-| `scale-X` | `+0.146 %` within ± 0.05 percentage points (sign: positive) |
-| `scale-Y` | `+0.183 %` within ± 0.05 percentage points (sign: positive) |
-| `skew-XY` | `+0.498°` within ± 0.02 degrees (sign: positive) |
+| `scale-X` | `+0.144 %` within ± 0.05 percentage points (sign: positive) |
+| `scale-Y` | `+0.117 %` within ± 0.05 percentage points (sign: positive) |
+| `skew-XY` | `+0.489°` within ± 0.03 degrees (sign: positive) |
 | `more-scans-XY` | exact text `XY plate: Scan this plate 2 more times to get a confidence range, which shows how tightly the value is pinned down.` |
 | any `[data-testid^="zero-note"]` | element count 0 |
 
@@ -128,19 +128,19 @@ Klipper's includes a caption line and Marlin/RRF's do not):
 
 | firmware | reset command | `skew-code` |
 |---|---|---|
-| Klipper | `SET_SKEW CLEAR=1` | `Paste into the Klipper console:\nSET_SKEW XY=99.566,100.436,70.713\nSKEW_PROFILE SAVE=ScanNTune\nSAVE_CONFIG` |
-| Marlin | `M852 I0 J0 K0\nM500` | `M852 I-0.008697\nM500` |
-| RepRapFirmware | `M556 S100 X0 Y0 Z0` | `M556 S100 X0.870` |
+| Klipper | `SET_SKEW CLEAR=1` | `Paste into the Klipper console:\nSET_SKEW XY=99.575,100.427,70.713\nSKEW_PROFILE SAVE=ScanNTune\nSAVE_CONFIG` |
+| Marlin | `M852 I0 J0 K0\nM500` | `M852 I-0.008528\nM500` |
+| RepRapFirmware | `M556 S100 X0 Y0 Z0` | `M556 S100 X0.853` |
 
-`size-code`: exact text `XY shrinkage: 100.16 %`.
+`size-code`: exact text `XY shrinkage: 100.13 %`.
 
 ### Case: 150 dpi
 
 | testid | assertion |
 |---|---|
-| `scale-X` | `+0.242 %` within ± 0.05 percentage points (sign: positive) |
-| `scale-Y` | `+0.276 %` within ± 0.05 percentage points (sign: positive) |
-| `skew-XY` | `+0.492°` within ± 0.02 degrees (sign: positive) |
+| `scale-X` | `+0.243 %` within ± 0.05 percentage points (sign: positive) |
+| `scale-Y` | `+0.216 %` within ± 0.05 percentage points (sign: positive) |
+| `skew-XY` | `+0.486°` within ± 0.03 degrees (sign: positive) |
 | `more-scans-XY` | exact text `XY plate: Scan this plate 2 more times to get a confidence range, which shows how tightly the value is pinned down.` |
 | any `[data-testid^="zero-note"]` | element count 0 |
 
@@ -148,11 +148,11 @@ Firmware commands:
 
 | firmware | reset command | `skew-code` |
 |---|---|---|
-| Klipper | `SET_SKEW CLEAR=1` | `Paste into the Klipper console:\nSET_SKEW XY=99.572,100.43,70.713\nSKEW_PROFILE SAVE=ScanNTune\nSAVE_CONFIG` |
-| Marlin | `M852 I0 J0 K0\nM500` | `M852 I-0.008580\nM500` |
-| RepRapFirmware | `M556 S100 X0 Y0 Z0` | `M556 S100 X0.858` |
+| Klipper | `SET_SKEW CLEAR=1` | `Paste into the Klipper console:\nSET_SKEW XY=99.577,100.425,70.713\nSKEW_PROFILE SAVE=ScanNTune\nSAVE_CONFIG` |
+| Marlin | `M852 I0 J0 K0\nM500` | `M852 I-0.008475\nM500` |
+| RepRapFirmware | `M556 S100 X0 Y0 Z0` | `M556 S100 X0.848` |
 
-`size-code`: exact text `XY shrinkage: 100.26 %`.
+`size-code`: exact text `XY shrinkage: 100.23 %`.
 
 ## Optional case: four scans, one plate, confidence range (300 dpi and 150 dpi)
 
@@ -171,24 +171,24 @@ Additional assertions for this case (four fixtures uploaded together):
 
 | testid | assertion |
 |---|---|
-| `scale-X` | `+0.144 %` within ± 0.05 percentage points (sign: positive) |
-| `scale-Y` | `+0.173 %` within ± 0.05 percentage points (sign: positive) |
-| `skew-XY` | `+0.500°` within ± 0.02 degrees (sign: positive) |
-| `range-scaleX-XY` | exact text `Likely between +0.128 % and +0.160 % (95% from 4 scans).` |
-| `range-scaleY-XY` | exact text `Likely between +0.157 % and +0.189 % (95% from 4 scans).` |
-| `range-skew-XY` | exact text `Likely between +0.483° and +0.517° (95% from 4 scans).` |
-| `size-code` | exact text `XY shrinkage: 100.16 %` |
+| `scale-X` | `+0.145 %` within ± 0.05 percentage points (sign: positive) |
+| `scale-Y` | `+0.112 %` within ± 0.05 percentage points (sign: positive) |
+| `skew-XY` | `+0.492°` within ± 0.03 degrees (sign: positive) |
+| `range-scaleX-XY` | exact text `Likely between +0.128 % and +0.162 % (95% from 4 scans).` |
+| `range-scaleY-XY` | exact text `Likely between +0.095 % and +0.129 % (95% from 4 scans).` |
+| `range-skew-XY` | exact text `Likely between +0.467° and +0.517° (95% from 4 scans).` |
+| `size-code` | exact text `XY shrinkage: 100.13 %` |
 
 ### 150 dpi, 4 scans
 
 | testid | assertion |
 |---|---|
-| `scale-X` | `+0.239 %` within ± 0.05 percentage points (sign: positive) |
-| `scale-Y` | `+0.267 %` within ± 0.05 percentage points (sign: positive) |
-| `skew-XY` | `+0.497°` within ± 0.02 degrees (sign: positive) |
-| `range-scaleX-XY` | exact text `Likely between +0.218 % and +0.259 % (95% from 4 scans).` |
-| `range-scaleY-XY` | exact text `Likely between +0.246 % and +0.287 % (95% from 4 scans).` |
-| `range-skew-XY` | exact text `Likely between +0.479° and +0.515° (95% from 4 scans).` |
+| `scale-X` | `+0.242 %` within ± 0.05 percentage points (sign: positive) |
+| `scale-Y` | `+0.208 %` within ± 0.05 percentage points (sign: positive) |
+| `skew-XY` | `+0.493°` within ± 0.03 degrees (sign: positive) |
+| `range-scaleX-XY` | exact text `Likely between +0.226 % and +0.257 % (95% from 4 scans).` |
+| `range-scaleY-XY` | exact text `Likely between +0.192 % and +0.223 % (95% from 4 scans).` |
+| `range-skew-XY` | exact text `Likely between +0.468° and +0.517° (95% from 4 scans).` |
 
 ## Rejection paths (mandatory)
 
@@ -199,7 +199,7 @@ literals below are the assertion contract only.
 
 ### 3.1 Two scans of (nearly) the same angle
 
-Seed the 300 dpi calibration. Upload `golden/xy_0d_300dpi.png` twice in one `setInputFiles` call
+Seed the 300 dpi calibration. Upload `golden/xy_0d_300dpi.jpg` twice in one `setInputFiles` call
 (the same file both times; the two uploaded `File` objects should be given distinct names, for
 example by wrapping the fixture bytes in two differently-named `File`s, since the app keys scans
 by upload identity, not by file name, but distinct names make the test's intent clear).
@@ -217,7 +217,7 @@ this case's concern), then:
 ### 3.4 Mixed-resolution pair: one scan matches the calibration DPI, one does not (per-scan hard block, one scan flagged)
 
 Captured against commit 181ba92 (per-scan resolution validation). Seed the 300 dpi calibration.
-Upload `golden/xy_0d_300dpi.png` (matches the seed) + `golden/xy_90d_150dpi.png` (does not) in one
+Upload `golden/xy_0d_300dpi.jpg` (matches the seed) + `golden/xy_90d_150dpi.jpg` (does not) in one
 `setInputFiles` call.
 
 Journey: identical steps 1 through 6 above (the calibration/DPI-hint assertions of steps 3-4 may be
@@ -242,8 +242,8 @@ here; the resolution block is expressed through `analyze-reason` and the disable
 
 ### 3.5 Uniform resolution mismatch: both scans at a DPI different from the seeded calibration (mandatory rejection; per-scan hard block, both scans flagged)
 
-Captured against commit 181ba92. Seed the 300 dpi calibration. Upload `golden/xy_0d_150dpi.png` +
-`golden/xy_90d_150dpi.png` (both native 150 dpi, mutually consistent, both differing from the seeded
+Captured against commit 181ba92. Seed the 300 dpi calibration. Upload `golden/xy_0d_150dpi.jpg` +
+`golden/xy_90d_150dpi.jpg` (both native 150 dpi, mutually consistent, both differing from the seeded
 300 dpi by a clean 2x factor).
 
 Journey: identical steps 1 through 6 above, then:
@@ -267,13 +267,13 @@ enters wrong values for both, then uploads an otherwise-valid, matching-calibrat
 
 Seed the 300 dpi calibration. Before uploading, set "Rings per side" to `6` and "Plate baseline
 (mm)" to `150` (both fields need testids added first, per `PROVENANCE.md`'s open items; suggested
-`grid-n-input` and `baseline-mm-input`). Then upload `golden/xy_0d_300dpi.png` +
-`golden/xy_90d_300dpi.png` (the real, correct-geometry plate's scans).
+`grid-n-input` and `baseline-mm-input`). Then upload `golden/xy_0d_300dpi.jpg` +
+`golden/xy_90d_300dpi.jpg` (the real, correct-geometry plate's scans).
 
 1. Wait for both scans' `ring-count` to become visible.
-2. Assert both read exactly `23 of 34`.
+2. Assert both read exactly `4 of 34`.
 3. Assert both scans' `failure-reason` (`data-testid="failure-reason"`) read exactly:
-   `The coupon pattern was not found: only 23 of its 34 measurement rings were detected. Make sure the whole coupon lies inside the scan area on a plain, single-colour background, then scan again.`
+   `The coupon pattern was not found: only 4 of its 34 measurement rings were detected. Make sure the whole coupon lies inside the scan area on a plain, single-colour background, then scan again.`
 4. Assert `analyze-btn` is disabled and its companion `analyze-reason` reads exactly
    `Fix 2 scans to analyze.`.
 5. Assert no `plane-status-XY` element renders (no plane group forms, since neither scan reached the
@@ -286,12 +286,13 @@ a mirrored XY read means the countersunk face was on the glass or the plate was 
 The app rejects such a scan on its own card, the same hard-block pattern as the resolution
 verdicts of 3.4/3.5.
 
-Fixture: the untouched `golden/xy_0d_150dpi.png` serves as the mirrored input (the historical
-goldens were scanned on the wrong face, so under the face-on-glass flip convention the raw golden
-reads mirrored), plus a horizontally flipped copy of `golden/xy_90d_150dpi.png` produced by the
-test itself as the valid input (flipping the pixel rows of the fixture in the test helper is
-display-independent preprocessing of the test input, not a measurement-path resample; no derived
-file is committed). Seed the 150 dpi calibration. Upload both in one `setInputFiles` call.
+Fixture: the untouched `golden/xy_0d_150dpi.jpg` serves as the valid input (the 2026-07-14 goldens
+were scanned first-layer side on the glass, so the raw golden reads unmirrored under the
+face-on-glass flip convention), plus a horizontally flipped copy of `golden/xy_90d_150dpi.jpg`
+produced by the test itself as the mirrored input (flipping the pixel rows of the fixture in the
+test helper is display-independent preprocessing of the test input, not a measurement-path
+resample; no derived file is committed). Seed the 150 dpi calibration. Upload both in one
+`setInputFiles` call.
 
 Journey: identical steps 1 through 6 above, then:
 

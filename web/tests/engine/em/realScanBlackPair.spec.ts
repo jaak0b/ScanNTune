@@ -3,12 +3,12 @@ import { beforeAll, describe, expect, it } from 'vitest'
 import { decodeJpgFixtureBgr, getCv } from '../../helpers/cv'
 import { analyzeEmCoupon } from '../../../src/engine/em/emAnalyzer'
 import type { EmResult } from '../../../src/engine/em/emAnalyzer'
-import { defaultEmTestSpec } from '../../../src/engine/em/types'
-import { defaultPrinterProfile } from '../../../src/engine/pa/types'
+import { printedEmSpec } from '../../helpers/emPrintedSpec'
 
 // Regression tests over a user-contributed pair of real 600 dpi JPEG scans of the SAME
-// black-on-white flow coupon (default spec: pitch 0.70 to 1.10 mm, 13 blocks, 7 lines per
-// block, nominal width 0.42 mm), scanned in two placements: once as laid on the glass and
+// black-on-white flow coupon, analyzed under the spec it was printed with (pitch 0.70 to
+// 1.10 mm, 13 blocks, 7 lines per block, nominal width 0.42 mm; see printedEmSpec),
+// scanned in two placements: once as laid on the glass and
 // once turned a quarter turn. The scanner's calibrated resolution is 23.622 px/mm
 // (600 dpi nominal). The bounds are physical sanity checks, not tuned targets.
 const SCAN_PX_PER_MM = 23.622
@@ -19,7 +19,7 @@ describe('real-scan EM regression, black coupon scanned in two placements', () =
 
   beforeAll(async () => {
     const cv = await getCv()
-    const spec = defaultEmTestSpec(defaultPrinterProfile())
+    const spec = printedEmSpec()
     const bgr0 = decodeJpgFixtureBgr(cv, 'em/em_real_black_0deg.jpg')
     try {
       r0 = analyzeEmCoupon(cv, bgr0, spec, SCAN_PX_PER_MM)

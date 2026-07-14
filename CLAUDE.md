@@ -267,10 +267,25 @@ shipped source, comments, or UI text: they are guidance for how to work, not doc
     non-trivial engine or cross-cutting change gets a short written design first (its canonical home,
     what it extends, what it must not duplicate) for owner approval before implementation.
 
+13. **A change to a shared concern MUST land in every flow that has the concern; partial application is a
+    defect.** Any change that fixes, hardens, or improves something existing in more than one calibration
+    flow (measurement statistics, uncertainty reporting, scan handling, coupon design constraints,
+    diagnostics, UI conventions) is INCOMPLETE until every affected flow consumes it, in the same change
+    or an immediately following one on the same branch. A flow may be exempted ONLY by a written
+    technical-mismatch statement in the design or PR: the concern demonstrably does not exist there
+    (different physics, different measurement model). "That flow already works", "its tests are green",
+    "out of scope", and "porting requires a refactor" are NEVER acceptable; if sharing requires a
+    refactor, the refactor is part of the change, not a reason to skip it. The shared implementation
+    lives in exactly one engine module consumed by all flows; a per-flow copy of shared logic is a defect
+    to be fixed on sight, and a change that adds one must not pass review.
+
 **Verification bar.** The standard for "verified" is `npm run build` plus `npm test` plus `npm run e2e` all
 green (and, for any change to the measurement pipeline, the synthetic-fixture validation of rule 1). That
 automated gate is sufficient: do not additionally launch a dev server for manual browser verification unless
-the owner asks for it.
+the owner asks for it. On the owner's local dev machine, run ONLY the unit tests that cover the code
+actually changed (e.g. `npx vitest run tests/engine/em/emAnalyzer.spec.ts` with the specific spec paths);
+running the full suite locally (`npm test` without a file filter, or `npm run e2e`) is forbidden. The full
+gate is CI's job now: it still defines "verified", but CI runs it, not the local machine.
 
 **Subagent routing.** When delegating to a subagent, prefer the `cavecrew-*` types wherever the task fits,
 because their output is caveman-compressed and keeps the parent context small: use `cavecrew-investigator`

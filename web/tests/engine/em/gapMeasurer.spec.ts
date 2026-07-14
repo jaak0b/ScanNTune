@@ -34,7 +34,7 @@ async function measureRender(pitchScale: number, pxPerMm: number = PX_PER_MM): P
 
 describe('measureEmCoupon', () => {
   it(
-    'measures all 26 blocks with 7 centers and 6 gaps each on a clean render',
+    'measures every block with the commanded line and gap counts on a clean render',
     async () => {
       const m = await measureRender(1)
 
@@ -86,28 +86,17 @@ describe('measureEmCoupon', () => {
   )
 
   it(
-    'measures all 26 blocks with 7 centers and 6 gaps each at low scanner resolution',
+    'measures every block at low scanner resolution',
     async () => {
       // 7 px/mm shrinks the centroid window enough to exercise its clamped-to-few-samples path.
       const m = await measureRender(1, 7)
 
-      // At 7 px/mm the finest pitches (0.28mm gap = 2px) can merge adjacent lines in the combined
-      // profile, so the line-count check refuses those blocks rather than reporting a wrong
-      // reading; full 26-block coverage is only expected from about 8 px/mm up. Surviving blocks
-      // still recover the right pitch, but every block's sub-pixel precision is coarser than at
-      // full resolution (edge localization error scales with pixel pitch), so the tolerances below
-      // are wider than the 12 px/mm test's, not tight enough to hide a real detection bug. The
-      // honest contract is: most blocks still measure, any dropped block is one of the three
-      // finest pitches, and survivors land within that widened precision.
-      expect(m.blocks.length).toBeGreaterThanOrEqual(22)
-
-      const finestPitchesMm = [...Array(3).keys()].map((i) => pitchForBlock(spec, i))
-      const measuredIndices = new Set(m.blocks.map((b) => b.blockIndex))
-      for (let i = 0; i < spec.blockCount; i++) {
-        if (!measuredIndices.has(i)) {
-          expect(finestPitchesMm).toContain(pitchForBlock(spec, i))
-        }
-      }
+      // The wide-gap sweep keeps every gap at 0.72 mm or more (5 px at this resolution), so no
+      // block can merge in the combined profile and full coverage is expected even here. Every
+      // block's sub-pixel precision is coarser than at full resolution (edge localization error
+      // scales with pixel pitch), so the tolerances below are wider than the 12 px/mm test's,
+      // not tight enough to hide a real detection bug.
+      expect(m.blocks).toHaveLength(2 * spec.blockCount)
 
       const CENTER_TOLERANCE_MM = 0.025
       const GAP_TOLERANCE_MM = 0.035

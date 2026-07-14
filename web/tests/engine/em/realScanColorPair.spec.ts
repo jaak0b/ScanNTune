@@ -3,12 +3,12 @@ import { beforeAll, describe, expect, it } from 'vitest'
 import { decodeJpgFixtureBgr, getCv } from '../../helpers/cv'
 import { analyzeEmCoupon } from '../../../src/engine/em/emAnalyzer'
 import type { EmResult } from '../../../src/engine/em/emAnalyzer'
-import { defaultEmTestSpec } from '../../../src/engine/em/types'
-import { defaultPrinterProfile } from '../../../src/engine/pa/types'
+import { printedEmSpec } from '../../helpers/emPrintedSpec'
 
 // Regression anchors for the colored-coupon measurement-channel fix, over two real 600 dpi
-// JPEG scans of the same-model flow coupon (default spec: pitch 0.70 to 1.10 mm, 13 blocks,
-// 7 lines per block, nominal width 0.42 mm) printed in colored filament:
+// JPEG scans of the same-model flow coupon, analyzed under the spec it was printed with
+// (pitch 0.70 to 1.10 mm, 13 blocks, 7 lines per block, nominal width 0.42 mm; see
+// printedEmSpec), printed in colored filament:
 // - em_real_yellow_white.jpg: a yellow coupon on white paper. Before the fix this scan failed
 //   with a backdrop-contrast refusal, because the plastic and the paper match in the value
 //   channel; only the saturation channel separates them.
@@ -26,7 +26,7 @@ describe('real-scan EM regression, colored coupons on colored backings', () => {
 
   beforeAll(async () => {
     const cv = await getCv()
-    const spec = defaultEmTestSpec(defaultPrinterProfile())
+    const spec = printedEmSpec()
     const bgrWhite = decodeJpgFixtureBgr(cv, 'em/em_real_yellow_white.jpg')
     try {
       rWhite = analyzeEmCoupon(cv, bgrWhite, spec, SCAN_PX_PER_MM)

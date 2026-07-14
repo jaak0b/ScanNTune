@@ -6,7 +6,7 @@ import type { EmAlignment } from './fiducialAligner'
 import type { BlockMeasurement, EmMeasurement } from './gapMeasurer'
 import { measureEmCoupon } from './gapMeasurer'
 import { sampleBgrTriples, selectMeasurementChannel } from '../cvUtils'
-import { median } from '../math'
+import { MAD_TO_SIGMA, median, medianStandardError } from '../math'
 import { assessMeasurementBackdrop, detrendTones } from '../measurementBackdrop'
 import type { BackdropAssessment, TonePoint } from '../measurementBackdrop'
 import { evaluateScanSetResolution } from '../resolutionGate'
@@ -59,6 +59,13 @@ export interface EmResult {
   /** Separator cross-check residual in mm; near zero when block and separator agree. */
   biasMm: number | null
   /**
+   * Asymptotic standard error of the bead-width estimate, in mm: the standard error of the
+   * median over the per-block medians of the cleaned w samples (blocks pooled over rows and
+   * scans). Between-block spread prices the systematic per-pitch residuals the per-gap noise
+   * does not, so this is the honest uncertainty of `wMm`. Null on failure.
+   */
+  seMm: number | null
+  /**
    * Estimated one-sided edge shift in mm from a scanner-lamp penumbra (median left offset plus
    * median right offset). Zero for a symmetric edge spread; nonzero flags a lamp shadow that
    * biases the measured bead width. Null on failure.
@@ -90,8 +97,6 @@ const MIN_BLOCKS = 8
 const MIN_SAMPLES = 30
 const W_MIN_MM = 0.2
 const W_MAX_MM = 2
-/** Normal-consistency factor for the MAD (sigma = 1.4826 * MAD for Gaussian data). */
-const MAD_TO_SIGMA = 1.4826
 const MAD_CUTOFF = 3.5
 
 /**
@@ -283,6 +288,7 @@ export function analyzeEmCoupons(
     failureReason: null,
     wMm,
     biasMm: separatorBiasMm(measurements, spec, wMm),
+    seMm: widthStandardErrorMm(samples),
     flankAsymmetryMm,
     // A symmetric point spread shifts both flanks equally and oppositely, so the two medians sum
     // to zero; a one-sided lamp penumbra shifts one flank only, and that residual tracks
@@ -430,6 +436,27 @@ function assessEmBackdrop(
 
 const mean = (values: number[]): number => values.reduce((s, v) => s + v, 0) / values.length
 
+// The uncertainty of the bead-width estimate: the cleaned per-gap samples are grouped per test
+// block (row and block index, pooled over the analyzed scans), each block is summarized by its
+// median, and the asymptotic standard error of the median over those block medians is reported.
+// The block is the natural replication unit: within a block the gap samples share the same pitch
+// and print conditions, so the between-block spread carries the systematic residuals (per-pitch
+// edge effects, print inconsistency) that the raw per-gap count would understate.
+function widthStandardErrorMm(
+  samples: { row: 0 | 1; blockIndex: number; wMm: number }[],
+): number | null {
+  const byBlock = new Map<string, number[]>()
+  for (const s of samples) {
+    const key = `${s.row}:${s.blockIndex}`
+    const list = byBlock.get(key)
+    if (list) list.push(s.wMm)
+    else byBlock.set(key, [s.wMm])
+  }
+  if (byBlock.size < 2) return null
+  const blockMedians = [...byBlock.values()].map((list) => median(list))
+  return medianStandardError(blockMedians)
+}
+
 /**
  * One scan's cleaned width samples and their median: one w sample per gap (the measured
  * local pitch between adjacent line centres minus the gap), MAD outlier cleaning, median.
@@ -485,6 +512,7 @@ function failure(
     failureReason: reason,
     wMm: null,
     biasMm: null,
+    seMm: null,
     flankAsymmetryMm: null,
     shadowWarning: false,
     pitchScale: null,

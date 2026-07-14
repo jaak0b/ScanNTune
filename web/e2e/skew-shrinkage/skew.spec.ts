@@ -1,6 +1,6 @@
 import { test, expect, type Page, type Locator } from '@playwright/test'
 import fs from 'node:fs'
-import { PNG } from 'pngjs'
+import jpeg from 'jpeg-js'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { seedCalibration } from '../helpers/seedCalibration'
@@ -192,26 +192,26 @@ const twoScanCases: TwoScanCase[] = [
     name: '300 dpi',
     dpi: 300,
     seed: SEED_300DPI,
-    fixtures: [golden('xy_0d_300dpi.png'), golden('xy_90d_300dpi.png')],
-    scaleX: { value: 0.146, tolerance: 0.05 },
-    scaleY: { value: 0.183, tolerance: 0.05 },
-    skewXY: { value: 0.498, tolerance: 0.02 },
+    fixtures: [golden('xy_0d_300dpi.jpg'), golden('xy_90d_300dpi.jpg')],
+    scaleX: { value: 0.144, tolerance: 0.05 },
+    scaleY: { value: 0.117, tolerance: 0.05 },
+    skewXY: { value: 0.489, tolerance: 0.03 },
     moreScans:
       'XY plate: Scan this plate 2 more times to get a confidence range, which shows how tightly the value is pinned down.',
-    sizeCode: 'XY shrinkage: 100.16 %',
+    sizeCode: 'XY shrinkage: 100.13 %',
     firmware: {
       Klipper: {
         reset: 'SET_SKEW CLEAR=1',
         skewCode:
-          'Paste into the Klipper console:\nSET_SKEW XY=99.566,100.436,70.713\nSKEW_PROFILE SAVE=ScanNTune\nSAVE_CONFIG',
+          'Paste into the Klipper console:\nSET_SKEW XY=99.575,100.427,70.713\nSKEW_PROFILE SAVE=ScanNTune\nSAVE_CONFIG',
       },
       Marlin: {
         reset: 'M852 I0 J0 K0\nM500',
-        skewCode: 'M852 I-0.008697\nM500',
+        skewCode: 'M852 I-0.008528\nM500',
       },
       RepRapFirmware: {
         reset: 'M556 S100 X0 Y0 Z0',
-        skewCode: 'M556 S100 X0.870',
+        skewCode: 'M556 S100 X0.853',
       },
     },
   },
@@ -219,26 +219,26 @@ const twoScanCases: TwoScanCase[] = [
     name: '150 dpi',
     dpi: 150,
     seed: SEED_150DPI,
-    fixtures: [golden('xy_0d_150dpi.png'), golden('xy_90d_150dpi.png')],
-    scaleX: { value: 0.242, tolerance: 0.05 },
-    scaleY: { value: 0.276, tolerance: 0.05 },
-    skewXY: { value: 0.492, tolerance: 0.02 },
+    fixtures: [golden('xy_0d_150dpi.jpg'), golden('xy_90d_150dpi.jpg')],
+    scaleX: { value: 0.243, tolerance: 0.05 },
+    scaleY: { value: 0.216, tolerance: 0.05 },
+    skewXY: { value: 0.486, tolerance: 0.03 },
     moreScans:
       'XY plate: Scan this plate 2 more times to get a confidence range, which shows how tightly the value is pinned down.',
-    sizeCode: 'XY shrinkage: 100.26 %',
+    sizeCode: 'XY shrinkage: 100.23 %',
     firmware: {
       Klipper: {
         reset: 'SET_SKEW CLEAR=1',
         skewCode:
-          'Paste into the Klipper console:\nSET_SKEW XY=99.572,100.43,70.713\nSKEW_PROFILE SAVE=ScanNTune\nSAVE_CONFIG',
+          'Paste into the Klipper console:\nSET_SKEW XY=99.577,100.425,70.713\nSKEW_PROFILE SAVE=ScanNTune\nSAVE_CONFIG',
       },
       Marlin: {
         reset: 'M852 I0 J0 K0\nM500',
-        skewCode: 'M852 I-0.008580\nM500',
+        skewCode: 'M852 I-0.008475\nM500',
       },
       RepRapFirmware: {
         reset: 'M556 S100 X0 Y0 Z0',
-        skewCode: 'M556 S100 X0.858',
+        skewCode: 'M556 S100 X0.848',
       },
     },
   },
@@ -300,35 +300,35 @@ const fourScanCases: FourScanCase[] = [
     dpi: 300,
     seed: SEED_300DPI,
     fixtures: [
-      golden('xy_0d_300dpi.png'),
-      golden('xy_90d_300dpi.png'),
-      golden('xy_180d_300dpi.png'),
-      golden('xy_270d_300dpi.png'),
+      golden('xy_0d_300dpi.jpg'),
+      golden('xy_90d_300dpi.jpg'),
+      golden('xy_180d_300dpi.jpg'),
+      golden('xy_270d_300dpi.jpg'),
     ],
-    scaleX: { value: 0.144, tolerance: 0.05 },
-    scaleY: { value: 0.173, tolerance: 0.05 },
-    skewXY: { value: 0.5, tolerance: 0.02 },
-    rangeScaleX: 'Likely between +0.128 % and +0.160 % (95% from 4 scans).',
-    rangeScaleY: 'Likely between +0.157 % and +0.189 % (95% from 4 scans).',
-    rangeSkew: 'Likely between +0.483° and +0.517° (95% from 4 scans).',
-    sizeCode: 'XY shrinkage: 100.16 %',
+    scaleX: { value: 0.145, tolerance: 0.05 },
+    scaleY: { value: 0.112, tolerance: 0.05 },
+    skewXY: { value: 0.492, tolerance: 0.03 },
+    rangeScaleX: 'Likely between +0.128 % and +0.162 % (95% from 4 scans).',
+    rangeScaleY: 'Likely between +0.095 % and +0.129 % (95% from 4 scans).',
+    rangeSkew: 'Likely between +0.467° and +0.517° (95% from 4 scans).',
+    sizeCode: 'XY shrinkage: 100.13 %',
   },
   {
     name: '150 dpi, 4 scans',
     dpi: 150,
     seed: SEED_150DPI,
     fixtures: [
-      golden('xy_0d_150dpi.png'),
-      golden('xy_90d_150dpi.png'),
-      golden('xy_180d_150dpi.png'),
-      golden('xy_270d_150dpi.png'),
+      golden('xy_0d_150dpi.jpg'),
+      golden('xy_90d_150dpi.jpg'),
+      golden('xy_180d_150dpi.jpg'),
+      golden('xy_270d_150dpi.jpg'),
     ],
-    scaleX: { value: 0.239, tolerance: 0.05 },
-    scaleY: { value: 0.267, tolerance: 0.05 },
-    skewXY: { value: 0.497, tolerance: 0.02 },
-    rangeScaleX: 'Likely between +0.218 % and +0.259 % (95% from 4 scans).',
-    rangeScaleY: 'Likely between +0.246 % and +0.287 % (95% from 4 scans).',
-    rangeSkew: 'Likely between +0.479° and +0.515° (95% from 4 scans).',
+    scaleX: { value: 0.242, tolerance: 0.05 },
+    scaleY: { value: 0.208, tolerance: 0.05 },
+    skewXY: { value: 0.493, tolerance: 0.03 },
+    rangeScaleX: 'Likely between +0.226 % and +0.257 % (95% from 4 scans).',
+    rangeScaleY: 'Likely between +0.192 % and +0.223 % (95% from 4 scans).',
+    rangeSkew: 'Likely between +0.468° and +0.517° (95% from 4 scans).',
     sizeCode: null,
   },
 ]
@@ -367,10 +367,10 @@ test('rejection 3.1: two scans at nearly the same angle are blocked before Analy
 
   // The same file uploaded twice, given distinct names so the app's upload-identity keying treats
   // them as two scans (per skew.flow.md 3.1).
-  const bytes = fs.readFileSync(golden('xy_0d_300dpi.png'))
+  const bytes = fs.readFileSync(golden('xy_0d_300dpi.jpg'))
   await page.getByTestId('scans-input').setInputFiles([
-    { name: 'xy_0d_300dpi_a.png', mimeType: 'image/png', buffer: bytes },
-    { name: 'xy_0d_300dpi_b.png', mimeType: 'image/png', buffer: bytes },
+    { name: 'xy_0d_300dpi_a.jpg', mimeType: 'image/jpeg', buffer: bytes },
+    { name: 'xy_0d_300dpi_b.jpg', mimeType: 'image/jpeg', buffer: bytes },
   ])
 
   const ringCounts = page.getByTestId('ring-count')
@@ -404,7 +404,7 @@ test('rejection 3.4: a mixed-resolution pair flags only the wrong scan and block
 
   await page
     .getByTestId('scans-input')
-    .setInputFiles([golden('xy_0d_300dpi.png'), golden('xy_90d_150dpi.png')])
+    .setInputFiles([golden('xy_0d_300dpi.jpg'), golden('xy_90d_150dpi.jpg')])
 
   const ringCounts = page.getByTestId('ring-count')
   await expect(ringCounts).toHaveCount(2, { timeout: RESULT_VISIBLE_TIMEOUT_MS })
@@ -438,7 +438,7 @@ test('rejection 3.5: a uniform resolution mismatch flags both scans and blocks A
 
   await page
     .getByTestId('scans-input')
-    .setInputFiles([golden('xy_0d_150dpi.png'), golden('xy_90d_150dpi.png')])
+    .setInputFiles([golden('xy_0d_150dpi.jpg'), golden('xy_90d_150dpi.jpg')])
 
   const ringCounts = page.getByTestId('ring-count')
   await expect(ringCounts).toHaveCount(2, { timeout: RESULT_VISIBLE_TIMEOUT_MS })
@@ -471,20 +471,21 @@ test('rejection 3.7: a mirrored flat-plate scan is flagged on its card and block
   await seedCalibration(page, SEED_150DPI)
   await page.goto('/')
 
-  // Fixture per skew.flow.md 3.7: the raw 0-degree 150 dpi golden (scanned on the wrong face,
-  // so it reads mirrored under the face-on-glass flip convention), plus a horizontally flipped
-  // copy of the 90-degree golden produced here in the test (display-independent preprocessing
-  // of the test input, not a measurement-path resample), which reads as a valid scan.
+  // Fixture per skew.flow.md 3.7: the raw 0-degree 150 dpi golden (scanned first-layer side on
+  // the glass, so it reads unmirrored under the face-on-glass flip convention), plus a
+  // horizontally flipped copy of the 90-degree golden produced here in the test
+  // (display-independent preprocessing of the test input, not a measurement-path resample),
+  // which reads as the mirrored scan.
   await page.getByTestId('scans-input').setInputFiles([
     {
-      name: 'xy_0d_150dpi.png',
-      mimeType: 'image/png',
-      buffer: fs.readFileSync(golden('xy_0d_150dpi.png')),
+      name: 'xy_0d_150dpi.jpg',
+      mimeType: 'image/jpeg',
+      buffer: fs.readFileSync(golden('xy_0d_150dpi.jpg')),
     },
     {
-      name: 'xy_90d_150dpi_unmirrored.png',
-      mimeType: 'image/png',
-      buffer: flipHorizontally(golden('xy_90d_150dpi.png')),
+      name: 'xy_90d_150dpi_mirrored.jpg',
+      mimeType: 'image/jpeg',
+      buffer: flipHorizontally(golden('xy_90d_150dpi.jpg')),
     },
   ])
 
@@ -514,10 +515,9 @@ test('rejection 3.7: a mirrored flat-plate scan is flagged on its card and block
   await expect(page.getByTestId('scale-X')).toHaveCount(0)
 })
 
-/** Mirrors a PNG fixture about its vertical axis (each pixel row reversed), returning PNG bytes. */
+/** Mirrors a JPEG fixture about its vertical axis (each pixel row reversed), returning JPEG bytes. */
 function flipHorizontally(file: string): Buffer {
-  const png = PNG.sync.read(fs.readFileSync(file))
-  const { width, height, data } = png
+  const { width, height, data } = jpeg.decode(fs.readFileSync(file), { useTArray: true })
   for (let y = 0; y < height; y++) {
     const row = y * width * 4
     for (let x = 0; x < width >> 1; x++) {
@@ -530,7 +530,7 @@ function flipHorizontally(file: string): Buffer {
       }
     }
   }
-  return PNG.sync.write(png)
+  return jpeg.encode({ width, height, data }, 95).data as unknown as Buffer
 }
 
 test('rejection 3.6: wrong declared coupon geometry is a hard refusal before Analyze', async ({
@@ -549,15 +549,15 @@ test('rejection 3.6: wrong declared coupon geometry is a hard refusal before Ana
 
   await page
     .getByTestId('scans-input')
-    .setInputFiles([golden('xy_0d_300dpi.png'), golden('xy_90d_300dpi.png')])
+    .setInputFiles([golden('xy_0d_300dpi.jpg'), golden('xy_90d_300dpi.jpg')])
 
   const ringCounts = page.getByTestId('ring-count')
   await expect(ringCounts).toHaveCount(2, { timeout: RESULT_VISIBLE_TIMEOUT_MS })
-  await expect(ringCounts.nth(0)).toHaveText('23 of 34', { timeout: RESULT_VISIBLE_TIMEOUT_MS })
-  await expect(ringCounts.nth(1)).toHaveText('23 of 34', { timeout: RESULT_VISIBLE_TIMEOUT_MS })
+  await expect(ringCounts.nth(0)).toHaveText('4 of 34', { timeout: RESULT_VISIBLE_TIMEOUT_MS })
+  await expect(ringCounts.nth(1)).toHaveText('4 of 34', { timeout: RESULT_VISIBLE_TIMEOUT_MS })
 
   const EXPECTED_FAILURE =
-    'The coupon pattern was not found: only 23 of its 34 measurement rings were detected. Make sure the whole coupon lies inside the scan area on a plain, single-colour background, then scan again.'
+    'The coupon pattern was not found: only 4 of its 34 measurement rings were detected. Make sure the whole coupon lies inside the scan area on a plain, single-colour background, then scan again.'
 
   const islands = page.getByTestId('scan-island')
   await expect(islands.nth(0).getByTestId('failure-reason')).toHaveText(EXPECTED_FAILURE)

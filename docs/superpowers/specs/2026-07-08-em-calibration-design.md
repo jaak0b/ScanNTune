@@ -69,10 +69,11 @@ One printed part, one color, no pause, no mid-print M221.
   - 3 fiducial holes + 1 solid origin corner, same convention and dimensions as the
     PA coupon so fiducial detection code is shared later.
   - A central structural rail between the two comb rows.
-- 2 mirrored rows x `blockCount` blocks (default 13). Top row pitch ascends
-  left-to-right, bottom row descends (mirror). Each block: `linesPerBlock` (default
-  ~10) straight single-bead lines at that block's fixed pitch, anchored to frame and
-  rail at both ends (no free-standing ends).
+- 2 mirrored rows x `blockCount` blocks (default 9; originally 13, see the wide-gap
+  revision below). Top row pitch ascends left-to-right, bottom row descends (mirror).
+  Each block: `linesPerBlock` (default 5; originally 7) straight single-bead lines at
+  that block's fixed pitch, anchored to frame and rail at both ends (no free-standing
+  ends).
 - Line cross-section, 3 layers tall (side view; shallower slits scan brighter):
   - Layer 1: pedestal, commanded width ~0.72 x nominal (inset). Absorbs first-layer
     squish so z-offset error cannot reach the measured edge. (0.30 mm beads on a 0.4
@@ -81,9 +82,43 @@ One printed part, one color, no pause, no mid-print M221.
   - The part is scanned TOP-FACE DOWN on the glass, so the scanner focuses on the
     measured layers and the pedestal hides behind them.
 - All widths derive from `nozzleDiameterMm`: nominal width = 1.05 x nozzle
-  (0.42 mm at 0.4). Default pitch range 0.70-1.10 mm at 0.4 nozzle (gaps ~0.28-0.68
-  mm, always open), scaled proportionally for other nozzles. Default 7 lines per
-  block.
+  (0.42 mm at 0.4). Default pitch range 1.14-1.35 mm at 0.4 nozzle (gaps ~0.72-0.93
+  mm at the nominal bead), derived from the 0.65 mm gap floor described in the
+  wide-gap revision below. Default 5 lines per block.
+
+### Wide-gap revision (2026-07-14)
+
+The original default pitch range (0.70-1.10 mm at a 0.4 nozzle, 13 blocks of 7 lines)
+kept every gap open, but diagnostic runs over real 600 dpi scans showed that OPEN is
+not enough: light returned through a deep narrow slit falls off nonlinearly with the
+gap width, so the through-depth shadow inflates the measured bead width at the narrow
+end of the sweep. Per-block medians of the cleaned w samples against the commanded
+pitch, from the diagnostic scans (nominal bead 0.42 mm):
+
+| pitch (mm) | gap (mm, approx.) | dark pair w (mm) | bright pair w (mm) |
+|-----------|-------------------|------------------|--------------------|
+| 0.767     | 0.36              | 0.545            | 0.439              |
+| 0.833     | 0.42              | 0.506            | 0.433              |
+| 0.900     | 0.49              | 0.460            | 0.416              |
+| 0.967     | 0.56              | 0.429            | 0.420              |
+| 1.033     | 0.62              | 0.422            | 0.409              |
+| 1.100     | 0.69              | 0.412            | 0.392              |
+
+The dark (black filament) coupon reads up to 0.13 mm wide at the tightest gaps and
+converges to the wide-gap value from roughly a 0.65 mm gap upward; the bright coupon
+is only mildly affected. An estimator bake-off (equivalent-width, template-fit,
+Steger, moment-based candidates) confirmed the effect is not linear shift-invariant
+blur and cannot be corrected in software without a fudge, so the coupon geometry was
+revised instead: every gap must be at least 0.65 mm.
+
+Derivation of the defaults (no padding, rule 11): minimum pitch = 1.15 x nominal +
+0.65 mm, rounded up to 0.01 mm (the 15% factor is the over-extrusion envelope the
+coupon must survive while staying readable; 1.14 mm at a 0.4 nozzle). Sweep span =
+0.5 x nominal (1.35 mm max at 0.4), keeping the per-block pitch step near the
+original design's for the pitch-scale and separator cross-check diagnostics. Blocks
+drop to 9 x 5 lines: 4 gaps x 9 blocks x 2 rows = 72 gap samples per scan, still
+well above the analyzer's 30-sample floor, and the coupon shrinks from ~130 mm to
+~95 mm wide, back inside a 120 mm bed.
 - Spec fields (`EmTestSpec`): `pitchMinMm`, `pitchMaxMm`, `blockCount`,
   `linesPerBlock`, `printSpeedMmS`, all defaulted from the profile and
   user-editable. Coupon size is
