@@ -16,12 +16,19 @@ values in the high 0.49 to 0.50 degree range across every capture below, which i
 Four scans of the same physical XY plate, a quarter turn apart on the glass, at two representative
 resolutions (the flow's mandatory low/high boundary-value pair):
 
-- `xy_0d_300dpi.png`, `xy_90d_300dpi.png`, `xy_180d_300dpi.png`, `xy_270d_300dpi.png` (300 dpi)
-- `xy_0d_150dpi.png`, `xy_90d_150dpi.png`, `xy_180d_150dpi.png`, `xy_270d_150dpi.png` (150 dpi)
+- `xy_0d_300dpi.jpg`, `xy_90d_300dpi.jpg`, `xy_180d_300dpi.jpg`, `xy_270d_300dpi.jpg` (300 dpi)
+- `xy_0d_150dpi.jpg`, `xy_90d_150dpi.jpg`, `xy_180d_150dpi.jpg`, `xy_270d_150dpi.jpg` (150 dpi)
 
 Each scan detects `23 of 23` rings against the plate's own 5x5 geometry (25 grid vertices minus the
 2 solid orientation-marker rings), confirming every fixture is a clean, fully-inside-frame scan of
 the same physical part.
+
+Recapture 2026-07-14: the owner reprinted the golden plate (the same deliberately injected
+~0.5 degree skew) and rescanned all eight fixtures on the same Canon MG3600 scanner, this time
+scanned with the first-layer side on the glass per the current face-on-glass flip convention and
+saved as JPEG (the `.jpg` files above replace the earlier `.png` set). Every frozen value below was
+re-captured from the running app against these scans; the previous PNG set's values are retired
+with it. The new scans read `scan-flip` `None` on every fixture.
 
 ## Approval tiers, per output family
 
@@ -77,12 +84,12 @@ re-running the card UI, using the exact shape `useCalibration.ts` persists under
 `scanntune.calibration` (`ScannerCalibration` in `web/src/engine/types.ts`).
 
 To get the seed value for each DPI, the card flow was run once for real in the app (sensor `CIS`,
-measured long side `85.55` mm) on `web/e2e/card-calibration/golden/card_150dpi.png` and
-`card_300dpi.png`. The 300 dpi run reproduced the already-frozen card golden exactly
+measured long side `85.55` mm) on `web/e2e/card-calibration/golden/card_150dpi.jpg` and
+`card_300dpi.jpg`. The 300 dpi run reproduced the already-frozen card golden exactly
 (`pxpermm` `11.796`, `effective-dpi` `300`, `vs-nominal` `-0.131 %`), confirming this is the same
 capture the card webtest already approved. The 150 dpi run is captured fresh here.
 
-### 150 dpi seed (from `card_150dpi.png`)
+### 150 dpi seed (from `card_150dpi.jpg`)
 
 Displayed: `pxpermm` `5.892`, `effective-dpi` `150`, `vs-nominal` `-0.226 %`, `saved` "Saved, used
 for every scan".
@@ -103,7 +110,7 @@ for every scan".
 }
 ```
 
-### 300 dpi seed (from `card_300dpi.png`)
+### 300 dpi seed (from `card_300dpi.jpg`)
 
 Displayed: `pxpermm` `11.796`, `effective-dpi` `300`, `vs-nominal` `-0.131 %`, `saved` "Saved, used
 for every scan" (matches the already-frozen `card.flow.md` 300 dpi case exactly).
@@ -151,16 +158,16 @@ real `scans-input` file input, waited for each scan's `ring-count` and the plane
 verbatim. No value below was computed, derived, or read from engine source; every literal is what
 the app showed on screen.
 
-### Case: 300 dpi, quarter-turn pair (`xy_0d_300dpi.png` + `xy_90d_300dpi.png`)
+### Case: 300 dpi, quarter-turn pair (`xy_0d_300dpi.jpg` + `xy_90d_300dpi.jpg`)
 
-Per-scan: `ring-count` `23 of 23` (both), `scan-angle` `0.1°` and `89.7°`, `scan-flip` `None` (both).
+Per-scan: `ring-count` `23 of 23` (both), `scan-angle` `359.5°` and `90.1°`, `scan-flip` `None` (both).
 `plane-status-XY`: `Ready to analyze.`
 
 | testid | displayed value | tolerance band | rationale |
 |---|---|---|---|
-| `scale-X` | `+0.146 %` | ± 0.05 percentage points (sign: positive) | The same physical plate's X scale reads +0.146% (0/90 pair), +0.142% (180/270 pair), and +0.144% (all 4 scans) at 300 dpi: a 0.004 pp cross-pairing spread. ± 0.05 pp is well above that noise floor and still catches a sign flip or gross error. |
-| `scale-Y` | `+0.183 %` | ± 0.05 percentage points (sign: positive) | Cross-pairing spread at 300 dpi: +0.183% (0/90), +0.164% (180/270), +0.173% (4-scan), a 0.019 pp spread. ± 0.05 pp comfortably covers it. |
-| `skew-XY` | `+0.498°` | ± 0.02 degrees (sign: positive) | Cross-pairing spread at 300 dpi: +0.498° (0/90), +0.502° (180/270), +0.500° (4-scan), a 0.004° spread; the 4-scan run's own 95% confidence half-width is ±0.017°. ± 0.02° covers both with a small margin while still failing on a sign flip (which would read about -0.5°, 25x outside this band). |
+| `scale-X` | `+0.144 %` | ± 0.05 percentage points (sign: positive) | The same physical plate's X scale reads +0.144% (0/90 pair), +0.146% (180/270 pair), and +0.145% (all 4 scans) at 300 dpi: a 0.002 pp cross-pairing spread. ± 0.05 pp is well above that noise floor and still catches a sign flip or gross error. |
+| `scale-Y` | `+0.117 %` | ± 0.05 percentage points (sign: positive) | Cross-pairing spread at 300 dpi: +0.117% (0/90), +0.107% (180/270), +0.112% (4-scan), a 0.010 pp spread. ± 0.05 pp comfortably covers it. |
+| `skew-XY` | `+0.489°` | ± 0.03 degrees (sign: positive) | Cross-pairing spread at 300 dpi: +0.489° (0/90), +0.495° (180/270), +0.492° (4-scan), a 0.006° spread; the 4-scan run's own 95% confidence half-width is ±0.025°. ± 0.03° covers both with a small margin while still failing on a sign flip (which would read about -0.5°, over 30x outside this band). |
 | `more-scans-XY` | `XY plate: Scan this plate 2 more times to get a confidence range, which shows how tightly the value is pinned down.` | exact string | Deterministic UI text for exactly 2 measured scans (`MIN_SCANS_FOR_RANGE` is 4 in `scanCombiner.ts`); no range widget renders yet. |
 | `zero-note-*` | not present (no element matches `[data-testid^="zero-note"]`) | exact (absent) | Every figure is well outside its (not-yet-shown) confidence range at zero; no "well calibrated" or "no correction needed" note applies. |
 
@@ -169,9 +176,9 @@ explicit owner sign-off on the literal strings below):**
 
 | firmware | reset command (step 2, always shown regardless of scan) | `skew-code` (exact text) |
 |---|---|---|
-| Klipper | `SET_SKEW CLEAR=1` | `Paste into the Klipper console:`<br>`SET_SKEW XY=99.566,100.436,70.713`<br>`SKEW_PROFILE SAVE=ScanNTune`<br>`SAVE_CONFIG` |
-| Marlin | `M852 I0 J0 K0`<br>`M500` | `M852 I-0.008697`<br>`M500` |
-| RepRapFirmware | `M556 S100 X0 Y0 Z0` | `M556 S100 X0.870` |
+| Klipper | `SET_SKEW CLEAR=1` | `Paste into the Klipper console:`<br>`SET_SKEW XY=99.575,100.427,70.713`<br>`SKEW_PROFILE SAVE=ScanNTune`<br>`SAVE_CONFIG` |
+| Marlin | `M852 I0 J0 K0`<br>`M500` | `M852 I-0.008528`<br>`M500` |
+| RepRapFirmware | `M556 S100 X0 Y0 Z0` | `M556 S100 X0.853` |
 
 `skew-code`'s displayed text includes the caption line ("Paste into the Klipper console:") because
 the `data-testid="skew-code"` attribute lands on `CodeBlock`'s outer wrapper div (Vue attribute
@@ -180,18 +187,18 @@ caption for this correction, so their `skew-code` text is only the command lines
 displayed string exactly, newlines included; there is no partial/regex assertion in this suite.
 
 `size-code` (Format: `Shrinkage %`, same value under all three firmware selections):
-**`XY shrinkage: 100.16 %`**
+**`XY shrinkage: 100.13 %`**
 
-### Case: 150 dpi, quarter-turn pair (`xy_0d_150dpi.png` + `xy_90d_150dpi.png`)
+### Case: 150 dpi, quarter-turn pair (`xy_0d_150dpi.jpg` + `xy_90d_150dpi.jpg`)
 
-Per-scan: `ring-count` `23 of 23` (both), `scan-angle` `0.1°` and `89.8°`, `scan-flip` `None` (both).
+Per-scan: `ring-count` `23 of 23` (both), `scan-angle` `359.5°` and `90.1°`, `scan-flip` `None` (both).
 `plane-status-XY`: `Ready to analyze.`
 
 | testid | displayed value | tolerance band | rationale |
 |---|---|---|---|
-| `scale-X` | `+0.242 %` | ± 0.05 percentage points (sign: positive) | Cross-pairing spread at 150 dpi: +0.242% (0/90), +0.236% (180/270), +0.239% (4-scan), a 0.006 pp spread. Same band as the 300 dpi case for consistency and margin. |
-| `scale-Y` | `+0.276 %` | ± 0.05 percentage points (sign: positive) | Cross-pairing spread at 150 dpi: +0.276% (0/90), +0.257% (180/270), +0.267% (4-scan), a 0.019 pp spread. |
-| `skew-XY` | `+0.492°` | ± 0.02 degrees (sign: positive) | Cross-pairing spread at 150 dpi: +0.492° (0/90), +0.503° (180/270), +0.497° (4-scan), a 0.011° spread; the 4-scan run's own 95% half-width is ±0.018°. ± 0.02° covers this with a small margin. |
+| `scale-X` | `+0.243 %` | ± 0.05 percentage points (sign: positive) | Cross-pairing spread at 150 dpi: +0.243% (0/90), +0.240% (180/270), +0.242% (4-scan), a 0.003 pp spread. Same band as the 300 dpi case for consistency and margin. |
+| `scale-Y` | `+0.216 %` | ± 0.05 percentage points (sign: positive) | Cross-pairing spread at 150 dpi: +0.216% (0/90), +0.199% (180/270), +0.208% (4-scan), a 0.017 pp spread. |
+| `skew-XY` | `+0.486°` | ± 0.03 degrees (sign: positive) | Cross-pairing spread at 150 dpi: +0.486° (0/90), +0.499° (180/270), +0.493° (4-scan), a 0.013° spread; the 4-scan run's own 95% half-width is ±0.025°. ± 0.03° covers this with a small margin. |
 | `more-scans-XY` | `XY plate: Scan this plate 2 more times to get a confidence range, which shows how tightly the value is pinned down.` | exact string | Same rationale as the 300 dpi case. |
 | `zero-note-*` | not present | exact (absent) | Same rationale as the 300 dpi case. |
 
@@ -199,11 +206,11 @@ Per-scan: `ring-count` `23 of 23` (both), `scan-angle` `0.1°` and `89.8°`, `sc
 
 | firmware | reset command | `skew-code` (exact text) |
 |---|---|---|
-| Klipper | `SET_SKEW CLEAR=1` | `Paste into the Klipper console:`<br>`SET_SKEW XY=99.572,100.43,70.713`<br>`SKEW_PROFILE SAVE=ScanNTune`<br>`SAVE_CONFIG` |
-| Marlin | `M852 I0 J0 K0`<br>`M500` | `M852 I-0.008580`<br>`M500` |
-| RepRapFirmware | `M556 S100 X0 Y0 Z0` | `M556 S100 X0.858` |
+| Klipper | `SET_SKEW CLEAR=1` | `Paste into the Klipper console:`<br>`SET_SKEW XY=99.577,100.425,70.713`<br>`SKEW_PROFILE SAVE=ScanNTune`<br>`SAVE_CONFIG` |
+| Marlin | `M852 I0 J0 K0`<br>`M500` | `M852 I-0.008475`<br>`M500` |
+| RepRapFirmware | `M556 S100 X0 Y0 Z0` | `M556 S100 X0.848` |
 
-`size-code` (Format: `Shrinkage %`): **`XY shrinkage: 100.26 %`**
+`size-code` (Format: `Shrinkage %`): **`XY shrinkage: 100.23 %`**
 
 ## Rotation-robustness finding (not computed, read directly off the app for each pairing)
 
@@ -216,27 +223,27 @@ computed by hand, each row is a separate, independently-captured app run.
 
 | scan set | `scale-X` | `scale-Y` | `skew-XY` | `size-code` |
 |---|---|---|---|---|
-| 0d + 90d | `+0.146 %` | `+0.183 %` | `+0.498°` | `XY shrinkage: 100.16 %` |
-| 180d + 270d | `+0.142 %` | `+0.164 %` | `+0.502°` | (not captured for this pairing) |
-| all 4 (0/90/180/270) | `+0.144 %` | `+0.173 %` | `+0.500°` | `XY shrinkage: 100.16 %` |
-| all 4, `range-scaleX-XY` | | | | `Likely between +0.128 % and +0.160 % (95% from 4 scans).` |
-| all 4, `range-scaleY-XY` | | | | `Likely between +0.157 % and +0.189 % (95% from 4 scans).` |
-| all 4, `range-skew-XY` | | | | `Likely between +0.483° and +0.517° (95% from 4 scans).` |
+| 0d + 90d | `+0.144 %` | `+0.117 %` | `+0.489°` | `XY shrinkage: 100.13 %` |
+| 180d + 270d | `+0.146 %` | `+0.107 %` | `+0.495°` | `XY shrinkage: 100.13 %` |
+| all 4 (0/90/180/270) | `+0.145 %` | `+0.112 %` | `+0.492°` | `XY shrinkage: 100.13 %` |
+| all 4, `range-scaleX-XY` | | | | `Likely between +0.128 % and +0.162 % (95% from 4 scans).` |
+| all 4, `range-scaleY-XY` | | | | `Likely between +0.095 % and +0.129 % (95% from 4 scans).` |
+| all 4, `range-skew-XY` | | | | `Likely between +0.467° and +0.517° (95% from 4 scans).` |
 
 ### 150 dpi
 
 | scan set | `scale-X` | `scale-Y` | `skew-XY` |
 |---|---|---|---|
-| 0d + 90d | `+0.242 %` | `+0.276 %` | `+0.492°` |
-| 180d + 270d | `+0.236 %` | `+0.257 %` | `+0.503°` |
-| all 4 (0/90/180/270) | `+0.239 %` | `+0.267 %` | `+0.497°` |
-| all 4, `range-scaleX-XY` | | | `Likely between +0.218 % and +0.259 % (95% from 4 scans).` |
-| all 4, `range-scaleY-XY` | | | `Likely between +0.246 % and +0.287 % (95% from 4 scans).` |
-| all 4, `range-skew-XY` | | | `Likely between +0.479° and +0.515° (95% from 4 scans).` |
+| 0d + 90d | `+0.243 %` | `+0.216 %` | `+0.486°` |
+| 180d + 270d | `+0.240 %` | `+0.199 %` | `+0.499°` |
+| all 4 (0/90/180/270) | `+0.242 %` | `+0.208 %` | `+0.493°` |
+| all 4, `range-scaleX-XY` | | | `Likely between +0.226 % and +0.257 % (95% from 4 scans).` |
+| all 4, `range-scaleY-XY` | | | `Likely between +0.192 % and +0.223 % (95% from 4 scans).` |
+| all 4, `range-skew-XY` | | | `Likely between +0.468° and +0.517° (95% from 4 scans).` |
 
 **Conclusion: the app's readings do NOT depend on which quarter-turn pairing is used.** Every
 pairing (0/90, 180/270, all 4) agrees to within about 0.02 percentage points on scale and about
-0.011 degrees on skew, at both DPIs. This is well inside the tolerance bands chosen above, and is
+0.013 degrees on skew, at both DPIs. This is well inside the tolerance bands chosen above, and is
 the empirical basis for those bands. There is **one shared golden value set per DPI**, not a
 separate golden per orientation pairing; the flow spec's mandatory case table uses the 0/90 pairing
 (the pairing named in the fixture-naming convention and in the task brief) as the canonical
@@ -247,10 +254,10 @@ as an optional extra case demonstrating the confidence-range feature.
 
 ### 3.1 Two scans at (nearly) the same angle: hard-blocked before Analyze, no exception thrown
 
-Uploaded `xy_0d_300dpi.png` twice (renamed on upload so the app treats them as two distinct scans;
+Uploaded `xy_0d_300dpi.jpg` twice (renamed on upload so the app treats them as two distinct scans;
 the underlying image bytes are identical). Calibration seeded at 300 dpi.
 
-Result: both scans individually measure fine (`ring-count` `23 of 23` each, `scan-angle` `0.1°` for
+Result: both scans individually measure fine (`ring-count` `23 of 23` each, `scan-angle` `359.5°` for
 both), but the group is flagged, `analyze-btn` is disabled, and no exception is thrown; this is the
 scan-set-level rejection path per rule 2 (a scan that cannot be combined is a normal outcome, not an
 exception).
@@ -278,7 +285,7 @@ canonical, deterministic case for the golden set: two scans of the literal same 
 
 ### 3.4 Mixed-resolution scan pair (one scan matches the calibration DPI, one does not): hard block, one scan flagged
 
-Uploaded `xy_0d_300dpi.png` (true 300 dpi) + `xy_90d_150dpi.png` (true 150 dpi) together as one
+Uploaded `xy_0d_300dpi.jpg` (true 300 dpi) + `xy_90d_150dpi.jpg` (true 150 dpi) together as one
 plate's scan set, with the calibration seeded at 300 dpi.
 
 Both scans still measure their rings fine (`23 of 23` each) and the plate's angle spread is fine
@@ -291,8 +298,8 @@ Per-scan cards:
 
 | scan | `scan-resolution` row | pill (class `.pill`, no testid) | `failure-reason` explanation |
 |---|---|---|---|
-| `xy_0d_300dpi.png` (0.1°) | `about 300 dpi` | `XY plane` (ok) | (none) |
-| `xy_90d_150dpi.png` (89.8°) | `about 150 dpi` | `Wrong resolution` (err) | `This scan measures about 150 dpi, but the expected resolution is 300 dpi. Rescan at the expected resolution, or recalibrate the scanner at this one.` |
+| `xy_0d_300dpi.jpg` (359.5°) | `about 300 dpi` | `XY plane` (ok) | (none) |
+| `xy_90d_150dpi.jpg` (90.1°) | `about 150 dpi` | `Wrong resolution` (err) | `This scan measures about 150 dpi, but the expected resolution is 300 dpi. Rescan at the expected resolution, or recalibrate the scanner at this one.` |
 
 Analyze gate:
 
@@ -304,7 +311,7 @@ Analyze gate:
 
 ### 3.5 Both scans at a DPI different from the calibration (uniform 2x mismatch): hard block, both scans flagged
 
-Uploaded `xy_0d_150dpi.png` + `xy_90d_150dpi.png` (both native 150 dpi), calibration seeded at
+Uploaded `xy_0d_150dpi.jpg` + `xy_90d_150dpi.jpg` (both native 150 dpi), calibration seeded at
 300 dpi.
 
 Both scans measure fine individually (`23 of 23` rings, angle spread fine), but **both** fail the
@@ -315,8 +322,8 @@ Per-scan cards (identical on both):
 
 | scan | `scan-resolution` row | pill (class `.pill`, no testid) | `failure-reason` explanation |
 |---|---|---|---|
-| `xy_0d_150dpi.png` (0.2°) | `about 150 dpi` | `Wrong resolution` (err) | `This scan measures about 150 dpi, but the expected resolution is 300 dpi. Rescan at the expected resolution, or recalibrate the scanner at this one.` |
-| `xy_90d_150dpi.png` (89.8°) | `about 150 dpi` | `Wrong resolution` (err) | (same string as above) |
+| `xy_0d_150dpi.jpg` (359.5°) | `about 150 dpi` | `Wrong resolution` (err) | `This scan measures about 150 dpi, but the expected resolution is 300 dpi. Rescan at the expected resolution, or recalibrate the scanner at this one.` |
+| `xy_90d_150dpi.jpg` (90.1°) | `about 150 dpi` | `Wrong resolution` (err) | (same string as above) |
 
 Analyze gate:
 
@@ -334,7 +341,7 @@ refusal, and unlike the pre-181ba92 behavior it produces no (wrong) result at al
 
 Correct geometry (see "Coupon geometry" above): rings per side `5`, plate baseline `100` mm. Entered
 instead: rings per side **`6`**, plate baseline **`150`** mm (larger than the real plate), then
-uploaded the valid, matching-calibration `xy_0d_300dpi.png` + `xy_90d_300dpi.png` pair (calibration
+uploaded the valid, matching-calibration `xy_0d_300dpi.jpg` + `xy_90d_300dpi.jpg` pair (calibration
 seeded at 300 dpi).
 
 Both scans fail individually (the ring detector searches for a 6x6 grid's marker pattern against an
@@ -342,8 +349,8 @@ actual 5x5 physical plate):
 
 | testid | value |
 |---|---|
-| `ring-count` (both scans) | `23 of 34` (34 = 6x6 grid vertices minus the 2 solid marker rings; the real plate still yields its own true 23 measurable rings) |
-| `failure-reason` (both scans) | `The coupon pattern was not found: only 23 of its 34 measurement rings were detected. Make sure the whole coupon lies inside the scan area on a plain, single-colour background, then scan again.` |
+| `ring-count` (both scans) | `4 of 34` (34 = 6x6 grid vertices minus the 2 solid marker rings; against the wrong declared geometry the size cluster keeps only 4 candidate rings) |
+| `failure-reason` (both scans) | `The coupon pattern was not found: only 4 of its 34 measurement rings were detected. Make sure the whole coupon lies inside the scan area on a plain, single-colour background, then scan again.` |
 | pill text on both islands (class `.pill`) | `Not aligned` |
 | `analyze-btn` (disabled state) | `true` |
 | `analyze-reason` | `Fix 2 scans to analyze.` |
@@ -363,8 +370,8 @@ render), because neither scan reached the `Measured` state.
    mixed pair (3.4, one scan flagged, singular gate message) and the uniform mismatch (3.5, both
    scans flagged, plural gate message) are pre-analyze hard blocks with no result panel. Regression
    check confirmed: the valid 300 dpi pair still produces the identical frozen values (`scale-X`
-   `+0.146 %`, `scale-Y` `+0.183 %`, `skew-XY` `+0.498°`, Klipper `SET_SKEW XY=99.566,100.436,70.713`,
-   `size-code` `XY shrinkage: 100.16 %`), so the guard did not move the measurement.
+   `+0.144 %`, `scale-Y` `+0.117 %`, `skew-XY` `+0.489°`, Klipper `SET_SKEW XY=99.575,100.427,70.713`,
+   `size-code` `XY shrinkage: 100.13 %`), so the guard did not move the measurement.
 3. **No testid exists yet** on the step 2 reset-command `CodeBlock`, nor on the Klipper skew fix's
    secondary `CodeBlock` (the `SKEW_PROFILE LOAD=ScanNTune` start-gcode line). Both were located and
    read in this capture session via `document.querySelectorAll('pre.code')` / plain DOM traversal,
