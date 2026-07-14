@@ -6,7 +6,7 @@ import { mmToPx } from './fiducialAligner'
 import { median } from '../math'
 import { assessMeasurementBackdrop, MIN_BACKDROP_CONTRAST } from '../measurementBackdrop'
 import type { BackdropAssessment } from '../measurementBackdrop'
-import { EDGE_REFINE_WINDOW_PX, gradientCentroid } from '../subpixelEdge'
+import { EDGE_REFINE_WINDOW_PX, bilinear, gradientCentroid } from '../subpixelEdge'
 
 // Profiles a PA test line's extruded width along its length to sub-pixel precision. Every 0.25 mm
 // along the line (skipping the ragged 2 mm at each end), a perpendicular intensity profile is
@@ -189,20 +189,4 @@ function subPixEdge(grad: (k: number) => number, kLo: number, kHi: number): numb
 
   const windowSamples = Math.round(EDGE_REFINE_WINDOW_PX / PROFILE_STEP_PX)
   return gradientCentroid(grad, bk, windowSamples, kLo, kHi) ?? bk
-}
-
-// Bilinear intensity at a fractional pixel position; NaN outside the image.
-function bilinear(data: Uint8Array, cols: number, rows: number, x: number, y: number): number {
-  const x0 = Math.floor(x)
-  const y0 = Math.floor(y)
-  if (x0 < 0 || y0 < 0 || x0 + 1 >= cols || y0 + 1 >= rows) return NaN
-  const fx = x - x0
-  const fy = y - y0
-  const p = (yy: number, xx: number) => data[yy * cols + xx]
-  return (
-    p(y0, x0) * (1 - fx) * (1 - fy) +
-    p(y0, x0 + 1) * fx * (1 - fy) +
-    p(y0 + 1, x0) * (1 - fx) * fy +
-    p(y0 + 1, x0 + 1) * fx * fy
-  )
 }
