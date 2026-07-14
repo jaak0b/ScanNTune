@@ -78,10 +78,7 @@ const AGREEMENT_MIN_HZ = 2
  * resonance lies inside the configured shaper's stopband.
  */
 const MAX_CI95_REL = 0.1
-/** Normal-consistency factor for the MAD (sigma = 1.4826 * MAD for Gaussian data). */
-const MAD_TO_SIGMA = 1.4826
-/** Asymptotic standard error of the median is 1.2533 * sigma / sqrt(n) for Gaussian data. */
-const MEDIAN_EFFICIENCY = 1.2533
+import { MAD_TO_SIGMA, medianStandardError } from '../math'
 
 export interface RingModelParams {
   /** Background line at the fit-window start, mm. */
@@ -654,7 +651,7 @@ export function poolAxisFits(fits: LineFit[], speedsMmS: number[], lineSpeeds: n
   // Pooled uncertainty: the larger of the replicate-based standard error of the median and the
   // Cramer-Rao-based one, each shrunk by sqrt(n) for the pooling.
   const n = accepted.length
-  const seReplicate = (MEDIAN_EFFICIENCY * robustSigma) / Math.sqrt(n)
+  const seReplicate = medianStandardError(freqs)
   const crbSes = accepted.map((a) => a.fit.frequencySeHz).filter((s): s is number => s !== null)
   const seCrb = crbSes.length > 0 ? medianOf(crbSes) / Math.sqrt(n) : 0
   const se = Math.max(seReplicate, seCrb)

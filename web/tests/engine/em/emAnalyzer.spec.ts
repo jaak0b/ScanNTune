@@ -235,6 +235,10 @@ describe('analyzeEmCoupon render recovery', () => {
       expect(r.flankAsymmetryMm).not.toBeNull()
       expect(Math.abs(r.flankAsymmetryMm!)).toBeLessThan(0.005)
       expect(r.shadowWarning).toBe(false)
+      // The between-block standard error of a clean render sits under the recovery tolerance.
+      expect(r.seMm).not.toBeNull()
+      expect(r.seMm!).toBeGreaterThanOrEqual(0)
+      expect(r.seMm!).toBeLessThan(0.005)
     },
     240000,
   )
@@ -488,6 +492,7 @@ describe('analyzeEmCoupon render recovery', () => {
       expect(r.success).toBe(false)
       expect(r.failureReason).toBeTruthy()
       expect(r.wMm).toBeNull()
+      expect(r.seMm).toBeNull()
     } finally {
       img.delete()
     }

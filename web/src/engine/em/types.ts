@@ -12,13 +12,25 @@ export const RAIL_WIDTH_MM = 4
 export const BLOCK_GAP_MM = 2
 export const INNER_MARGIN_MM = 3
 /**
- * Default pitch sweep as fractions of the nominal width. All pitches sit well above the
- * bead width, so every gap stays open and wide enough for a flatbed scanner to read
- * through the coupon's depth (deep slits under ~0.25 mm scan black); the deposited width
- * is recovered per block as pitch minus measured gap, not from a merge point.
+ * Narrowest open gap a flatbed scanner reads without bias through the coupon's depth.
+ * Diagnostic scans of printed coupons (dark and light filament, 600 dpi) show the
+ * through-depth slit shadow inflating the measured bead width for gaps below roughly
+ * this figure, and an unbiased readout at and above it. This is scanner physics in
+ * absolute millimetres, so it does not scale with the nozzle.
  */
-const PITCH_MIN_FACTOR = 1.67
-const PITCH_MAX_FACTOR = 2.62
+const MIN_OPEN_GAP_MM = 0.65
+/**
+ * Over-extrusion envelope the tightest gap must survive: the sweep's minimum pitch is
+ * derived so the gap stays at MIN_OPEN_GAP_MM even when the printer deposits beads 15%
+ * wider than nominal, the worst flow error the coupon is expected to correct.
+ */
+const GAP_HEADROOM_FACTOR = 1.15
+/**
+ * Pitch sweep span as a fraction of the nominal width. Half a nominal width over the
+ * default 9 blocks keeps the per-block pitch step near the previous validated design's
+ * while the whole coupon stays within a 120 mm bed.
+ */
+const PITCH_SWEEP_SPAN_FACTOR = 0.5
 /** Conservative default volumetric flow cap used to derive the default speed. */
 const DEFAULT_MAX_FLOW_MM3_S = 8
 
@@ -46,12 +58,16 @@ export type EmProgressCallback = (progress: EmProgress) => void
 export function defaultEmTestSpec(profile: PrinterProfile): EmTestSpec {
   const nominal = profile.nozzleDiameterMm * NOMINAL_WIDTH_FACTOR
   const round2 = (v: number) => Math.round(v * 100) / 100
+  // The minimum pitch is rounded UP so rounding can never squeeze the tightest gap below
+  // the readable floor; the maximum only positions the top of the sweep.
+  const ceil2 = (v: number) => Math.ceil(v * 100) / 100
   const speedCap = DEFAULT_MAX_FLOW_MM3_S / (nominal * profile.layerHeightMm)
+  const pitchMinMm = ceil2(nominal * GAP_HEADROOM_FACTOR + MIN_OPEN_GAP_MM)
   return {
-    pitchMinMm: round2(nominal * PITCH_MIN_FACTOR),
-    pitchMaxMm: round2(nominal * PITCH_MAX_FACTOR),
-    blockCount: 13,
-    linesPerBlock: 7,
+    pitchMinMm,
+    pitchMaxMm: round2(pitchMinMm + nominal * PITCH_SWEEP_SPAN_FACTOR),
+    blockCount: 9,
+    linesPerBlock: 5,
     lineLengthMm: 25,
     printSpeedMmS: Math.min(profile.travelSpeedMmS / 2, Math.floor(speedCap)),
     nominalLineWidthMm: nominal,

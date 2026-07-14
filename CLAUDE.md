@@ -270,7 +270,10 @@ shipped source, comments, or UI text: they are guidance for how to work, not doc
 **Verification bar.** The standard for "verified" is `npm run build` plus `npm test` plus `npm run e2e` all
 green (and, for any change to the measurement pipeline, the synthetic-fixture validation of rule 1). That
 automated gate is sufficient: do not additionally launch a dev server for manual browser verification unless
-the owner asks for it.
+the owner asks for it. On the owner's local dev machine, run ONLY the unit tests that cover the code
+actually changed (e.g. `npx vitest run tests/engine/em/emAnalyzer.spec.ts` with the specific spec paths);
+running the full suite locally (`npm test` without a file filter, or `npm run e2e`) is forbidden. The full
+gate is CI's job now: it still defines "verified", but CI runs it, not the local machine.
 
 **Subagent routing.** When delegating to a subagent, prefer the `cavecrew-*` types wherever the task fits,
 because their output is caveman-compressed and keeps the parent context small: use `cavecrew-investigator`

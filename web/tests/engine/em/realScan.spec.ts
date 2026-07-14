@@ -3,13 +3,12 @@ import { describe, expect, it } from 'vitest'
 import { decodeE2eFixtureBgr, getCv } from '../../helpers/cv'
 import { alignEmCoupon } from '../../../src/engine/em/fiducialAligner'
 import { analyzeEmCoupon } from '../../../src/engine/em/emAnalyzer'
-import { defaultEmTestSpec } from '../../../src/engine/em/types'
-import { defaultPrinterProfile } from '../../../src/engine/pa/types'
+import { printedEmSpec } from '../../helpers/emPrintedSpec'
 
-// Regression test over a real 600 dpi flatbed scan of a printed EM coupon (default spec:
-// pitch 0.70 to 1.10 mm, 13 blocks, 7 lines per block, nominal width 0.42 mm). The scanner's
-// calibrated resolution is 23.622 px/mm (600 dpi nominal). The bounds are physical sanity
-// checks, not tuned targets.
+// Regression test over a real 600 dpi flatbed scan of a printed EM coupon, analyzed under the
+// spec it was printed with (pitch 0.70 to 1.10 mm, 13 blocks, 7 lines per block, nominal width
+// 0.42 mm; see printedEmSpec). The scanner's calibrated resolution is 23.622 px/mm (600 dpi
+// nominal). The bounds are physical sanity checks, not tuned targets.
 const SCAN_PX_PER_MM = 23.622
 
 describe('real-scan EM regression', () => {
@@ -17,7 +16,7 @@ describe('real-scan EM regression', () => {
     'aligns and recovers a plausible bead width from the real coupon scan',
     async () => {
       const cv = await getCv()
-      const spec = defaultEmTestSpec(defaultPrinterProfile())
+      const spec = printedEmSpec()
       const bgr = decodeE2eFixtureBgr(cv, 'em_real_scan.png')
       try {
         const alignment = alignEmCoupon(cv, bgr, spec)

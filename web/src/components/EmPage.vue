@@ -190,7 +190,10 @@ const scanError = ref('')
 // multiplier / Orca flow ratio, e.g. 0.96) or as a percent (Cura-style, e.g. 96). Values
 // above 5 are read as percent; real factors live near 1 and real percents near 100, so the
 // two ranges cannot collide. The corrected value is echoed back in the same style.
-const currentFlow = ref<number | null>(1)
+// Deliberately starts empty: the corrected flow is computed relative to this value, so
+// analysis is blocked until the user has entered their actual current setting.
+const currentFlow = ref<number | null>(null)
+const currentFlowValid = computed(() => currentFlow.value !== null && currentFlow.value > 0)
 
 function onProgress(p: EmProgress): void {
   switch (p.stage) {
@@ -262,13 +265,14 @@ function startOver(): void {
 }
 
 const canAnalyze = computed(
-  () => scanFiles.value.length >= 1 && isCalibrated.value && !analyzing.value,
+  () =>
+    scanFiles.value.length >= 1 && isCalibrated.value && currentFlowValid.value && !analyzing.value,
 )
 
 async function analyze(): Promise<void> {
   const files = scanFiles.value
   const cal = calibration.calibration
-  if (files.length === 0 || analyzing.value || !cal) return
+  if (files.length === 0 || analyzing.value || !cal || !currentFlowValid.value) return
   const usedSpec = spec.value
   analyzing.value = true
   analysisStarted.value = true
@@ -308,18 +312,15 @@ const newSlicerFlow = computed(() => {
   const r = result.value
   const s = analyzedSpec.value
   if (!r || !r.success || r.wMm === null || !s) return null
-  const entered = currentFlow.value ?? 1
+  const entered = currentFlow.value
+  if (entered === null || entered <= 0) return null
   const isPercent = entered > 5
   const factor = isPercent ? entered / 100 : entered
   const corrected = factor * (s.nominalLineWidthMm / r.wMm)
-  // Uncertainty on the corrected flow from two independent systematic-error estimates:
-  // the one-sided lamp shading residual (flank asymmetry) and the separator cross-check
-  // residual (backdrop edge bias), combined in quadrature. Presented the same way the
-  // input shaper states its frequency confidence interval.
-  const a = r.flankAsymmetryMm !== null ? Math.abs(r.flankAsymmetryMm) / r.wMm : null
-  const b = r.biasMm !== null ? Math.abs(r.biasMm) / r.wMm : null
-  const uncertainty =
-    a !== null || b !== null ? Math.sqrt((a ?? 0) ** 2 + (b ?? 0) ** 2) * corrected : null
+  // Uncertainty on the corrected flow: the standard error of the measured bead width
+  // (between-block spread of the analysis), propagated through the correction ratio.
+  // Presented the same way the input shaper states its frequency confidence interval.
+  const uncertainty = r.seMm !== null ? (r.seMm / r.wMm) * corrected : null
   if (isPercent) {
     const ci = uncertainty !== null ? ` ± ${(uncertainty * 100).toFixed(1)}` : ''
     return `${(corrected * 100).toFixed(1)}${ci}%`
@@ -605,14 +606,15 @@ const scanCards = computed<ScanCard[]>(() => {
           :step="0.01"
           :min="0.01"
           :precision="3"
-          :disabled="analyzing"
+          :disabled="analyzing || result !== null"
           data-testid="em-current-flow"
         />
       </div>
       <p class="tip mb-3">
         Enter the current value from your slicer, either as an extrusion multiplier / flow
-        ratio (0.96) or as a percentage (96). The result shows the corrected value in the
-        same format.
+        ratio (0.96) or as a percentage (96). The corrected value is computed relative to
+        this setting and is shown in the same format, so the analysis cannot run until it
+        is entered.
       </p>
       <div class="scan-inputs mb-3">
         <label class="dropzone" :class="{ 'dropzone-disabled': !isCalibrated || analysisStarted }">
