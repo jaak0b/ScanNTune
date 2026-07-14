@@ -6,7 +6,7 @@ import type { EmAlignment } from './fiducialAligner'
 import type { BlockMeasurement, EmMeasurement } from './gapMeasurer'
 import { measureEmCoupon } from './gapMeasurer'
 import { sampleBgrTriples, selectMeasurementChannel } from '../cvUtils'
-import { MAD_TO_SIGMA, median, medianStandardError } from '../math'
+import { MAD_TO_SIGMA, mad, median, medianStandardError } from '../math'
 import { assessMeasurementBackdrop, detrendTones } from '../measurementBackdrop'
 import type { BackdropAssessment, TonePoint } from '../measurementBackdrop'
 import { evaluateScanSetResolution } from '../resolutionGate'
@@ -476,11 +476,11 @@ function cleanedScanSamples(measurement: EmMeasurement): {
   }
   const values = all.map((s) => s.wMm)
   const center = median(values)
-  const mad = median(values.map((v) => Math.abs(v - center)))
-  const cutoff = MAD_CUTOFF * MAD_TO_SIGMA * mad
+  const spread = mad(values)
+  const cutoff = MAD_CUTOFF * MAD_TO_SIGMA * spread
   // A zero MAD means over half the samples agree exactly; keep those rather than reject all.
   const samples =
-    mad > 0 ? all.filter((s) => Math.abs(s.wMm - center) <= cutoff) : all.filter((s) => s.wMm === center)
+    spread > 0 ? all.filter((s) => Math.abs(s.wMm - center) <= cutoff) : all.filter((s) => s.wMm === center)
   return { samples, wMm: median(samples.map((s) => s.wMm)) }
 }
 
