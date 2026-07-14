@@ -16,6 +16,15 @@ export interface EmRenderOptions {
   plasticGray?: number
   backgroundGray?: number
   /**
+   * RGB colors overriding the corresponding gray tones, for rendering a colored coupon (e.g.
+   * saturated yellow plastic on a white backing, whose value channel carries no contrast).
+   * Undefined means the neutral gray render, the current behavior. Setting `baseColor` puts a
+   * base behind the window interior the same way setting `baseGray` does.
+   */
+  plasticColor?: [number, number, number]
+  backgroundColor?: [number, number, number]
+  baseColor?: [number, number, number]
+  /**
    * Gray tone of a contrasting-color base backing the window interior (gaps, separators,
    * margins). Undefined means no base: the interior shows `backgroundGray`, the current
    * behavior. The three fiducial holes are through-holes and always show `backgroundGray`.
@@ -46,8 +55,16 @@ export interface EmRenderOptions {
   lampShading?: { lampSide: 'left' | 'right'; extraSigmaMm: number }
 }
 
-type Resolved = Required<Omit<EmRenderOptions, 'baseGray' | 'shadow' | 'lampShading'>> &
-  Pick<EmRenderOptions, 'baseGray' | 'shadow' | 'lampShading'>
+type OptionalKeys =
+  | 'baseGray'
+  | 'shadow'
+  | 'lampShading'
+  | 'plasticColor'
+  | 'backgroundColor'
+  | 'baseColor'
+
+type Resolved = Required<Omit<EmRenderOptions, OptionalKeys>> &
+  Pick<EmRenderOptions, OptionalKeys>
 
 const DEFAULTS: Omit<Resolved, 'spec' | 'trueWidthMm'> = {
   pxPerMm: 12,
@@ -307,10 +324,19 @@ export function renderEmScan(options: EmRenderOptions): RgbaImage {
   const rand = rng(1234567)
   const data = new Uint8ClampedArray(width * height * 4)
 
+  // Each surface is an RGB triple; a gray option is the neutral triple, a color option (for a
+  // colored coupon render) overrides it. The coverage mixing is linear per channel, so the gray
+  // render is exactly the old single-channel output replicated to RGB.
+  const gray3 = (v: number): [number, number, number] => [v, v, v]
+  const plasticRgb = o.plasticColor ?? gray3(o.plasticGray)
+  const backgroundRgb = o.backgroundColor ?? gray3(o.backgroundGray)
+  const baseRgb = o.baseColor ?? (o.baseGray === undefined ? undefined : gray3(o.baseGray))
+
   const S = 3
+  const acc = [0, 0, 0]
   for (let py = 0; py < height; py++) {
     for (let px = 0; px < width; px++) {
-      let acc = 0
+      acc[0] = acc[1] = acc[2] = 0
       for (let sy = 0; sy < S; sy++) {
         for (let sx = 0; sx < S; sx++) {
           const imx = (px + (sx + 0.5) / S) / o.pxPerMm
@@ -321,24 +347,27 @@ export function renderEmScan(options: EmRenderOptions): RgbaImage {
           const bx = mx - o.marginMm
           const by = my - o.marginMm
           if (bx < 0 || by < 0 || bx > Wc || by > Hc) {
-            acc += o.backgroundGray
+            for (let c = 0; c < 3; c++) acc[c] += backgroundRgb[c]
           } else {
             const { plastic, hole } = couponCoverage(bx, by, g, o, effects, rows, windowMm)
             // The stack, top to bottom: plastic, then the contrasting base (if any) backing
             // the window interior, then the scanner background showing through the fiducial
             // through-holes and where there is no base.
-            const backing = o.baseGray === undefined ? o.backgroundGray : o.baseGray
-            const behind = hole * o.backgroundGray + (1 - hole) * backing
-            acc += plastic * o.plasticGray + (1 - plastic) * behind
+            const backing = baseRgb ?? backgroundRgb
+            for (let c = 0; c < 3; c++) {
+              const behind = hole * backgroundRgb[c] + (1 - hole) * backing[c]
+              acc[c] += plastic * plasticRgb[c] + (1 - plastic) * behind
+            }
           }
         }
       }
-      const gray = acc / (S * S) + (o.noiseSigma > 0 ? gauss(rand) * o.noiseSigma : 0)
-      const v = Math.max(0, Math.min(255, Math.round(gray)))
+      // One noise draw per pixel across the channels, matching the single-channel render's
+      // statistics (a scanner's luminance noise, not independent chroma noise).
+      const noise = o.noiseSigma > 0 ? gauss(rand) * o.noiseSigma : 0
       const i = (py * width + px) * 4
-      data[i] = v
-      data[i + 1] = v
-      data[i + 2] = v
+      for (let c = 0; c < 3; c++) {
+        data[i + c] = Math.max(0, Math.min(255, Math.round(acc[c] / (S * S) + noise)))
+      }
       data[i + 3] = 255
     }
   }

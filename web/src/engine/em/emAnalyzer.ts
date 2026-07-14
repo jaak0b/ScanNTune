@@ -5,7 +5,7 @@ import { alignEmCoupon, mmToPx } from './fiducialAligner'
 import type { EmAlignment } from './fiducialAligner'
 import type { BlockMeasurement, EmMeasurement } from './gapMeasurer'
 import { measureEmCoupon } from './gapMeasurer'
-import { valueChannel } from '../cvUtils'
+import { sampleBgrTriples, selectMeasurementChannel } from '../cvUtils'
 import { median } from '../math'
 import { assessMeasurementBackdrop, detrendTones } from '../measurementBackdrop'
 import type { BackdropAssessment, TonePoint } from '../measurementBackdrop'
@@ -41,6 +41,9 @@ export interface EmScanDiagnostics {
   measuredPxPerMm: number | null
   flipped: boolean
   rotationQuarterTurns: number
+  /** Signed rotation of the coupon +X axis in scan space, in degrees, normalized to
+   *  (-180, 180]; includes the quarter-turn part. */
+  rotationDegrees: number
   /** Test blocks measured on this scan (0 before measurement). */
   blocksMeasured: number
   /** This scan's printer X-scale diagnostic; null before measurement. */
@@ -76,6 +79,9 @@ export interface EmResult {
   measuredPxPerMm: number | null
   flipped: boolean
   rotationQuarterTurns: number
+  /** Signed rotation of the coupon +X axis in scan space, in degrees, normalized to
+   *  (-180, 180]; includes the quarter-turn part. First scan's value when two are pooled. */
+  rotationDegrees: number
   /** One entry per analyzed scan, in input order; a scan after a failed one is not listed. */
   scans: EmScanDiagnostics[]
 }
@@ -153,6 +159,7 @@ export function analyzeEmCoupons(
         scanLabel(i) + reason,
         alignment.flipped,
         alignment.rotationQuarterTurns,
+        alignment.rotationDegrees,
         null,
         scans,
       )
@@ -167,6 +174,7 @@ export function analyzeEmCoupons(
       scanLabel(i) + reason,
       alignments[i].flipped,
       alignments[i].rotationQuarterTurns,
+      alignments[i].rotationDegrees,
       scans[i].measuredPxPerMm,
       scans,
     )
@@ -190,13 +198,26 @@ export function analyzeEmCoupons(
   onProgress?.({ stage: 'measure' })
   const measurements: EmMeasurement[] = []
   for (let i = 0; i < imagesBgr.length; i++) {
-    const gray = valueChannel(cv, imagesBgr[i])
+    // Measurement-backdrop gate doubling as channel selection: the floor showing through the
+    // comb gaps must present a single tone that contrasts with the plastic in the measured
+    // plane, or every gap edge reads shifted (a dark textured build plate behind the gaps
+    // biases the width wide). A colored coupon on a brightness-matched backing separates in
+    // saturation instead of value, and one on a backing matched in both only in the Fisher
+    // discriminant plane, so the gate judges all candidate planes and measurement runs on the
+    // one it accepts. The same gate positions feed both the per-candidate tone assessment and
+    // the BGR class samples the discriminant is built from.
+    const positions = emGatePositions(alignments[i], spec, imagesBgr[i].cols, imagesBgr[i].rows)
+    const { gray, assessment: backdrop } = selectMeasurementChannel(
+      cv,
+      imagesBgr[i],
+      (candidate) => assessEmBackdrop(candidate, positions),
+      {
+        feature: sampleBgrTriples(imagesBgr[i], positions.plastic),
+        backdrop: sampleBgrTriples(imagesBgr[i], positions.backdrop),
+      },
+    )
     let measurement
     try {
-      // Measurement-backdrop gate: the floor showing through the comb gaps must present a single
-      // tone that contrasts with the plastic, or every gap edge reads shifted (a dark textured
-      // build plate behind the gaps biases the width wide).
-      const backdrop = assessEmBackdrop(gray, alignments[i], spec)
       if (backdrop.failure) {
         return failAt(
           i,
@@ -277,6 +298,7 @@ export function analyzeEmCoupons(
     measuredPxPerMm: scans[0].measuredPxPerMm,
     flipped: alignments[0].flipped,
     rotationQuarterTurns: alignments[0].rotationQuarterTurns,
+    rotationDegrees: alignments[0].rotationDegrees,
     scans,
   }
 }
@@ -291,6 +313,7 @@ function scanDiagnostics(
     measuredPxPerMm,
     flipped: alignment.flipped,
     rotationQuarterTurns: alignment.rotationQuarterTurns,
+    rotationDegrees: alignment.rotationDegrees,
     blocksMeasured: 0,
     pitchScale: null,
   }
@@ -329,45 +352,47 @@ function separatorBiasMm(
   return residuals.length > 0 ? median(residuals) : null
 }
 
-// The one-sided scanner-lamp shadow estimate: the sum of the median left-flank and median
-// right-flank sub-pixel edge offsets. A symmetric edge spread widens both flanks equally and
-// oppositely, so the medians cancel; a one-sided penumbra shifts a single flank, leaving a
-// nonzero sum that equals the bead-width bias. Null when no flank offsets were collected.
-// Samples plastic tones on the frame band and rail, and backdrop tones at every commanded gap
-// midpoint of both comb rows plus the three fiducial holes, all through the solved affine, and
-// judges them with the shared measurement-backdrop gate.
-function assessEmBackdrop(
-  gray: { data: unknown; cols: number; rows: number },
+/** In-bounds integer scan-pixel positions the backdrop gate samples, computed once per scan. */
+interface EmGatePositions {
+  plastic: { x: number; y: number }[]
+  backdrop: { x: number; y: number }[]
+}
+
+// The gate's sample positions: plastic tones on the frame band and rail, backdrop tones at every
+// commanded gap midpoint of both comb rows plus the three fiducial holes, all through the solved
+// affine. Computed once per scan and shared by the per-candidate tone assessment and the BGR
+// class sampling the discriminant plane is built from, so both read the same scene points.
+function emGatePositions(
   alignment: EmAlignment,
   spec: EmTestSpec,
-): BackdropAssessment {
+  cols: number,
+  rows: number,
+): EmGatePositions {
   const g = emCouponGeometry(spec)
-  const data = gray.data as Uint8Array
-  // Backdrop tones keep their scan-pixel position so a smooth spatial trend can be removed.
-  const sample = (xMm: number, yMm: number): TonePoint | null => {
+  const toPx = (xMm: number, yMm: number): { x: number; y: number } | null => {
     const p = mmToPx(alignment, xMm, yMm)
     const x = Math.round(p.x)
     const y = Math.round(p.y)
-    if (x < 0 || y < 0 || x >= gray.cols || y >= gray.rows) return null
-    return { x, y, tone: data[y * gray.cols + x] }
+    if (x < 0 || y < 0 || x >= cols || y >= rows) return null
+    return { x, y }
+  }
+  const push = (list: { x: number; y: number }[], xMm: number, yMm: number) => {
+    const p = toPx(xMm, yMm)
+    if (p) list.push(p)
   }
 
-  const plastic: number[] = []
+  const plastic: { x: number; y: number }[] = []
   const band = g.frameBandMm
   // Frame band midpoints along all four sides, and the rail centreline.
   for (let t = 0.1; t <= 0.9; t += 0.1) {
-    plastic.push(
-      sample(g.couponWidthMm * t, band / 2)?.tone ?? NaN,
-      sample(g.couponWidthMm * t, g.couponHeightMm - band / 2)?.tone ?? NaN,
-      sample(g.couponWidthMm * t, (g.railY0Mm + g.railY1Mm) / 2)?.tone ?? NaN,
-    )
-    plastic.push(
-      sample(band / 2, g.couponHeightMm * t)?.tone ?? NaN,
-      sample(g.couponWidthMm - band / 2, g.couponHeightMm * t)?.tone ?? NaN,
-    )
+    push(plastic, g.couponWidthMm * t, band / 2)
+    push(plastic, g.couponWidthMm * t, g.couponHeightMm - band / 2)
+    push(plastic, g.couponWidthMm * t, (g.railY0Mm + g.railY1Mm) / 2)
+    push(plastic, band / 2, g.couponHeightMm * t)
+    push(plastic, g.couponWidthMm - band / 2, g.couponHeightMm * t)
   }
 
-  const backdrop: TonePoint[] = []
+  const backdrop: { x: number; y: number }[] = []
   const rowYs: [typeof g.topRow, number][] = [
     [g.topRow, (g.topRowY0Mm + g.topRowY1Mm) / 2],
     [g.bottomRow, (g.bottomRowY0Mm + g.bottomRowY1Mm) / 2],
@@ -375,21 +400,32 @@ function assessEmBackdrop(
   for (const [rowBlocks, yMm] of rowYs) {
     for (const block of rowBlocks) {
       for (let j = 0; j + 1 < block.lineXsMm.length; j++) {
-        const p = sample((block.lineXsMm[j] + block.lineXsMm[j + 1]) / 2, yMm)
-        if (p) backdrop.push(p)
+        push(backdrop, (block.lineXsMm[j] + block.lineXsMm[j + 1]) / 2, yMm)
       }
     }
   }
-  for (const f of g.fiducials) {
-    const p = sample(f.xMm, f.yMm)
-    if (p) backdrop.push(p)
-  }
+  for (const f of g.fiducials) push(backdrop, f.xMm, f.yMm)
+  return { plastic, backdrop }
+}
 
-  // Least squares detrend (first-degree polynomial over the scan coordinates): a smooth
-  // low-frequency brightness gradient from one-sided scanner-lamp shading is measurable and must
-  // not trip the unevenness refusal, so the spread criterion is applied to the residuals only.
-  // High-frequency unevenness (a textured build plate) survives the detrend and still fails.
-  return assessMeasurementBackdrop(plastic.filter(Number.isFinite), detrendTones(backdrop))
+// Reads the gate's tones off one candidate measurement plane and judges them with the shared
+// measurement-backdrop gate. Backdrop tones keep their scan-pixel position so a smooth spatial
+// trend can be removed: the least squares detrend (first-degree polynomial over the scan
+// coordinates) absorbs a low-frequency brightness gradient from one-sided scanner-lamp shading,
+// which is measurable and must not trip the unevenness refusal, while high-frequency unevenness
+// (a textured build plate) survives the detrend and still fails.
+function assessEmBackdrop(
+  gray: { data: unknown; cols: number },
+  positions: EmGatePositions,
+): BackdropAssessment {
+  const data = gray.data as Uint8Array
+  const plastic = positions.plastic.map((p) => data[p.y * gray.cols + p.x])
+  const backdrop: TonePoint[] = positions.backdrop.map((p) => ({
+    x: p.x,
+    y: p.y,
+    tone: data[p.y * gray.cols + p.x],
+  }))
+  return assessMeasurementBackdrop(plastic, detrendTones(backdrop))
 }
 
 const mean = (values: number[]): number => values.reduce((s, v) => s + v, 0) / values.length
@@ -440,6 +476,7 @@ function failure(
   reason: string,
   flipped: boolean,
   rotationQuarterTurns: number,
+  rotationDegrees: number,
   measuredPxPerMm: number | null = null,
   scans: EmScanDiagnostics[] = [],
 ): EmResult {
@@ -456,6 +493,7 @@ function failure(
     measuredPxPerMm,
     flipped,
     rotationQuarterTurns,
+    rotationDegrees,
     scans,
   }
 }

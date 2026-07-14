@@ -4,9 +4,9 @@ import { couponGeometry, paValueForLine } from './types'
 import type { PaProgressCallback } from './types'
 import { alignPaCoupon } from './fiducialAligner'
 import type { PaAlignment } from './fiducialAligner'
-import { assessLineBackdrop, measureLineWidthProfile } from './lineMeasurer'
+import { assessLineBackdrop, lineGatePositions, measureLineWidthProfile } from './lineMeasurer'
 import type { WidthSample } from './lineMeasurer'
-import { valueChannel } from '../cvUtils'
+import { sampleBgrTriples, selectMeasurementChannel } from '../cvUtils'
 import { median } from '../math'
 import { evaluateScanSetResolution } from '../resolutionGate'
 
@@ -92,12 +92,25 @@ export function analyzePaCoupon(
   }
 
   const g = couponGeometry(spec)
-  const gray = valueChannel(cv, image)
+  // Measurement-backdrop gate doubling as channel selection: without enough separation between
+  // the lines and the base in the measured plane, or with an uneven base tone, the width
+  // profiles cannot locate the line edges reliably. Lines whose color differs from the base but
+  // matches it in brightness separate in saturation instead of value, and lines matched in both
+  // only in the Fisher discriminant plane, so the gate judges all candidate planes and the
+  // profiling runs on the one it accepts. The same gate positions feed both the per-candidate
+  // tone assessment and the BGR class samples the discriminant is built from.
+  const positions = lineGatePositions(alignment, spec)
+  const { gray, assessment: backdrop } = selectMeasurementChannel(
+    cv,
+    image,
+    (candidate) => assessLineBackdrop(cv, candidate, positions),
+    {
+      feature: sampleBgrTriples(image, positions.line),
+      backdrop: sampleBgrTriples(image, positions.base),
+    },
+  )
   const lines: PaLineScore[] = []
   try {
-    // Measurement-backdrop gate: without enough brightness separation between the lines and the
-    // base, or with an uneven base tone, the width profiles cannot locate the line edges reliably.
-    const backdrop = assessLineBackdrop(cv, gray, alignment, spec)
     if (backdrop.failure) {
       return {
         ...failure(

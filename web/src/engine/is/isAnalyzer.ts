@@ -10,7 +10,7 @@ import { imageDirection, measuredDirection, traceGroup, tracedSpanPx } from './l
 import { analyzeTracedLine, poolAxisFits } from './ringAnalyzer'
 import { recommendShapers } from './shaperRecommender'
 import type { IsAxisResult, IsLineOutcome, IsResult, IsScanInfo } from './resultTypes'
-import { valueChannel } from '../cvUtils'
+import { sampleBgrTriples, selectMeasurementChannel } from '../cvUtils'
 import { evaluateScanSetResolution } from '../resolutionGate'
 import { isUsableReference, isotropicPxPerMm } from '../scannerCalibration'
 import type { ScaleReference } from '../scannerCalibration'
@@ -130,78 +130,101 @@ export function analyzeIsCoupon(
     }
   }
 
-  // Measurement-backdrop gate per scan: the floor showing through the open window must present
-  // a single tone that contrasts with the plastic, or the traced line edges read shifted (a dark
-  // textured build plate behind the window corrupts the ring readout).
-  for (let i = 0; i < 2; i++) {
-    const gray = valueChannel(cv, scans[i])
-    let backdrop
-    try {
-      backdrop = assessIsBackdrop(gray, alignments[i], spec, geometry)
-    } finally {
-      gray.delete()
-    }
-    if (backdrop.failure) {
-      return {
-        aligned: false,
-        failureReason:
-          `Scan ${i + 1}: the backing showing through the coupon window is ` +
-          (backdrop.failure === 'low-contrast'
-            ? 'too similar in brightness to the plastic'
-            : 'too uneven in brightness') +
-          ' to measure against. Scan the removed part against the lid or a sheet of paper, or use a light, even build plate.',
-        scans: alignments.map(scanInfo),
-        axes: [],
+  // Measurement-backdrop gate per scan, doubling as channel selection: the floor showing
+  // through the open window must present a single tone that contrasts with the plastic in the
+  // measured plane, or the traced line edges read shifted (a dark textured build plate behind
+  // the window corrupts the ring readout). A colored coupon on a brightness-matched backing
+  // separates in saturation instead of value, and one on a backing matched in both only in the
+  // Fisher discriminant plane, so the gate judges all candidate planes and the tracing runs on
+  // the plane it accepts for that scan. The same gate positions feed both the per-candidate
+  // tone assessment and the BGR class samples the discriminant is built from.
+  const grays: Mat[] = []
+  try {
+    for (let i = 0; i < 2; i++) {
+      const positions = isGatePositions(
+        alignments[i],
+        spec,
+        geometry,
+        scans[i].cols,
+        scans[i].rows,
+      )
+      const { gray, assessment: backdrop } = selectMeasurementChannel(
+        cv,
+        scans[i],
+        (candidate) => assessIsBackdrop(candidate, positions),
+        {
+          feature: sampleBgrTriples(scans[i], positions.plastic),
+          backdrop: sampleBgrTriples(scans[i], positions.backdrop),
+        },
+      )
+      grays.push(gray)
+      if (backdrop.failure) {
+        return {
+          aligned: false,
+          failureReason:
+            `Scan ${i + 1}: the backing showing through the coupon window is ` +
+            (backdrop.failure === 'low-contrast'
+              ? 'too similar in brightness to the plastic'
+              : 'too uneven in brightness') +
+            ' to measure against. Scan the removed part against the lid or a sheet of paper, or use a light, even build plate.',
+          scans: alignments.map(scanInfo),
+          axes: [],
+        }
       }
     }
-  }
 
-  const axes: IsAxisResult[] = []
-  for (const group of geometry.groups) {
-    axes.push(measureGroup(cv, scans, alignments, spec, group, scanReference))
-  }
+    const axes: IsAxisResult[] = []
+    for (const group of geometry.groups) {
+      axes.push(measureGroup(cv, grays, alignments, spec, group, scanReference))
+    }
 
-  return {
-    aligned: true,
-    failureReason: null,
-    scans: alignments.map(scanInfo),
-    axes,
+    return {
+      aligned: true,
+      failureReason: null,
+      scans: alignments.map(scanInfo),
+      axes,
+    }
+  } finally {
+    for (const gray of grays) gray.delete()
   }
 }
 
-// Samples plastic tones on the frame band and backdrop tones between adjacent test lines inside
-// the open window (half a line pitch off each measured segment, early in its protected span,
-// before any crossings) plus the fiducial holes, all through the solved affine, and judges them
-// with the shared measurement-backdrop gate.
-function assessIsBackdrop(
-  gray: Mat,
+/** In-bounds integer scan-pixel positions the backdrop gate samples, computed once per scan. */
+interface IsGatePositions {
+  plastic: { x: number; y: number }[]
+  backdrop: { x: number; y: number }[]
+}
+
+// The gate's sample positions: plastic tones on the frame band, backdrop tones between adjacent
+// test lines inside the open window (half a line pitch off each measured segment, early in its
+// protected span, before any crossings) plus the fiducial holes, all through the solved affine.
+// Computed once per scan and shared by the per-candidate tone assessment and the BGR class
+// sampling the discriminant plane is built from, so both read the same scene points.
+function isGatePositions(
   alignment: IsAlignment,
   spec: IsTestSpec,
   geometry: ReturnType<typeof isCouponGeometry>,
-): BackdropAssessment {
-  const data = gray.data as Uint8Array
-  const cols = gray.cols
-  const rows = gray.rows
-  const sample = (xMm: number, yMm: number): number => {
+  cols: number,
+  rows: number,
+): IsGatePositions {
+  const push = (list: { x: number; y: number }[], xMm: number, yMm: number) => {
     const p = mmToPx(alignment, xMm, yMm)
     const x = Math.round(p.x)
     const y = Math.round(p.y)
-    if (x < 0 || y < 0 || x >= cols || y >= rows) return NaN
-    return data[y * cols + x]
+    if (x < 0 || y < 0 || x >= cols || y >= rows) return
+    list.push({ x, y })
   }
 
   const band = geometry.frameBandMm
-  const plastic: number[] = []
+  const plastic: { x: number; y: number }[] = []
   for (let t = 0.1; t <= 0.9; t += 0.1) {
-    plastic.push(
-      sample(geometry.couponWidthMm * t, band / 2),
-      sample(geometry.couponWidthMm * t, geometry.couponHeightMm - band / 2),
-      sample(band / 2, geometry.couponHeightMm * t),
-      sample(geometry.couponWidthMm - band / 2, geometry.couponHeightMm * t),
-    )
+    push(plastic, geometry.couponWidthMm * t, band / 2)
+    push(plastic, geometry.couponWidthMm * t, geometry.couponHeightMm - band / 2)
+    push(plastic, band / 2, geometry.couponHeightMm * t)
+    push(plastic, geometry.couponWidthMm - band / 2, geometry.couponHeightMm * t)
   }
 
-  const backdrop: number[] = []
+  const backdrop: { x: number; y: number }[] = []
   for (const group of geometry.groups) {
     for (const line of group.lines) {
       const m = line.measured
@@ -214,14 +237,22 @@ function assessIsBackdrop(
       const cx = m.x0 + dx * along
       const cy = m.y0 + dy * along
       const off = spec.linePitchMm / 2
-      backdrop.push(sample(cx - dy * off, cy + dx * off), sample(cx + dy * off, cy - dx * off))
+      push(backdrop, cx - dy * off, cy + dx * off)
+      push(backdrop, cx + dy * off, cy - dx * off)
     }
   }
-  for (const f of geometry.fiducials) backdrop.push(sample(f.xMm, f.yMm))
+  for (const f of geometry.fiducials) push(backdrop, f.xMm, f.yMm)
+  return { plastic, backdrop }
+}
 
+// Reads the gate positions' tones off one candidate measurement plane and judges them with the
+// shared measurement-backdrop gate.
+function assessIsBackdrop(gray: Mat, positions: IsGatePositions): BackdropAssessment {
+  const data = gray.data as Uint8Array
+  const cols = gray.cols
   return assessMeasurementBackdrop(
-    plastic.filter(Number.isFinite),
-    backdrop.filter(Number.isFinite),
+    positions.plastic.map((p) => data[p.y * cols + p.x]),
+    positions.backdrop.map((p) => data[p.y * cols + p.x]),
   )
 }
 
@@ -267,7 +298,7 @@ const NOT_TRACED_REASON =
 
 function measureGroup(
   cv: OpenCv,
-  scans: Mat[],
+  grays: Mat[],
   alignments: IsAlignment[],
   spec: IsTestSpec,
   group: IsLineGroup,
@@ -313,13 +344,8 @@ function measureGroup(
   }
 
   const alignment = alignments[scanIndex]
-  const gray = valueChannel(cv, scans[scanIndex])
-  let traced
-  try {
-    traced = traceGroup(cv, gray, alignment, spec, group, scanReference)
-  } finally {
-    gray.delete()
-  }
+  // Traces on the scan's gate-selected measurement plane; the caller owns and deletes it.
+  const traced = traceGroup(cv, grays[scanIndex], alignment, spec, group, scanReference)
 
   // Per-line outcomes, in geometry order. Untraced lines still get their expected span from
   // the geometry through the alignment, so the overlay can point at a damaged line.

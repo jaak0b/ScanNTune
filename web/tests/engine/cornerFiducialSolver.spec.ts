@@ -13,10 +13,21 @@ const pxPerMm = 10
 const trueHoles: Point[] = nominal.map((f) => ({ x: f.xMm * pxPerMm, y: f.yMm * pxPerMm }))
 
 describe('selectCornerHoles', () => {
-  it('passes exactly three candidates through unchanged', () => {
+  it('accepts exactly three candidates that match the layout', () => {
     const r = selectCornerHoles(trueHoles, nominal, pxPerMm)
     expect(r.ok).toBe(true)
     if (r.ok) expect(r.holes).toEqual(trueHoles)
+  })
+
+  it('rejects exactly three candidates when one sits far off the layout', () => {
+    const displaced: Point[] = [
+      trueHoles[0],
+      trueHoles[1],
+      { x: trueHoles[1].x + 150, y: trueHoles[1].y + 150 },
+    ]
+    const r = selectCornerHoles(displaced, nominal, pxPerMm)
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.reason).toContain('No three of the detected holes')
   })
 
   it('fails with a hole-count reason on fewer than three candidates', () => {

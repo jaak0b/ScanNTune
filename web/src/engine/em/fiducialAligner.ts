@@ -1,7 +1,7 @@
 import type { Mat, OpenCv } from '../opencv'
 import type { EmTestSpec } from './types'
 import { emCouponGeometry, pitchForBlock } from './types'
-import { analyzeThresholdBands, majorityFilterBinary } from '../cvUtils'
+import { analyzeThresholdBands, deepestFailure, majorityFilterBinary, roiAround } from '../cvUtils'
 import { selectCornerHoles, solveFromCornerHoles } from '../cornerFiducialSolver'
 import type { Point } from '../cornerFiducialSolver'
 import { MIN_ALIGN_PX_PER_MM } from '../resolutionGate'
@@ -22,6 +22,9 @@ export interface EmAlignment {
   affine: { a: number; b: number; c: number; d: number; tx: number; ty: number } | null
   flipped: boolean
   rotationQuarterTurns: number
+  /** Signed rotation of the coupon +X axis in scan space, in degrees, normalized to
+   *  (-180, 180]; includes the quarter-turn part. 0 when alignment failed. */
+  rotationDegrees: number
 }
 
 export function alignEmCoupon(cv: OpenCv, imageBgr: Mat, spec: EmTestSpec): EmAlignment {
@@ -39,13 +42,20 @@ export function alignEmCoupon(cv: OpenCv, imageBgr: Mat, spec: EmTestSpec): EmAl
     (r) => r.success,
   )
   const aligned = attempts.find((r) => r.success)
-  if (aligned) return aligned
-  // No hypothesis fits; report the attempt that got past plate detection if any did, as its
-  // hole-level reason is the more actionable one for the user.
-  const informative = attempts.find(
-    (r) => r.failureReason !== null && !r.failureReason.startsWith('No coupon'),
-  )
-  return informative ?? attempts[0] ?? fail('No coupon was found in the scan.')
+  if (aligned) return stripStage(aligned)
+  // No hypothesis fits; report the failure from the band hypothesis that got furthest through
+  // the pipeline, as its reason is the more actionable one for the user.
+  const best = deepestFailure(attempts, (r) => r.stage)
+  return stripStage(best ?? fail('No coupon was found in the scan.', 0))
+}
+
+/** EmAlignment plus how far through the alignment pipeline the attempt progressed (higher
+ *  means further: plate found, shape ok, holes selected, affine solved). */
+type AlignAttempt = EmAlignment & { stage: number }
+
+function stripStage(attempt: AlignAttempt): EmAlignment {
+  const { stage: _stage, ...alignment } = attempt
+  return alignment
 }
 
 export function mmToPx(alignment: EmAlignment, xMm: number, yMm: number): { x: number; y: number } {
@@ -54,13 +64,17 @@ export function mmToPx(alignment: EmAlignment, xMm: number, yMm: number): { x: n
   return { x: A.a * xMm + A.b * yMm + A.tx, y: A.c * xMm + A.d * yMm + A.ty }
 }
 
-function fail(reason: string): EmAlignment {
+// A failed attempt records how far it got, so the deepest failure across all band hypotheses
+// can be picked for reporting.
+function fail(reason: string, stage: number): AlignAttempt {
   return {
     success: false,
     failureReason: reason,
     affine: null,
     flipped: false,
     rotationQuarterTurns: 0,
+    rotationDegrees: 0,
+    stage,
   }
 }
 
@@ -70,18 +84,18 @@ function tryAlign(
   objectWhite: Mat,
   spec: EmTestSpec,
   g: ReturnType<typeof emCouponGeometry>,
-): EmAlignment {
+): AlignAttempt {
   const contours = new cv.MatVector()
   const hierarchy = new cv.Mat()
   try {
-    cv.findContours(objectWhite, contours, hierarchy, cv.RETR_CCOMP, cv.CHAIN_APPROX_SIMPLE)
+    cv.findContours(objectWhite, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE)
 
-    // The coupon plate: the largest top-level contour.
+    // The coupon plate: the largest external contour. Holes are read later by a
+    // separate CCOMP pass on the cropped plate region.
     const count = contours.size()
     let baseIndex = -1
     let baseArea = 0
     for (let i = 0; i < count; i++) {
-      if (hierarchy.data32S[i * 4 + 3] !== -1) continue // not top-level
       const contour = contours.get(i)
       try {
         const area = cv.contourArea(contour)
@@ -99,6 +113,7 @@ function tryAlign(
     if (baseIndex < 0 || baseArea < minBasePx) {
       return fail(
         'No coupon was found in the scan. Place the printed coupon flat on the scanner glass so the whole plate is visible.',
+        0,
       )
     }
 
@@ -106,10 +121,12 @@ function tryAlign(
     const baseContour = contours.get(baseIndex)
     let baseLong: number
     let baseShort: number
+    let plateRect: { x: number; y: number; width: number; height: number }
     try {
       const rect = cv.minAreaRect(baseContour)
       baseLong = Math.max(rect.size.width, rect.size.height)
       baseShort = Math.min(rect.size.width, rect.size.height)
+      plateRect = cv.boundingRect(baseContour)
     } finally {
       baseContour.delete()
     }
@@ -122,6 +139,7 @@ function tryAlign(
     ) {
       return fail(
         'The largest object in the scan does not match the coupon plate shape. Remove other objects from the glass and rescan.',
+        1,
       )
     }
 
@@ -137,12 +155,18 @@ function tryAlign(
     const kernelPx = Math.max(3, Math.round(maxGapMm * estimatedPxPerMm))
     // A coupon scanned on its textured build plate shows the plate's speckle through every
     // opening, littering the binary with noise blobs; a majority filter well under the fiducial
-    // size removes them without moving the surviving centroids.
-    const denoised = majorityFilterBinary(
-      cv,
-      objectWhite,
-      (g.fiducialSizeMm / 5) * estimatedPxPerMm,
-    )
+    // size removes them without moving the surviving centroids. The holes lie strictly inside
+    // the plate, so the denoise/close/contour stage runs on the plate's bounding rectangle plus
+    // a kernel-sized margin instead of the full scan (identical results, a fraction of the
+    // cost); the crop origin is added back onto every hole centroid.
+    const denoiseKernelPx = (g.fiducialSizeMm / 5) * estimatedPxPerMm
+    const cropped = roiAround(cv, objectWhite, plateRect, Math.max(kernelPx, denoiseKernelPx))
+    let denoised: Mat
+    try {
+      denoised = majorityFilterBinary(cv, cropped.roi, denoiseKernelPx)
+    } finally {
+      cropped.roi.delete()
+    }
     const closed = new cv.Mat()
     const holeContours = new cv.MatVector()
     const holeHierarchy = new cv.Mat()
@@ -188,7 +212,7 @@ function tryAlign(
           if (short <= 0 || long / short > 2) continue
           const m = cv.moments(contour)
           if (m.m00 <= 0) continue
-          holes.push({ x: m.m10 / m.m00, y: m.m01 / m.m00 })
+          holes.push({ x: m.m10 / m.m00 + cropped.x, y: m.m01 / m.m00 + cropped.y })
         } finally {
           contour.delete()
         }
@@ -197,7 +221,7 @@ function tryAlign(
       // beyond the three fiducials survive the per-hole gates; the fiducial triple is selected
       // by its mutual geometry.
       const selected = selectCornerHoles(holes, g.fiducials, estimatedPxPerMm)
-      if (!selected.ok) return fail(selected.reason)
+      if (!selected.ok) return fail(selected.reason, 2)
 
       return solveFromHoles(selected.holes, g)
     } finally {
@@ -216,14 +240,16 @@ function tryAlign(
 // and solves the exact 3-point affine. The math lives in the shared corner-fiducial solver;
 // the nominal layout order (fiducials[1] corner-adjacent, [0] and [2] its neighbours) is derived
 // from emCouponGeometry, not assumed.
-function solveFromHoles(holes: Point[], g: ReturnType<typeof emCouponGeometry>): EmAlignment {
+function solveFromHoles(holes: Point[], g: ReturnType<typeof emCouponGeometry>): AlignAttempt {
   const solved = solveFromCornerHoles(holes, g.fiducials)
-  if (!solved.ok) return fail(solved.reason)
+  if (!solved.ok) return fail(solved.reason, 3)
   return {
     success: true,
     failureReason: null,
     affine: solved.affine,
     flipped: solved.flipped,
     rotationQuarterTurns: solved.rotationQuarterTurns,
+    rotationDegrees: solved.rotationDegrees,
+    stage: 4,
   }
 }

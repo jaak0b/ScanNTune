@@ -2,7 +2,13 @@ import type { Mat, OpenCv } from '../opencv'
 import type { IsTestSpec } from './types'
 import type { IsCouponGeometry } from './couponGeometry'
 import { isCouponGeometry } from './couponGeometry'
-import { analyzeThresholdBands, majorityFilterBinary, valueChannel } from '../cvUtils'
+import {
+  analyzeThresholdBands,
+  deepestFailure,
+  majorityFilterBinary,
+  roiAround,
+  valueChannel,
+} from '../cvUtils'
 import { solveCornerHoleCandidates } from '../cornerFiducialSolver'
 import type { AffineMmToPx, CornerCandidate, Point } from '../cornerFiducialSolver'
 import { median } from '../math'
@@ -31,6 +37,9 @@ export interface IsAlignment {
   orientationSolved: boolean
   flipped: boolean
   rotationQuarterTurns: number
+  /** Signed rotation of the coupon +X axis in scan space, in degrees, normalized to
+   *  (-180, 180]; includes the quarter-turn part. 0 unless the orientation was solved. */
+  rotationDegrees: number
 }
 
 /**
@@ -65,11 +74,8 @@ export function alignIsCoupon(cv: OpenCv, imageBgr: Mat, spec: IsTestSpec): IsAl
   // Report the failure from the band hypothesis that got furthest through the pipeline: a
   // band that found the plate and its holes but could not verify the orientation explains
   // the scan better than one whose largest blob was the whole image.
-  const best = attempts.reduce<AlignAttempt | null>(
-    (acc, r) => (acc === null || r.stage > acc.stage ? r : acc),
-    null,
-  )
-  return best ? stripStage(best) : fail('No coupon was found in the scan.', 0)
+  const best = deepestFailure(attempts, (r) => r.stage)
+  return best ? stripStage(best) : stripStage(fail('No coupon was found in the scan.', 0))
 }
 
 /** IsAlignment plus how far through the alignment pipeline the attempt progressed (higher
@@ -99,7 +105,7 @@ export function mmToPx(alignment: IsAlignment, xMm: number, yMm: number): { x: n
 function fail(
   reason: string,
   stage: number,
-  orientation?: { flipped: boolean; rotationQuarterTurns: number },
+  orientation?: { flipped: boolean; rotationQuarterTurns: number; rotationDegrees: number },
 ): AlignAttempt {
   return {
     success: false,
@@ -109,6 +115,7 @@ function fail(
     orientationSolved: stage >= STAGE_ORIENTATION_SOLVED,
     flipped: orientation?.flipped ?? false,
     rotationQuarterTurns: orientation?.rotationQuarterTurns ?? 0,
+    rotationDegrees: orientation?.rotationDegrees ?? 0,
     stage,
   }
 }
@@ -119,14 +126,14 @@ function tryAlign(cv: OpenCv, objectWhite: Mat, gray: Mat, g: IsCouponGeometry):
   const contours = new cv.MatVector()
   const hierarchy = new cv.Mat()
   try {
-    cv.findContours(objectWhite, contours, hierarchy, cv.RETR_CCOMP, cv.CHAIN_APPROX_SIMPLE)
+    cv.findContours(objectWhite, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE)
 
-    // The coupon plate: the largest top-level contour.
+    // The coupon plate: the largest external contour. Holes are read later by a
+    // separate CCOMP pass on the cropped plate region.
     const count = contours.size()
     let baseIndex = -1
     let baseArea = 0
     for (let i = 0; i < count; i++) {
-      if (hierarchy.data32S[i * 4 + 3] !== -1) continue // not top-level
       const contour = contours.get(i)
       try {
         const area = cv.contourArea(contour)
@@ -153,10 +160,12 @@ function tryAlign(cv: OpenCv, objectWhite: Mat, gray: Mat, g: IsCouponGeometry):
     const baseContour = contours.get(baseIndex)
     let baseLong: number
     let baseShort: number
+    let plateRect: { x: number; y: number; width: number; height: number }
     try {
       const rect = cv.minAreaRect(baseContour)
       baseLong = Math.max(rect.size.width, rect.size.height)
       baseShort = Math.min(rect.size.width, rect.size.height)
+      plateRect = cv.boundingRect(baseContour)
     } finally {
       baseContour.delete()
     }
@@ -184,12 +193,18 @@ function tryAlign(cv: OpenCv, objectWhite: Mat, gray: Mat, g: IsCouponGeometry):
     // A coupon scanned on its textured build plate shows the plate's speckle through every
     // opening, littering the binary with noise blobs; a majority filter well under the fiducial
     // size removes them without moving the surviving centroids. The plate is re-located in the
-    // filtered binary (contour indices differ from the first pass).
-    const denoised = majorityFilterBinary(
-      cv,
-      objectWhite,
-      (g.fiducialSizeMm / 5) * estimatedPxPerMm,
-    )
+    // filtered binary (contour indices differ from the first pass). The holes lie strictly
+    // inside the plate, so the denoise/contour stage runs on the plate's bounding rectangle
+    // plus a kernel-sized margin instead of the full scan (identical results, a fraction of
+    // the cost); the crop origin is added back onto every hole centroid.
+    const denoiseKernelPx = (g.fiducialSizeMm / 5) * estimatedPxPerMm
+    const cropped = roiAround(cv, objectWhite, plateRect, denoiseKernelPx)
+    let denoised: Mat
+    try {
+      denoised = majorityFilterBinary(cv, cropped.roi, denoiseKernelPx)
+    } finally {
+      cropped.roi.delete()
+    }
     const holes: Point[] = []
     const denoisedContours = new cv.MatVector()
     const denoisedHierarchy = new cv.Mat()
@@ -230,7 +245,7 @@ function tryAlign(cv: OpenCv, objectWhite: Mat, gray: Mat, g: IsCouponGeometry):
           if (short <= 0 || long / short > 2) continue
           const m = cv.moments(contour)
           if (m.m00 <= 0) continue
-          holes.push({ x: m.m10 / m.m00, y: m.m01 / m.m00 })
+          holes.push({ x: m.m10 / m.m00 + cropped.x, y: m.m01 / m.m00 + cropped.y })
         } finally {
           contour.delete()
         }
@@ -426,6 +441,7 @@ function selectCandidateByContent(
     orientationSolved: true,
     flipped: c.flipped,
     rotationQuarterTurns: c.rotationQuarterTurns,
+    rotationDegrees: c.rotationDegrees,
     stage: 5,
   }
 }

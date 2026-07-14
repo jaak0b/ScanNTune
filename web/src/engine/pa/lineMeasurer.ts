@@ -78,45 +78,55 @@ export function measureLineWidthProfile(
   return samples
 }
 
-// Assesses the printed base as the measurement backdrop behind the test lines. Base tone samples
-// are taken half a line pitch off each line's centreline (between the lines, always on the base);
-// line tone samples sit on the line centrelines. Both medians are robust order statistics, so a
-// few gap or transition samples cannot bias them. The judgment (polarity-free contrast plus base
-// tone uniformity) is the shared measurement-backdrop gate.
-export function assessLineBackdrop(
-  cv: OpenCv,
-  gray: Mat,
-  alignment: PaAlignment,
-  spec: PaTestSpec,
-): BackdropAssessment {
-  if (!gray || gray.empty()) throw new Error('Image is null or empty.')
-  if (gray.type() !== cv.CV_8UC1) {
-    throw new Error('assessLineBackdrop expects a CV_8UC1 (single-channel 8-bit) image.')
-  }
-  if (!alignment.success) throw new Error('Cannot assess the backdrop without a successful alignment.')
+/** Scan-pixel positions (fractional, bilinear-read) the line backdrop gate samples. */
+export interface LineGatePositions {
+  line: { x: number; y: number }[]
+  base: { x: number; y: number }[]
+}
 
-  const data = gray.data as Uint8Array
-  const cols = gray.cols
-  const rows = gray.rows
+// The gate's sample positions: base tone samples half a line pitch off each line's centreline
+// (between the lines, always on the base), line tone samples on the line centrelines, all
+// through the solved affine. Computed once per scan and shared by the per-candidate tone
+// assessment and the BGR class sampling the discriminant plane is built from, so both read the
+// same scene points.
+export function lineGatePositions(alignment: PaAlignment, spec: PaTestSpec): LineGatePositions {
+  if (!alignment.success) throw new Error('Cannot assess the backdrop without a successful alignment.')
   const g = couponGeometry(spec)
   const lineLenMm = 2 * spec.slowSegmentMm + spec.fastSegmentMm
-
-  const lineSamples: number[] = []
-  const baseSamples: number[] = []
+  const line: { x: number; y: number }[] = []
+  const base: { x: number; y: number }[] = []
   for (let i = 0; i < spec.lineCount; i++) {
     const yMm = g.lineStartYMm(i)
     // A 1 mm step (coarser than the width profiler's 0.25 mm) suffices here: the medians only
     // need a representative tone sample, not sub-pixel coverage.
     for (let xMm = END_SKIP_MM; xMm <= lineLenMm - END_SKIP_MM + 1e-9; xMm += 1) {
-      const onLine = mmToPx(alignment, g.lineStartXMm + xMm, yMm)
-      const offLine = mmToPx(alignment, g.lineStartXMm + xMm, yMm + spec.linePitchMm / 2)
-      const vLine = bilinear(data, cols, rows, onLine.x, onLine.y)
-      const vBase = bilinear(data, cols, rows, offLine.x, offLine.y)
-      if (Number.isFinite(vLine)) lineSamples.push(vLine)
-      if (Number.isFinite(vBase)) baseSamples.push(vBase)
+      line.push(mmToPx(alignment, g.lineStartXMm + xMm, yMm))
+      base.push(mmToPx(alignment, g.lineStartXMm + xMm, yMm + spec.linePitchMm / 2))
     }
   }
-  return assessMeasurementBackdrop(lineSamples, baseSamples)
+  return { line, base }
+}
+
+// Assesses the printed base as the measurement backdrop behind the test lines, reading the gate
+// positions' tones off one candidate measurement plane. Both medians are robust order
+// statistics, so a few gap or transition samples cannot bias them. The judgment (polarity-free
+// contrast plus base tone uniformity) is the shared measurement-backdrop gate.
+export function assessLineBackdrop(
+  cv: OpenCv,
+  gray: Mat,
+  positions: LineGatePositions,
+): BackdropAssessment {
+  if (!gray || gray.empty()) throw new Error('Image is null or empty.')
+  if (gray.type() !== cv.CV_8UC1) {
+    throw new Error('assessLineBackdrop expects a CV_8UC1 (single-channel 8-bit) image.')
+  }
+
+  const data = gray.data as Uint8Array
+  const cols = gray.cols
+  const rows = gray.rows
+  const read = (points: { x: number; y: number }[]) =>
+    points.map((p) => bilinear(data, cols, rows, p.x, p.y)).filter(Number.isFinite)
+  return assessMeasurementBackdrop(read(positions.line), read(positions.base))
 }
 
 // Width in px of the line crossing the profile centred at (cx, cy), or NaN when no line or no
