@@ -58,6 +58,7 @@ describe('renderEmOverlayMat', () => {
         affine: null,
         flipped: false,
         rotationQuarterTurns: 0,
+        rotationDegrees: 0,
       }
       const result = analyzeEmCoupon(cv, bgr, spec, PX_PER_MM)
       expect(() => renderEmOverlayMat(cv, bgr, failed, spec, result)).toThrow()

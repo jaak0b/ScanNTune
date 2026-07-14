@@ -34,6 +34,21 @@ export function decodeE2eFixtureBgr(cv: OpenCv, name: string): Mat {
   return decodePngBgr(cv, new URL(`../../e2e/fixtures/${name}`, import.meta.url))
 }
 
+// The app accepts JPEG scans through createImageBitmap, so the JPEG fixture path mirrors a real upload.
+export function decodeJpgFixtureBgr(cv: OpenCv, name: string): Mat {
+  const jpeg = nodeRequire('jpeg-js') as {
+    decode: (
+      data: Buffer,
+      opts: { useTArray: boolean; maxMemoryUsageInMB: number },
+    ) => { data: Uint8Array; width: number; height: number }
+  }
+  const url = new URL(`../fixtures/${name}`, import.meta.url)
+  // A 36 MP flatbed scan needs about 1.5 GB of decoder working buffers; 4096 gives headroom for the
+  // largest scans the app accepts without capping real fixtures (jpeg-js defaults to 512 MB).
+  const img = jpeg.decode(readFileSync(fileURLToPath(url)), { useTArray: true, maxMemoryUsageInMB: 4096 })
+  return rgbaToBgrMat(cv, { data: img.data, width: img.width, height: img.height })
+}
+
 function decodePngBgr(cv: OpenCv, url: URL): Mat {
   const png = PNG.sync.read(readFileSync(fileURLToPath(url)))
   return rgbaToBgrMat(cv, { data: png.data, width: png.width, height: png.height })

@@ -52,6 +52,7 @@ describe('alignEmCoupon', () => {
         expect(al.failureReason).toBeNull()
         expect(al.flipped).toBe(false)
         expect(al.rotationQuarterTurns).toBe(0)
+        expect(Math.abs(al.rotationDegrees)).toBeLessThan(0.5)
         for (const f of g.fiducials) {
           const expected = renderedPx(f.xMm, f.yMm, pxPerMm, marginMm, 0, 0, false)
           const actual = mmToPx(al, f.xMm, f.yMm)
@@ -99,6 +100,10 @@ describe('alignEmCoupon', () => {
         expect(al.rotationQuarterTurns).toBe(
           (((quarterTurns as number) + (flipped ? 2 : 0)) % 4 + 4) % 4,
         )
+        // The exact rotation readout carries the quarter-turn part plus the 2 degree skew.
+        const residual =
+          ((((al.rotationDegrees - 90 * al.rotationQuarterTurns) % 360) + 540) % 360) - 180
+        expect(Math.abs(Math.abs(residual) - rotationDegrees)).toBeLessThan(0.5)
         for (const f of g.fiducials) {
           const expected = renderedPx(
             f.xMm,

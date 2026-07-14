@@ -312,9 +312,14 @@ const newSlicerFlow = computed(() => {
   const isPercent = entered > 5
   const factor = isPercent ? entered / 100 : entered
   const corrected = factor * (s.nominalLineWidthMm / r.wMm)
-  // The one-sided shading residual expressed as an uncertainty on the corrected flow,
-  // presented the same way the input shaper states its frequency confidence interval.
-  const uncertainty = r.flankAsymmetryMm !== null ? (Math.abs(r.flankAsymmetryMm) / r.wMm) * corrected : null
+  // Uncertainty on the corrected flow from two independent systematic-error estimates:
+  // the one-sided lamp shading residual (flank asymmetry) and the separator cross-check
+  // residual (backdrop edge bias), combined in quadrature. Presented the same way the
+  // input shaper states its frequency confidence interval.
+  const a = r.flankAsymmetryMm !== null ? Math.abs(r.flankAsymmetryMm) / r.wMm : null
+  const b = r.biasMm !== null ? Math.abs(r.biasMm) / r.wMm : null
+  const uncertainty =
+    a !== null || b !== null ? Math.sqrt((a ?? 0) ** 2 + (b ?? 0) ** 2) * corrected : null
   if (isPercent) {
     const ci = uncertainty !== null ? ` ± ${(uncertainty * 100).toFixed(1)}` : ''
     return `${(corrected * 100).toFixed(1)}${ci}%`
@@ -380,7 +385,7 @@ const scanCards = computed<ScanCard[]>(() => {
       },
       {
         label: 'Rotation',
-        value: aligned ? `${info!.rotationQuarterTurns * 90} degrees` : 'Not resolved',
+        value: aligned ? `${info!.rotationDegrees.toFixed(1)} degrees` : 'Not resolved',
         sev: aligned ? 'ok' : info ? 'warn' : 'mute',
       },
       {

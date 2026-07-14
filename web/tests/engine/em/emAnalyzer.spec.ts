@@ -103,6 +103,42 @@ describe('analyzeEmCoupon render recovery', () => {
   )
 
   it(
+    'recovers 0.42 mm within 0.008 mm from a saturated yellow coupon on a white backing',
+    async () => {
+      // Yellow plastic against white paper: the value channel carries almost no contrast (the
+      // brightness gate correctly refuses it), so measurement must run on the saturation plane.
+      const r = await analyzeRender({
+        trueWidthMm: 0.42,
+        plasticColor: [240, 220, 30],
+        backgroundColor: [245, 245, 245],
+      })
+      expect(r.success).toBe(true)
+      expect(r.wMm).not.toBeNull()
+      expect(Math.abs(r.wMm! - 0.42)).toBeLessThanOrEqual(0.008)
+    },
+    240000,
+  )
+
+  it(
+    'recovers 0.42 mm within 0.008 mm from an orange coupon on a teal backing (hue-only contrast)',
+    async () => {
+      // Orange plastic on a teal paper backing, chosen so that neither brightness nor
+      // saturation separates them (plastic V 240 / S 181 against backing V 220 / S 185,
+      // hand-calculated HSV: both under the 30-level contrast floor). Only the hue direction
+      // separates the two, so measurement must run on the Fisher discriminant plane.
+      const r = await analyzeRender({
+        trueWidthMm: 0.42,
+        plasticColor: [240, 170, 60],
+        backgroundColor: [60, 190, 220],
+      })
+      expect(r.success).toBe(true)
+      expect(r.wMm).not.toBeNull()
+      expect(Math.abs(r.wMm! - 0.42)).toBeLessThanOrEqual(0.008)
+    },
+    240000,
+  )
+
+  it(
     'on a low-contrast light-on-light base either measures accurately or fails cleanly',
     async () => {
       const r = await analyzeRender({
@@ -330,6 +366,9 @@ describe('analyzeEmCoupon render recovery', () => {
         expect(pooled.shadowWarning).toBe(false)
         expect(pooled.scans).toHaveLength(2)
         expect(pooled.scans[0].rotationQuarterTurns).not.toBe(pooled.scans[1].rotationQuarterTurns)
+        expect(pooled.rotationDegrees).toBe(pooled.scans[0].rotationDegrees)
+        expect(Math.abs(pooled.scans[0].rotationDegrees)).toBeLessThan(0.5)
+        expect(Math.abs(Math.abs(pooled.scans[1].rotationDegrees) - 180)).toBeLessThan(0.5)
         expect(pooled.blocksMeasured).toBe(
           pooled.scans[0].blocksMeasured + pooled.scans[1].blocksMeasured,
         )

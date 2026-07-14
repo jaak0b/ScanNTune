@@ -1,8 +1,8 @@
 import type { Mat, OpenCv } from '../opencv'
 import type { PaTestSpec } from './types'
 import { couponGeometry } from './types'
-import { analyzeThresholdBands, majorityFilterBinary } from '../cvUtils'
-import { selectCornerHoles } from '../cornerFiducialSolver'
+import { analyzeThresholdBands, deepestFailure, majorityFilterBinary, roiAround } from '../cvUtils'
+import { rotationDegreesFromAffine, selectCornerHoles } from '../cornerFiducialSolver'
 import { MIN_ALIGN_PX_PER_MM } from '../resolutionGate'
 
 // Locates the PA coupon's three square corner-hole fiducials in a scan and solves the
@@ -26,6 +26,9 @@ export interface PaAlignment {
   ty: number
   flipped: boolean
   rotationQuarterTurns: number
+  /** Signed rotation of the coupon +X axis in scan space, in degrees, normalized to
+   *  (-180, 180]; includes the quarter-turn part. 0 when alignment failed. */
+  rotationDegrees: number
 }
 
 interface Point {
@@ -48,23 +51,33 @@ export function alignPaCoupon(cv: OpenCv, image: Mat, spec: PaTestSpec): PaAlign
     (r) => r.success,
   )
   const aligned = attempts.find((r) => r.success)
-  if (aligned) return aligned
-  // No hypothesis fits; report the attempt that got past base detection if any did, as its
-  // hole-level reason is the more actionable one for the user.
-  const informative = attempts.find(
-    (r) => r.failureReason !== null && !r.failureReason.startsWith('No coupon'),
-  )
-  return informative ?? attempts[0] ?? fail('No coupon was found in the scan.')
+  if (aligned) return stripStage(aligned)
+  // No hypothesis fits; report the failure from the band hypothesis that got furthest through
+  // the pipeline, as its reason is the more actionable one for the user.
+  const best = deepestFailure(attempts, (r) => r.stage)
+  return stripStage(best ?? fail('No coupon was found in the scan.', 0))
+}
+
+/** PaAlignment plus how far through the alignment pipeline the attempt progressed (higher
+ *  means further: base found, shape ok, holes selected, affine solved). */
+type AlignAttempt = PaAlignment & { stage: number }
+
+function stripStage(attempt: AlignAttempt): PaAlignment {
+  const { stage: _stage, ...alignment } = attempt
+  return alignment
 }
 
 export function mmToPx(al: PaAlignment, xMm: number, yMm: number): { x: number; y: number } {
   return { x: al.a * xMm + al.b * yMm + al.tx, y: al.c * xMm + al.d * yMm + al.ty }
 }
 
-function fail(reason: string): PaAlignment {
+// A failed attempt records how far it got, so the deepest failure across all band hypotheses
+// can be picked for reporting.
+function fail(reason: string, stage: number): AlignAttempt {
   return {
     success: false,
     failureReason: reason,
+    stage,
     a: 0,
     b: 0,
     c: 0,
@@ -73,6 +86,7 @@ function fail(reason: string): PaAlignment {
     ty: 0,
     flipped: false,
     rotationQuarterTurns: 0,
+    rotationDegrees: 0,
   }
 }
 
@@ -81,18 +95,18 @@ function tryAlign(
   cv: OpenCv,
   objectWhite: Mat,
   g: ReturnType<typeof couponGeometry>,
-): PaAlignment {
+): AlignAttempt {
   const contours = new cv.MatVector()
   const hierarchy = new cv.Mat()
   try {
-    cv.findContours(objectWhite, contours, hierarchy, cv.RETR_CCOMP, cv.CHAIN_APPROX_SIMPLE)
+    cv.findContours(objectWhite, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE)
 
-    // The base plate: the largest top-level contour.
+    // The base plate: the largest external contour. Holes are read later by a
+    // separate CCOMP pass on the cropped plate region.
     const count = contours.size()
     let baseIndex = -1
     let baseArea = 0
     for (let i = 0; i < count; i++) {
-      if (hierarchy.data32S[i * 4 + 3] !== -1) continue // not top-level
       const contour = contours.get(i)
       try {
         const area = cv.contourArea(contour)
@@ -110,6 +124,7 @@ function tryAlign(
     if (baseIndex < 0 || baseArea < minBasePx) {
       return fail(
         'No coupon was found in the scan. Place the printed coupon flat on the scanner glass so the whole plate is visible.',
+        0,
       )
     }
 
@@ -117,10 +132,12 @@ function tryAlign(
     const baseContour = contours.get(baseIndex)
     let baseLong: number
     let baseShort: number
+    let baseRect: { x: number; y: number; width: number; height: number }
     try {
       const rect = cv.minAreaRect(baseContour)
       baseLong = Math.max(rect.size.width, rect.size.height)
       baseShort = Math.min(rect.size.width, rect.size.height)
+      baseRect = cv.boundingRect(baseContour)
     } finally {
       baseContour.delete()
     }
@@ -133,6 +150,7 @@ function tryAlign(
     ) {
       return fail(
         'The largest object in the scan does not match the coupon plate shape. Remove other objects from the glass and rescan.',
+        1,
       )
     }
 
@@ -146,12 +164,18 @@ function tryAlign(
     const kernelPx = Math.max(3, Math.round((g.fiducialSizeMm / 2) * estimatedPxPerMm))
     // A coupon scanned on its textured build plate shows the plate's speckle through every
     // opening, littering the binary with noise blobs; a majority filter well under the fiducial
-    // size removes them without moving the surviving centroids.
-    const denoised = majorityFilterBinary(
-      cv,
-      objectWhite,
-      (g.fiducialSizeMm / 5) * estimatedPxPerMm,
-    )
+    // size removes them without moving the surviving centroids. The holes lie strictly inside
+    // the base, so the denoise/close/contour stage runs on the base's bounding rectangle plus
+    // a kernel-sized margin instead of the full scan (identical results, a fraction of the
+    // cost); the crop origin is added back onto every hole centroid.
+    const denoiseKernelPx = (g.fiducialSizeMm / 5) * estimatedPxPerMm
+    const cropped = roiAround(cv, objectWhite, baseRect, Math.max(kernelPx, denoiseKernelPx))
+    let denoised: Mat
+    try {
+      denoised = majorityFilterBinary(cv, cropped.roi, denoiseKernelPx)
+    } finally {
+      cropped.roi.delete()
+    }
     const closed = new cv.Mat()
     const holeContours = new cv.MatVector()
     const holeHierarchy = new cv.Mat()
@@ -198,7 +222,7 @@ function tryAlign(
           if (short <= 0 || long / short > 2) continue
           const m = cv.moments(contour)
           if (m.m00 <= 0) continue
-          holes.push({ x: m.m10 / m.m00, y: m.m01 / m.m00 })
+          holes.push({ x: m.m10 / m.m00 + cropped.x, y: m.m01 / m.m00 + cropped.y })
         } finally {
           contour.delete()
         }
@@ -207,7 +231,7 @@ function tryAlign(
       // beyond the three fiducials survive the per-hole gates; the fiducial triple is selected
       // by its mutual geometry.
       const selected = selectCornerHoles(holes, g.fiducials, estimatedPxPerMm)
-      if (!selected.ok) return fail(selected.reason)
+      if (!selected.ok) return fail(selected.reason, 2)
 
       return solveFromHoles(selected.holes, g)
     } finally {
@@ -224,7 +248,7 @@ function tryAlign(
 
 // Identifies the corner-adjacent hole, resolves the mirror flip and the neighbour correspondence,
 // and solves the exact 3-point affine.
-function solveFromHoles(holes: Point[], g: ReturnType<typeof couponGeometry>): PaAlignment {
+function solveFromHoles(holes: Point[], g: ReturnType<typeof couponGeometry>): AlignAttempt {
   // The corner-adjacent hole sees the other two at a right angle: pick the hole whose neighbour
   // vectors have the cosine closest to zero.
   let cornerIdx = -1
@@ -234,7 +258,7 @@ function solveFromHoles(holes: Point[], g: ReturnType<typeof couponGeometry>): P
     const v = sub(holes[(i + 2) % 3], holes[i])
     const lu = Math.hypot(u.x, u.y)
     const lv = Math.hypot(v.x, v.y)
-    if (lu < 1 || lv < 1) return fail('The detected coupon holes overlap; the scan is unreadable. Rescan at a higher resolution.')
+    if (lu < 1 || lv < 1) return fail('The detected coupon holes overlap; the scan is unreadable. Rescan at a higher resolution.', 3)
     const cos = Math.abs((u.x * v.x + u.y * v.y) / (lu * lv))
     if (cos < bestCos) {
       bestCos = cos
@@ -244,6 +268,7 @@ function solveFromHoles(holes: Point[], g: ReturnType<typeof couponGeometry>): P
   if (bestCos > 0.2) {
     return fail(
       'The three detected holes do not form the coupon corner pattern. Check for debris or reflections on the scan and try again.',
+      3,
     )
   }
 
@@ -274,6 +299,7 @@ function solveFromHoles(holes: Point[], g: ReturnType<typeof couponGeometry>): P
   if (nominalArmRatioDiff < 0.25 * 0.1) {
     return fail(
       "The coupon's two fiducial arms are too similar in length to orient the scan reliably. Use a coupon spec with distinct fiducial arm lengths.",
+      3,
     )
   }
 
@@ -287,6 +313,7 @@ function solveFromHoles(holes: Point[], g: ReturnType<typeof couponGeometry>): P
   if (Math.abs(sA / sB - 1) > 0.1) {
     return fail(
       'The detected holes do not match the coupon proportions. The scan may show a different object or a distorted coupon.',
+      3,
     )
   }
 
@@ -296,7 +323,7 @@ function solveFromHoles(holes: Point[], g: ReturnType<typeof couponGeometry>): P
     (nA.xMm - nCorner.xMm) * (nB.yMm - nCorner.yMm) - (nA.yMm - nCorner.yMm) * (nB.xMm - nCorner.xMm)
   const detectedCross = (dA.x - corner.x) * (dB.y - corner.y) - (dA.y - corner.y) * (dB.x - corner.x)
   if (nominalCross === 0 || detectedCross === 0) {
-    return fail('The detected coupon holes are collinear, so the coupon orientation could not be determined.')
+    return fail('The detected coupon holes are collinear, so the coupon orientation could not be determined.', 3)
   }
   const flipped = Math.sign(detectedCross) !== Math.sign(nominalCross)
 
@@ -305,10 +332,10 @@ function solveFromHoles(holes: Point[], g: ReturnType<typeof couponGeometry>): P
     [corner, dA, dB],
   )
   if (!affine) {
-    return fail('The detected coupon holes are collinear, so the coupon orientation could not be determined.')
+    return fail('The detected coupon holes are collinear, so the coupon orientation could not be determined.', 3)
   }
 
-  // Diagnostic quarter-turn estimate from the rotation of the coupon's +X axis.
+  // Diagnostic rotation of the coupon's +X axis: the exact angle and its quarter-turn estimate.
   const angle = Math.atan2(affine.c, affine.a)
   const rotationQuarterTurns = ((Math.round(angle / (Math.PI / 2)) % 4) + 4) % 4
 
@@ -318,6 +345,8 @@ function solveFromHoles(holes: Point[], g: ReturnType<typeof couponGeometry>): P
     ...affine,
     flipped,
     rotationQuarterTurns,
+    rotationDegrees: rotationDegreesFromAffine(affine),
+    stage: 4,
   }
 }
 

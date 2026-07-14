@@ -151,6 +151,7 @@ describe('renderIsOverlayMat', () => {
         orientationSolved: false,
         flipped: false,
         rotationQuarterTurns: 0,
+        rotationDegrees: 0,
       }
       expect(() => renderIsOverlayMat(cv, bgr, failed, spec, [], 0)).toThrow()
     } finally {

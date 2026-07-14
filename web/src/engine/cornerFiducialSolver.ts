@@ -21,8 +21,22 @@ export interface AffineMmToPx {
 }
 
 export type CornerSolveResult =
-  | { ok: true; affine: AffineMmToPx; flipped: boolean; rotationQuarterTurns: number }
+  | {
+      ok: true
+      affine: AffineMmToPx
+      flipped: boolean
+      rotationQuarterTurns: number
+      /** Signed rotation of the coupon +X axis in scan space, in degrees, normalized to
+       *  (-180, 180]; includes the quarter-turn part. */
+      rotationDegrees: number
+    }
   | { ok: false; reason: string }
+
+/** Signed rotation of the coupon +X axis in scan space, in degrees, normalized to (-180, 180]. */
+export function rotationDegreesFromAffine(affine: AffineMmToPx): number {
+  const degrees = (Math.atan2(affine.c, affine.a) * 180) / Math.PI
+  return degrees <= -180 ? degrees + 360 : degrees
+}
 
 function sub(p: Point, q: Point): Point {
   return { x: p.x - q.x, y: p.y - q.y }
@@ -32,6 +46,9 @@ export interface CornerCandidate {
   affine: AffineMmToPx
   flipped: boolean
   rotationQuarterTurns: number
+  /** Signed rotation of the coupon +X axis in scan space, in degrees, normalized to
+   *  (-180, 180]; includes the quarter-turn part. */
+  rotationDegrees: number
   /** Arm-length assignment mismatch; smaller means the assignment fits the nominal arms better. */
   armMismatch: number
 }
@@ -111,6 +128,7 @@ export function solveCornerHoleCandidates(
       affine,
       flipped: Math.sign(detectedCross) !== Math.sign(nominalCross),
       rotationQuarterTurns: ((Math.round(angle / (Math.PI / 2)) % 4) + 4) % 4,
+      rotationDegrees: rotationDegreesFromAffine(affine),
       armMismatch: Math.abs(lA / lenNA - lB / lenNB),
     })
   }
@@ -132,8 +150,9 @@ export type CornerSelectResult = { ok: true; holes: Point[] } | { ok: false; rea
 const MAX_HOLE_CANDIDATES = 40
 
 /**
- * Selects the three fiducial holes among a larger set of hole candidates by matching the
- * triple's pairwise distances against the nominal fiducial layout (point-pattern matching by
+ * Selects the three fiducial holes among the detected hole candidates by matching the
+ * triple's pairwise distances against the nominal fiducial layout; even a set of exactly
+ * three candidates must pass the same layout and scale gates (point-pattern matching by
  * invariant pairwise distances). A coupon scanned on its textured build plate shows the plate
  * through every opening, so speckle blobs pass the per-hole size and shape gates and the
  * fiducials must be identified by their mutual geometry instead of by count. The match must be
@@ -152,7 +171,6 @@ export function selectCornerHoles(
       reason: `Expected the coupon's 3 corner holes but found ${candidates.length}. Make sure the coupon is scanned face down with no hole covered.`,
     }
   }
-  if (candidates.length === 3) return { ok: true, holes: candidates }
   if (candidates.length > MAX_HOLE_CANDIDATES) {
     return {
       ok: false,
@@ -310,11 +328,17 @@ export function solveFromCornerHoles(holes: Point[], nominal: { xMm: number; yMm
   )
   if (!affine) return { ok: false, reason: collinear }
 
-  // Diagnostic quarter-turn estimate from the rotation of the coupon's +X axis.
+  // Diagnostic rotation of the coupon's +X axis: the exact angle and its quarter-turn estimate.
   const angle = Math.atan2(affine.c, affine.a)
   const rotationQuarterTurns = ((Math.round(angle / (Math.PI / 2)) % 4) + 4) % 4
 
-  return { ok: true, affine, flipped, rotationQuarterTurns }
+  return {
+    ok: true,
+    affine,
+    flipped,
+    rotationQuarterTurns,
+    rotationDegrees: rotationDegreesFromAffine(affine),
+  }
 }
 
 // The exactly-determined affine from 3 point correspondences (mm -> px), via Cramer's rule on the
