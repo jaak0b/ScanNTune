@@ -1,16 +1,15 @@
 import type { FilamentProfile, PrinterProfile, PaTestSpec } from './types'
 import { couponGeometry, KLIPPER_DEFAULT_SMOOTH_TIME, paValueForLine } from './types'
-import { couponOrigin, prepareProfile, setupPreamble, teardownLines } from '../gcode/couponShell'
 import {
-  BASE_LAYERS,
-  type Emitter,
-  basePerimeters,
-  extrude,
-  PERIMETER_LOOPS,
-  rasterBase,
-  retract,
-  travel,
-} from '../gcode/emitter'
+  baseLayers,
+  couponOrigin,
+  fiducialHoleBoxes,
+  filamentSwapPause,
+  prepareProfile,
+  setupPreamble,
+  teardownLines,
+} from '../gcode/couponShell'
+import { BASE_LAYERS, type Emitter, extrude, retract, travel } from '../gcode/emitter'
 
 export { extrusionMm } from '../gcode/emitter'
 
@@ -75,55 +74,15 @@ function emitPaGcode(profile: PrinterProfile, filament: FilamentProfile, spec: P
   const g = couponGeometry(spec)
   // Center the coupon on the bed.
   const { ox, oy } = couponOrigin(profile, g.baseWidthMm, g.baseHeightMm)
-  const holes = g.fiducials.map((f) => ({
-    x0: ox + f.xMm - g.fiducialSizeMm / 2,
-    y0: oy + f.yMm - g.fiducialSizeMm / 2,
-    x1: ox + f.xMm + g.fiducialSizeMm / 2,
-    y1: oy + f.yMm + g.fiducialSizeMm / 2,
-  }))
+  const holes = fiducialHoleBoxes(g.fiducials, g.fiducialSizeMm, ox, oy)
 
   const e: Emitter = { lines: [], x: 0, y: 0 }
   const L = e.lines
   L.push(...setupPreamble(profile, filament, ['; ScanNTune pressure advance test', '; fiducial holes preserved']))
 
   // Base layers: perimeter loops first, then serpentine infill inset behind them.
-  const infillInset = PERIMETER_LOOPS * spec.lineWidthMm
-  const infillHoles = holes.map((h) => ({
-    x0: h.x0 - infillInset,
-    y0: h.y0 - infillInset,
-    x1: h.x1 + infillInset,
-    y1: h.y1 + infillInset,
-  }))
-  for (let layer = 0; layer < BASE_LAYERS; layer++) {
-    const z = profile.layerHeightMm * (layer + 1)
-    L.push(`G1 Z${z.toFixed(3)} F600`)
-    // The first base layer prints at the profile's first layer speed for bed adhesion.
-    const speed = layer === 0 ? profile.firstLayerSpeedMmS : undefined
-    basePerimeters(e, profile, filament, spec.lineWidthMm, ox, oy, g.baseWidthMm, g.baseHeightMm,
-      holes, extrude, speed)
-    rasterBase(
-      e,
-      profile,
-      filament,
-      spec.lineWidthMm,
-      ox + infillInset,
-      oy + infillInset,
-      g.baseWidthMm - 2 * infillInset,
-      g.baseHeightMm - 2 * infillInset,
-      layer === 0,
-      infillHoles,
-      extrude,
-      speed,
-    )
-  }
-
-  // Filament change to the contrasting color.
-  retract(e, profile, 1)
-  L.push(...profile.pauseGcode.split('\n'))
-  // Printers whose PAUSE/M600 macro already retracts may see a small blob at the prime
-  // line start; set retractMm to 0 in the profile if that happens.
-  L.push('; if your pause macro already retracts, set retractMm to 0 in the profile')
-  retract(e, profile, -1)
+  baseLayers(e, profile, filament, spec.lineWidthMm, ox, oy, g.baseWidthMm, g.baseHeightMm, holes)
+  filamentSwapPause(e, profile)
 
   // Prime line along the bottom base edge, outside the measured region.
   const z3 = profile.layerHeightMm * (BASE_LAYERS + 1)
