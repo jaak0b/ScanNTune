@@ -61,6 +61,14 @@ export interface PaLineScore {
   measured: boolean
 }
 
+/**
+ * Whether the sweep bracketed the true optimum, judged by the sign of the per-line transition
+ * bulge (deceleration-window minus acceleration-window median width deviation): a sign change
+ * across the sweep means the optimum lies inside it; an all-positive column means the true value
+ * lies above the printed range, all-negative below it.
+ */
+export type PaSweepBracket = 'bracketed' | 'above-range' | 'below-range'
+
 export interface PaResult {
   success: boolean
   failureReason: string | null
@@ -69,6 +77,13 @@ export interface PaResult {
   bestLineIndex: number | null
   /** Parabolic-interpolated PA at the score minimum, null on failure. */
   bestPa: number | null
+  /** Bulge-sign sweep coverage diagnostic, null on failure. */
+  sweepBracket: PaSweepBracket | null
+  /**
+   * Bootstrap standard error of bestPa (Efron nonparametric bootstrap of the parabolic vertex),
+   * null on failure or when the best line sits at the sweep edge (no bracket to interpolate in).
+   */
+  sePa: number | null
   /** Geometrically measured scan scale along the width-profile direction; null before alignment. */
   measuredPxPerMm: number | null
   flipped: boolean
