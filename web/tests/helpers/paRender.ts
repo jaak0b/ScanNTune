@@ -1,4 +1,5 @@
 import type { RgbaImage } from '../../src/engine/imageData'
+import { mulberry32 } from '../../src/engine/math'
 import type { PaTestSpec } from '../../src/engine/pa/types'
 import { couponGeometry, defaultPaTestSpec, paValueForLine } from '../../src/engine/pa/types'
 
@@ -18,6 +19,16 @@ export interface PaRenderOptions {
   trueSmoothTime: number
   /** Fractional half-width change per unit residual for smooth-time renders. */
   smoothTimeGain: number
+  /** Noise RNG seed; the default keeps the historical renders byte-identical. */
+  seed: number
+  /** Amplitude (gray levels) of the glossy infill-ridge texture on the base; 0 disables it. */
+  textureAmpGray: number
+  /** Ridge pitch of the base texture, in mm. */
+  texturePitchMm: number
+  /** Sharpness exponent of the specular ridge bumps; higher reads glossier. */
+  ridgeExponent: number
+  /** Scanner point-spread blur sigma in px, applied to the gray image before noise; 0 disables. */
+  blurSigmaPx: number
 }
 
 const DEFAULTS: Omit<PaRenderOptions, 'truePa'> = {
@@ -33,17 +44,11 @@ const DEFAULTS: Omit<PaRenderOptions, 'truePa'> = {
   backgroundGray: 120,
   trueSmoothTime: 0.04,
   smoothTimeGain: 3,
-}
-
-/** Deterministic pseudo-random (mulberry32) so fixtures are reproducible. */
-function rng(seed: number): () => number {
-  let a = seed >>> 0
-  return () => {
-    a = (a + 0x6d2b79f5) >>> 0
-    let t = Math.imul(a ^ (a >>> 15), 1 | a)
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
-  }
+  seed: 1234567,
+  textureAmpGray: 0,
+  texturePitchMm: 0.7,
+  ridgeExponent: 6,
+  blurSigmaPx: 0,
 }
 
 /**
@@ -107,9 +112,10 @@ export function renderPaScan(options: Partial<PaRenderOptions> & { truePa: numbe
   const height = Math.round(hMm * o.pxPerMm)
   const cx = wMm / 2
   const cy = hMm / 2
-  const rand = rng(1234567)
+  const rand = mulberry32(o.seed)
   const data = new Uint8ClampedArray(width * height * 4)
 
+  const gray = new Float64Array(width * height)
   const S = 3 // supersampling factor
   for (let py = 0; py < height; py++) {
     for (let px = 0; px < width; px++) {
@@ -127,16 +133,49 @@ export function renderPaScan(options: Partial<PaRenderOptions> & { truePa: numbe
           acc += sampleGray(o, g, bx, by)
         }
       }
-      const gray = acc / (S * S) + (o.noiseSigma > 0 ? gauss(rand) * o.noiseSigma : 0)
-      const v = Math.max(0, Math.min(255, Math.round(gray)))
-      const i = (py * width + px) * 4
-      data[i] = v
-      data[i + 1] = v
-      data[i + 2] = v
-      data[i + 3] = 255
+      gray[py * width + px] = acc / (S * S)
     }
   }
+  blurGray(gray, width, height, o.blurSigmaPx)
+  for (let p = 0; p < width * height; p++) {
+    const noisy = gray[p] + (o.noiseSigma > 0 ? gauss(rand) * o.noiseSigma : 0)
+    const v = Math.max(0, Math.min(255, Math.round(noisy)))
+    const i = p * 4
+    data[i] = v
+    data[i + 1] = v
+    data[i + 2] = v
+    data[i + 3] = 255
+  }
   return { data, width, height }
+}
+
+/**
+ * Scanner point-spread blur: three box passes approximating a Gaussian (the standard
+ * box-cascade construction), separable horizontal then vertical, edge-clamped, in place.
+ */
+function blurGray(gray: Float64Array, w: number, h: number, sigma: number): void {
+  if (sigma <= 0) return
+  const r = Math.max(1, Math.round(sigma))
+  const tmp = new Float64Array(w * h)
+  for (let pass = 0; pass < 3; pass++) {
+    for (let y = 0; y < h; y++) {
+      let acc = 0
+      const row = y * w
+      for (let x = -r; x <= r; x++) acc += gray[row + Math.min(w - 1, Math.max(0, x))]
+      for (let x = 0; x < w; x++) {
+        tmp[row + x] = acc / (2 * r + 1)
+        acc += gray[row + Math.min(w - 1, x + r + 1)] - gray[row + Math.max(0, x - r)]
+      }
+    }
+    for (let x = 0; x < w; x++) {
+      let acc = 0
+      for (let y = -r; y <= r; y++) acc += tmp[Math.min(h - 1, Math.max(0, y)) * w + x]
+      for (let y = 0; y < h; y++) {
+        gray[y * w + x] = acc / (2 * r + 1)
+        acc += tmp[Math.min(h - 1, y + r + 1) * w + x] - tmp[Math.max(0, y - r) * w + x]
+      }
+    }
+  }
 }
 
 function gauss(rand: () => number): number {
@@ -195,5 +234,17 @@ function sampleGray(
     if (Math.abs(y - yc) <= half) return o.lineGray
     break
   }
-  return o.baseGray
+  return o.baseGray + baseTexture(o, x, y)
+}
+
+/**
+ * Glossy top-infill texture on the base: periodic specular ridge bumps texturePitchMm apart,
+ * slightly tilted against the line direction, bright at the ridge crest (exponent-sharpened
+ * cosine) with a shallow dark valley between, matching the profile of a glossy real scan.
+ */
+function baseTexture(o: PaRenderOptions, x: number, y: number): number {
+  if (o.textureAmpGray <= 0) return 0
+  const phase = y + 0.13 * x
+  const bump = Math.max(0, Math.cos((2 * Math.PI * phase) / o.texturePitchMm)) ** o.ridgeExponent
+  return o.textureAmpGray * (bump - 0.25)
 }
