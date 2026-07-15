@@ -124,6 +124,131 @@ describe('analyzePaCoupon', () => {
     180000,
   )
 
+  // Regression for the glossy-scan failure the bounded half-amplitude edge finder fixed: scanner
+  // blur softens the line edges while sharp specular infill ridges put a stronger gradient on the
+  // base, which captured the old global-argmax edge finder (truth 0.036 was its worst case).
+  it.each([[0.012], [0.036], [0.048]])(
+    'recovers truePa %f on a glossy textured base under scanner blur',
+    async (truePa) => {
+      const cv = await getCv()
+      const bgr = rgbaToBgrMat(
+        cv,
+        renderPaScan({
+          truePa,
+          pxPerMm: PX_PER_MM,
+          blurSigmaPx: 1.5,
+          textureAmpGray: 90,
+          ridgeExponent: 20,
+          texturePitchMm: 0.7,
+        }),
+      )
+      try {
+        const r = analyzePaCoupon(cv, bgr, spec)
+        expect(r.success).toBe(true)
+        expect(Math.abs((r.bestPa as number) - truePa)).toBeLessThan(0.004)
+      } finally {
+        bgr.delete()
+      }
+    },
+    180000,
+  )
+
+  it('reports above-range with the sweep-top value when the truth lies above the sweep', async () => {
+    const cv = await getCv()
+    const bgr = rgbaToBgrMat(cv, renderPaScan({ truePa: 0.08, pxPerMm: PX_PER_MM }))
+    try {
+      const r = analyzePaCoupon(cv, bgr, spec)
+      expect(r.success).toBe(true)
+      expect(r.sweepBracket).toBe('above-range')
+      expect(r.bestLineIndex).toBe(spec.lineCount - 1)
+      expect(r.bestPa).toBeCloseTo(spec.paEnd, 6)
+      expect(r.sePa).toBeNull()
+    } finally {
+      bgr.delete()
+    }
+  }, 180000)
+
+  it('reports below-range with the sweep-bottom value when the truth lies below the sweep', async () => {
+    const cv = await getCv()
+    const bgr = rgbaToBgrMat(cv, renderPaScan({ truePa: -0.02, pxPerMm: PX_PER_MM }))
+    try {
+      const r = analyzePaCoupon(cv, bgr, spec)
+      expect(r.success).toBe(true)
+      expect(r.sweepBracket).toBe('below-range')
+      expect(r.bestLineIndex).toBe(0)
+      expect(r.bestPa).toBeCloseTo(spec.paStart, 6)
+      expect(r.sePa).toBeNull()
+    } finally {
+      bgr.delete()
+    }
+  }, 180000)
+
+  it('reports bracketed with a finite positive sePa for a mid-range truth', async () => {
+    const cv = await getCv()
+    const bgr = rgbaToBgrMat(cv, renderPaScan({ truePa: 0.03, pxPerMm: PX_PER_MM }))
+    try {
+      const r = analyzePaCoupon(cv, bgr, spec)
+      expect(r.success).toBe(true)
+      expect(r.sweepBracket).toBe('bracketed')
+      expect(r.sePa).not.toBeNull()
+      expect(r.sePa!).toBeGreaterThan(0)
+      expect(Number.isFinite(r.sePa!)).toBe(true)
+    } finally {
+      bgr.delete()
+    }
+  }, 180000)
+
+  it('reports the same sePa on repeated analyses of the same scan', async () => {
+    const cv = await getCv()
+    const first = rgbaToBgrMat(cv, renderPaScan({ truePa: 0.03, pxPerMm: 12 }))
+    const second = rgbaToBgrMat(cv, renderPaScan({ truePa: 0.03, pxPerMm: 12 }))
+    try {
+      const a = analyzePaCoupon(cv, first, spec)
+      const b = analyzePaCoupon(cv, second, spec)
+      expect(a.sePa).not.toBeNull()
+      expect(b.sePa).toBe(a.sePa)
+    } finally {
+      first.delete()
+      second.delete()
+    }
+  }, 180000)
+
+  it('reports a larger sePa on a noisier scan of the same truth', async () => {
+    const cv = await getCv()
+    const quiet = rgbaToBgrMat(cv, renderPaScan({ truePa: 0.03, pxPerMm: 12, noiseSigma: 2 }))
+    const noisy = rgbaToBgrMat(cv, renderPaScan({ truePa: 0.03, pxPerMm: 12, noiseSigma: 8 }))
+    try {
+      const rq = analyzePaCoupon(cv, quiet, spec)
+      const rn = analyzePaCoupon(cv, noisy, spec)
+      expect(rq.sePa).not.toBeNull()
+      expect(rn.sePa).not.toBeNull()
+      expect(rn.sePa!).toBeGreaterThan(rq.sePa!)
+    } finally {
+      quiet.delete()
+      noisy.delete()
+    }
+  }, 180000)
+
+  it('covers the truth within bestPa +/- 1.96 sePa about 95 percent of the time', async () => {
+    const cv = await getCv()
+    const runs = 40
+    let covered = 0
+    for (let seed = 1; seed <= runs; seed++) {
+      const bgr = rgbaToBgrMat(cv, renderPaScan({ truePa: 0.03, pxPerMm: 12, seed }))
+      try {
+        const r = analyzePaCoupon(cv, bgr, spec)
+        expect(r.success).toBe(true)
+        expect(r.sePa).not.toBeNull()
+        if (Math.abs((r.bestPa as number) - 0.03) <= 1.96 * r.sePa!) covered++
+      } finally {
+        bgr.delete()
+      }
+    }
+    // Binomial(40, 0.95) has mean 38 and sigma about 1.4; 34 is roughly 3 sigma below, so a real
+    // coverage failure trips it while sampling luck does not. (Capture run observed 39 of 40.)
+    expect(covered).toBeGreaterThanOrEqual(34)
+  }, 600000)
+
   it('fails with a contrast reason when lines match the base brightness', async () => {
     const cv = await getCv()
     const bgr = rgbaToBgrMat(

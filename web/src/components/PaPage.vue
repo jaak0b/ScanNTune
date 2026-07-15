@@ -244,6 +244,12 @@ const edgeShift = computed<{ start: number; end: number } | null>(() => {
   if (!r || !r.success || !s) return null
   return edgeShiftRange(s, r.bestLineIndex)
 })
+// Bulge-sign sweep coverage: non-null when the transition bulges say the true value lies outside
+// the printed range, carrying the direction.
+const outOfRange = computed<'above-range' | 'below-range' | null>(() => {
+  const b = result.value?.sweepBracket
+  return b === 'above-range' || b === 'below-range' ? b : null
+})
 function applyShift(): void {
   if (!edgeShift.value || analyzing.value) return
   paStart.value = Number(edgeShift.value.start.toFixed(4))
@@ -301,6 +307,10 @@ const stResult = computed(() => stProcessing.value?.result ?? null)
 const stLinesReadable = computed(() =>
   stResult.value ? stResult.value.lines.filter((l) => l.measured).length : 0,
 )
+const stOutOfRange = computed<'above-range' | 'below-range' | null>(() => {
+  const b = stResult.value?.sweepBracket
+  return b === 'above-range' || b === 'below-range' ? b : null
+})
 const stCorrection = computed(() => {
   const r = stResult.value
   const s = stAnalyzedSpec.value
@@ -533,7 +543,7 @@ const stCorrection = computed(() => {
         <div class="tiles mb-3">
           <MetricTile
             label="Best pressure advance"
-            :value="result.bestPa!.toFixed(4)"
+            :value="result.bestPa!.toFixed(4) + (result.sePa !== null ? ` ± ${result.sePa.toFixed(4)}` : '')"
             testid="pa-best"
           />
           <MetricTile
@@ -548,19 +558,42 @@ const stCorrection = computed(() => {
           />
         </div>
 
-        <div v-if="hasResolution" class="facts mb-3">
-          <ResolutionChip :measured-px-per-mm="result.measuredPxPerMm" testid="pa-resolution" />
+        <div class="facts mb-3">
+          <ResolutionChip
+            v-if="hasResolution"
+            :measured-px-per-mm="result.measuredPxPerMm"
+            testid="pa-resolution"
+          />
+          <span class="tip mt-0" data-testid="pa-bracket">
+            Sweep bracketed the optimum: {{ result.sweepBracket === 'bracketed' ? 'yes' : 'no' }}
+          </span>
+          <span v-if="outOfRange" class="tip mt-0" data-testid="pa-bracket-direction">
+            True value direction: {{ outOfRange === 'above-range' ? 'above the printed range' : 'below the printed range' }}
+          </span>
         </div>
 
-        <div v-if="edgeShift" class="warn-box mb-3" data-testid="pa-edge-warning">
+        <div v-if="edgeShift || outOfRange" class="warn-box mb-3" data-testid="pa-edge-warning">
           <v-icon color="warning" size="16" class="warn-icon">mdi-alert-outline</v-icon>
           <span>
-            <strong class="warn-lead">The optimum sits at the edge of the sweep,</strong>
-            so the true value may lie outside the tested range. Rerun with a shifted range:
-            {{ edgeShift.start.toFixed(4) }} to {{ edgeShift.end.toFixed(4) }}.
-            <v-btn size="x-small" variant="tonal" color="warning" class="ml-1" :disabled="analyzing" @click="applyShift">
-              Use shifted range
-            </v-btn>
+            <template v-if="outOfRange === 'above-range'">
+              <strong class="warn-lead">The true pressure advance lies above the printed range.</strong>
+              The value shown is the top of the range, not the optimum.
+            </template>
+            <template v-else-if="outOfRange === 'below-range'">
+              <strong class="warn-lead">The true pressure advance lies below the printed range.</strong>
+              The value shown is the bottom of the range, not the optimum.
+            </template>
+            <template v-else>
+              <strong class="warn-lead">The optimum sits at the edge of the sweep,</strong>
+              so the true value may lie outside the tested range.
+            </template>
+            <template v-if="edgeShift">
+              Rerun with a shifted range:
+              {{ edgeShift.start.toFixed(4) }} to {{ edgeShift.end.toFixed(4) }}.
+              <v-btn size="x-small" variant="tonal" color="warning" class="ml-1" :disabled="analyzing" @click="applyShift">
+                Use shifted range
+              </v-btn>
+            </template>
           </span>
         </div>
 
@@ -660,7 +693,7 @@ const stCorrection = computed(() => {
           <div class="tiles mb-3 mt-3">
             <MetricTile
               label="Best smooth time (s)"
-              :value="stResult.bestPa!.toFixed(4)"
+              :value="stResult.bestPa!.toFixed(4) + (stResult.sePa !== null ? ` ± ${stResult.sePa.toFixed(4)}` : '')"
               testid="pa-st-best"
             />
             <MetricTile
@@ -673,6 +706,23 @@ const stCorrection = computed(() => {
               :value="`${stLinesReadable} / ${stAnalyzedSpec!.lineCount}`"
               testid="pa-st-lines-readable"
             />
+          </div>
+          <div class="facts mb-3">
+            <span class="tip mt-0" data-testid="pa-st-bracket">
+              Sweep bracketed the optimum: {{ stResult.sweepBracket === 'bracketed' ? 'yes' : 'no' }}
+            </span>
+            <span v-if="stOutOfRange" class="tip mt-0" data-testid="pa-st-bracket-direction">
+              True value direction: {{ stOutOfRange === 'above-range' ? 'above the printed range' : 'below the printed range' }}
+            </span>
+          </div>
+          <div v-if="stOutOfRange" class="warn-box mb-3" data-testid="pa-st-edge-warning">
+            <v-icon color="warning" size="16" class="warn-icon">mdi-alert-outline</v-icon>
+            <span>
+              <strong class="warn-lead">
+                The true smooth time lies {{ stOutOfRange === 'above-range' ? 'above' : 'below' }} the printed range.
+              </strong>
+              The value shown is the range edge, not the optimum. Rerun with a shifted range.
+            </span>
           </div>
           <template v-if="stCorrection">
             <CodeBlock :code="stCorrection.code" data-testid="pa-st-code" />
