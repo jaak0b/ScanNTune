@@ -28,7 +28,13 @@ describe('real-scan PA regression', () => {
         expect(alignment.flipped).toBe(true)
         expect(alignment.rotationQuarterTurns).toBe(0)
 
+        const started = Date.now()
         const r = analyzePaCoupon(cv, bgr, spec)
+        const elapsedMs = Date.now() - started
+        // Guard against a reintroduced per-pixel kernel regression: the 35 MP scan must
+        // analyze well under two minutes even on slow CI.
+        expect(elapsedMs).toBeLessThan(120000)
+
         expect(r.success).toBe(true)
         expect(r.lines).toHaveLength(spec.lineCount)
         // Every line must yield a usable width profile (a majority of finite width samples).

@@ -85,6 +85,7 @@ export function analyzePaCoupon(
   spec: PaTestSpec,
   alignmentHolder?: { alignment?: PaAlignment },
   onProgress?: PaProgressCallback,
+  bootstrapSeed: number = BOOTSTRAP_SEED,
 ): PaResult {
   if (!image || image.empty()) throw new Error('Image is null or empty.')
 
@@ -209,6 +210,7 @@ export function analyzePaCoupon(
       })),
       g.transitionXsMm,
       spec.lineWidthMm,
+      bootstrapSeed,
     )
   }
 
@@ -280,8 +282,8 @@ function classifySweepBracket(bulges: number[]): 'bracketed' | 'above-range' | '
 // line's in-window deviations are resampled with replacement (counts preserved, steady medians
 // held fixed), the three RMS scores recomputed, and the vertex re-solved; the reported standard
 // error is the sample standard deviation of the replicate vertices. Clamped vertices stay in the
-// sample: the clamp is part of the estimator being bootstrapped. The RNG seed is fixed so a given
-// scan always reports the same value.
+// sample: the clamp is part of the estimator being bootstrapped. The RNG seed defaults to a fixed
+// value so a given scan reports the same value by default, but is a parameter so tests can vary it.
 const BOOTSTRAP_REPLICATES = 200
 const BOOTSTRAP_SEED = 1234567
 
@@ -289,6 +291,7 @@ function bootstrapSePa(
   bracket: { paValue: number; medianWidthMm: number; line: { samples: WidthSample[]; rejected: boolean[] } }[],
   transitionXsMm: [number, number],
   nominalWidthMm: number,
+  bootstrapSeed: number = BOOTSTRAP_SEED,
 ): number | null {
   const inWindow = (x: number) => transitionXsMm.some((t) => Math.abs(x - t) <= WINDOW_HALF_MM)
   // Per bracket line, the deviations the RMS score consumes: cleaned in-window samples relative
@@ -307,7 +310,7 @@ function bootstrapSePa(
   })
   if (devs.some((d) => d.length === 0)) return null
 
-  const rand = mulberry32(BOOTSTRAP_SEED)
+  const rand = mulberry32(bootstrapSeed)
   const vertices: number[] = []
   for (let b = 0; b < BOOTSTRAP_REPLICATES; b++) {
     const scores = devs.map((d) => {
