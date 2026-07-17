@@ -43,6 +43,16 @@ Edge cases: if the best line is at the sweep boundary (no bracket, no parabola t
 uncertainty is `null`, matching the existing behavior of skipping refinement. Clamped replicate
 vertices stay in the sample (the clamp is part of the estimator being bootstrapped).
 
+## Revision (2026-07-17): full-curve bootstrap
+
+The bootstrap now wraps the whole estimator, not just the bracket. Per replicate, every measured
+line's cleaned in-window deviations are resampled with replacement (counts preserved, steady
+medians fixed), all line scores are recomputed, and both the discrete argmin and the parabolic
+refinement are re-run (a replicate whose best line lands at a sweep edge contributes its discrete
+value and stays in the sample). The original bracket-only variant held the argmin fixed at the
+point estimate's line, so it ignored the jitter of the argmin itself and underestimated the
+standard error. On the golden scan this moves sePa from 0.00101 to 0.00114 (best PA unchanged at 0.03091).
+
 ## Where it lives and how it is shown
 
 - Module: `web/src/engine/pa/paAnalyzer.ts` computes and exposes `sePa: number | null` on the

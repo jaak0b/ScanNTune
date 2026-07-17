@@ -202,16 +202,7 @@ export function analyzePaCoupon(
       hi.paValue,
       hi.score,
     )
-    sePa = bootstrapSePa(
-      [lo.index, bestLineIndex, hi.index].map((i) => ({
-        paValue: lines[i].paValue,
-        medianWidthMm: lines[i].medianWidthMm,
-        line: cleaned[i]!,
-      })),
-      g.transitionXsMm,
-      spec.lineWidthMm,
-      bootstrapSeed,
-    )
+    sePa = bootstrapSePa(lines, cleaned, g.transitionXsMm, spec.lineWidthMm, bootstrapSeed)
   }
 
   const bulges = cleaned.map((c) => (c ? transitionBulge(c.samples, c.rejected, g.transitionXsMm) : NaN))
@@ -277,43 +268,54 @@ function classifySweepBracket(bulges: number[]): 'bracketed' | 'above-range' | '
   return 'bracketed'
 }
 
-// Nonparametric bootstrap (Efron 1979) of the parabolic vertex: B = 200 replicates, the textbook
-// choice for standard-error estimation (Efron and Tibshirani, ch. 6). Per replicate, each bracket
-// line's in-window deviations are resampled with replacement (counts preserved, steady medians
-// held fixed), the three RMS scores recomputed, and the vertex re-solved; the reported standard
-// error is the sample standard deviation of the replicate vertices. Clamped vertices stay in the
-// sample: the clamp is part of the estimator being bootstrapped. The RNG seed defaults to a fixed
-// value so a given scan reports the same value by default, but is a parameter so tests can vary it.
+// Nonparametric bootstrap (Efron 1979) of the full PA estimator: B = 200 replicates, the textbook
+// choice for standard-error estimation (Efron and Tibshirani, ch. 6). Per replicate, EVERY
+// measured line's cleaned in-window deviations are resampled with replacement (counts preserved,
+// steady medians held fixed), all line scores recomputed, and the whole estimator re-run: the
+// discrete argmin over the replicate score curve, then the parabolic vertex when the replicate
+// best line has a measured bracket (the discrete value otherwise, mirroring the point estimate's
+// sweep-edge behavior; such edge-clamped replicates stay in the sample). The reported standard
+// error is the sample standard deviation of the replicate estimates. A bracket-only bootstrap
+// (holding the argmin fixed at the point estimate's line) underestimates: it ignores the jitter
+// of the argmin itself, which the score noise moves between neighbouring lines. The RNG seed
+// defaults to a fixed value so a given scan reports the same value by default, but is a
+// parameter so tests can vary it.
 const BOOTSTRAP_REPLICATES = 200
 const BOOTSTRAP_SEED = 1234567
 
 function bootstrapSePa(
-  bracket: { paValue: number; medianWidthMm: number; line: { samples: WidthSample[]; rejected: boolean[] } }[],
+  lines: PaLineScore[],
+  cleaned: ({ samples: WidthSample[]; rejected: boolean[] } | null)[],
   transitionXsMm: [number, number],
   nominalWidthMm: number,
   bootstrapSeed: number = BOOTSTRAP_SEED,
 ): number | null {
   const inWindow = (x: number) => transitionXsMm.some((t) => Math.abs(x - t) <= WINDOW_HALF_MM)
-  // Per bracket line, the deviations the RMS score consumes: cleaned in-window samples relative
-  // to the (fixed) steady median, a gap counting the full nominal width.
-  const devs = bracket.map(({ medianWidthMm, line }) => {
+  // Per measured line, the deviations the RMS score consumes: cleaned in-window samples relative
+  // to the line's (fixed) steady median, a gap counting the full nominal width. Null where the
+  // line is unmeasured or has no in-window samples; those lines keep an Infinity score in every
+  // replicate, exactly as in the point estimate.
+  const devs: (number[] | null)[] = lines.map((l, li) => {
+    const c = cleaned[li]
+    if (!l.measured || !c) return null
     const d: number[] = []
-    for (let i = 0; i < line.samples.length; i++) {
-      if (!inWindow(line.samples[i].xMm) || line.rejected[i]) continue
+    for (let i = 0; i < c.samples.length; i++) {
+      if (!inWindow(c.samples[i].xMm) || c.rejected[i]) continue
       d.push(
-        Number.isFinite(line.samples[i].widthMm)
-          ? line.samples[i].widthMm - medianWidthMm
+        Number.isFinite(c.samples[i].widthMm)
+          ? c.samples[i].widthMm - l.medianWidthMm
           : nominalWidthMm,
       )
     }
-    return d
+    return d.length > 0 ? d : null
   })
-  if (devs.some((d) => d.length === 0)) return null
+  if (devs.every((d) => d === null)) return null
 
   const rand = mulberry32(bootstrapSeed)
-  const vertices: number[] = []
+  const estimates: number[] = []
   for (let b = 0; b < BOOTSTRAP_REPLICATES; b++) {
     const scores = devs.map((d) => {
+      if (!d) return Infinity
       let sum = 0
       for (let i = 0; i < d.length; i++) {
         const v = d[Math.floor(rand() * d.length)]
@@ -321,19 +323,29 @@ function bootstrapSePa(
       }
       return Math.sqrt(sum / d.length)
     })
-    vertices.push(
-      parabolicMinimum(
-        bracket[0].paValue,
-        scores[0],
-        bracket[1].paValue,
-        scores[1],
-        bracket[2].paValue,
-        scores[2],
-      ),
+    let best = -1
+    for (let i = 0; i < scores.length; i++) {
+      if (Number.isFinite(scores[i]) && (best < 0 || scores[i] < scores[best])) best = i
+    }
+    if (best < 0) continue
+    const loOk = best > 0 && Number.isFinite(scores[best - 1])
+    const hiOk = best < scores.length - 1 && Number.isFinite(scores[best + 1])
+    estimates.push(
+      loOk && hiOk
+        ? parabolicMinimum(
+            lines[best - 1].paValue,
+            scores[best - 1],
+            lines[best].paValue,
+            scores[best],
+            lines[best + 1].paValue,
+            scores[best + 1],
+          )
+        : lines[best].paValue,
     )
   }
-  const mean = vertices.reduce((a, v) => a + v, 0) / vertices.length
-  const variance = vertices.reduce((a, v) => a + (v - mean) ** 2, 0) / (vertices.length - 1)
+  if (estimates.length < 2) return null
+  const mean = estimates.reduce((a, v) => a + v, 0) / estimates.length
+  const variance = estimates.reduce((a, v) => a + (v - mean) ** 2, 0) / (estimates.length - 1)
   return Math.sqrt(variance)
 }
 

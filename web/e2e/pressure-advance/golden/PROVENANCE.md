@@ -36,7 +36,7 @@ an open gap against the multi-DPI convention and should be added when the owner 
 | field | value | tolerance | rationale |
 |---|---|---|---|
 | best pressure advance | 0.0309 | ± 0.004 | Pipeline output `bestPa = 0.03091`, inside the owner's truth band 0.024 to 0.032; the band is one sweep step (0.06 / 15 = 0.004), the flow's resolution limit. |
-| uncertainty (sePa) | 0.0010 | shown, finite | Pipeline output `sePa = 0.00101` (bootstrap standard error); the UI shows it as "± value" after the best PA. Asserted present and plausible, not pinned tighter than display rounding. |
+| uncertainty (sePa) | 0.0011 | shown, finite | Pipeline output `sePa = 0.00114` (full-curve bootstrap standard error); the UI shows it as "± value" after the best PA. Asserted present and plausible, not pinned tighter than display rounding. |
 | best line | 9 of 16 | exact | Pipeline `bestLineIndex = 8` (0-based), displayed 1-based. |
 | lines readable | 16 / 16 | exact | Every line yields a usable width profile. |
 | sweep bracket | bracketed (no out-of-range warning) | exact | Pipeline `sweepBracket = 'bracketed'`; the bulge sign changes inside the sweep, so no above-range or below-range warning is shown. |
