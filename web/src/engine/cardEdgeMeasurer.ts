@@ -1,6 +1,6 @@
 import type { Mat, OpenCv } from './opencv'
 import type { ScaleReferenceResult } from './types'
-import { median } from './math'
+import { mad, median, MAD_TO_SIGMA } from './math'
 import { analyzeThresholdBands, valueChannel } from './cvUtils'
 import { evaluateScanSetResolution } from './resolutionGate'
 
@@ -270,7 +270,7 @@ function esfGradientPeakOffsetMm(
   // The peak must stand above the smoothed derivative's own noise floor (median + 3 MAD sigmas).
   const daArr = Array.from(da)
   const med = median(daArr)
-  const sigma = 1.4826 * median(daArr.map((v) => Math.abs(v - med)))
+  const sigma = MAD_TO_SIGMA * mad(daArr)
   if (da[pi] <= med + EDGE_PEAK_MAD_SIGMAS * sigma) return null
 
   // 3-point parabolic refinement: safe here because the grid is uniform and the mm-domain
@@ -518,7 +518,7 @@ function fitEdgePass(
   const { c, m } = fitLine(ys, xs) // x = c + m*y
 
   const absResiduals = ys.map((yy, i) => Math.abs(xs[i] - (m * yy + c)))
-  const sigma = 1.4826 * median(absResiduals)
+  const sigma = MAD_TO_SIGMA * median(absResiduals)
   if (sigma > 1e-6) {
     const y2: number[] = []
     const x2: number[] = []
@@ -566,7 +566,7 @@ function subPixEdge(data: Uint8Array, cols: number, y: number, xLo: number, xHi:
   }
   if (bx <= xLo || bx >= xHi) return NaN
   const med = median(mags)
-  const sigma = 1.4826 * median(mags.map((g) => Math.abs(g - med)))
+  const sigma = MAD_TO_SIGMA * mad(mags)
   if (best <= med + EDGE_PEAK_MAD_SIGMAS * sigma) return NaN // indistinguishable from the row's noise
 
   const gm = Math.abs(data[row + bx] - data[row + bx - 2])

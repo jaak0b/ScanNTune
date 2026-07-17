@@ -5,6 +5,7 @@ import { tierRampMm } from './couponGeometry'
 import type { IsAlignment } from './isFiducialAligner'
 import { mmToPx } from './isFiducialAligner'
 import { median } from '../math'
+import { bilinear } from '../subpixelEdge'
 import { isUsableReference, referenceAlongDirection } from '../scannerCalibration'
 import type { ScaleReference } from '../scannerCalibration'
 
@@ -304,20 +305,4 @@ function interpolateGaps(y: Float64Array): void {
     }
   }
   if (lastValid >= 0) for (let i = lastValid + 1; i < n; i++) y[i] = y[lastValid]
-}
-
-// Bilinear intensity at a fractional pixel position; NaN outside the image.
-function bilinear(data: Uint8Array, cols: number, rows: number, x: number, y: number): number {
-  const x0 = Math.floor(x)
-  const y0 = Math.floor(y)
-  if (x0 < 0 || y0 < 0 || x0 + 1 >= cols || y0 + 1 >= rows) return NaN
-  const fx = x - x0
-  const fy = y - y0
-  const p = (yy: number, xx: number) => data[yy * cols + xx]
-  return (
-    p(y0, x0) * (1 - fx) * (1 - fy) +
-    p(y0, x0 + 1) * fx * (1 - fy) +
-    p(y0 + 1, x0) * (1 - fx) * fy +
-    p(y0 + 1, x0 + 1) * fx * fy
-  )
 }

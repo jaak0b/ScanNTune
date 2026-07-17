@@ -279,6 +279,14 @@ shipped source, comments, or UI text: they are guidance for how to work, not doc
     lives in exactly one engine module consumed by all flows; a per-flow copy of shared logic is a defect
     to be fixed on sight, and a change that adds one must not pass review.
 
+14. **Always use superpowers' `subagent-driven-development` for implementation work; give every subagent a
+    correct, specific title; never run more than 1 Fable agent at a time.** Never spawn a second Fable
+    agent while one is still running, no matter how urgent the remaining work feels or how much faster
+    finishing a batch would go: Fable is the most expensive tier, and an uncontrolled fan-out there can
+    exhaust the owner's usage budget in one shot. This is a hard limit, not a target to approach. Every
+    subagent's title must specifically name what it's doing, not a generic label: a reader should be able
+    to tell subagents apart from their titles alone.
+
 **Verification bar.** The standard for "verified" is `npm run build` plus `npm test` plus `npm run e2e` all
 green (and, for any change to the measurement pipeline, the synthetic-fixture validation of rule 1). That
 automated gate is sufficient: do not additionally launch a dev server for manual browser verification unless
@@ -293,3 +301,12 @@ to locate or map code (read-only), `cavecrew-builder` for a surgical one or two 
 or more files), and `cavecrew-reviewer` to review a diff, branch, or file. Only fall back to a general agent
 when no cavecrew type fits, chiefly a multi-file implementation, since there is no cavecrew multi-file
 builder.
+
+**Review subagents never extend the benefit of the doubt.** Any subagent dispatched to review code
+(`cavecrew-reviewer` or otherwise) must treat every existing assumption or invariant in the code under
+review (input already validated, edge case already handled, branch unreachable, and so on) as unverified
+until it actually checks, never as true just because the code is already there and presumably works.
+This is not a demand to always find a bug: "I checked this specific assumption and it holds" is a
+legitimate, complete answer, and an empty findings list is a valid outcome, not a failure to look hard
+enough. The point is to remove unearned trust in existing code, not to manufacture findings to avoid
+reporting zero.

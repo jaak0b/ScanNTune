@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest'
-import { getCv, decodeFixtureBgr, decodeE2eFixtureBgr } from '../helpers/cv'
+import { getCv, decodeFixtureBgr, decodeFlowGoldenJpgBgr } from '../helpers/cv'
 import { analyzeCoupon } from '../../src/engine/couponAnalyzer'
 import { defaultCouponSpec } from '../../src/engine/types'
 
@@ -8,22 +8,24 @@ import { defaultCouponSpec } from '../../src/engine/types'
 // from the image border: a backing sheet that doesn't cover the scan bed leaves bright lid margins on
 // the border, which flipped the mask and made the detector return dust specks instead of holes. Both
 // polarities are tried and validated against the coupon grid; a scan where neither fits reports why.
+// The real-scan cases pin the standard bright-backing polarity on the skew-shrinkage golden scans;
+// the synthetic cases below cover the inverted and bright-margin polarities.
 
 describe('background polarity resolution', () => {
-  it.each(['realxy-0.png', 'realxy-90.png'])(
-    'aligns the real scan with bright lid margins (%s)',
+  it.each(['xy_0d_300dpi_black_white.jpg', 'xy_90d_300dpi_black_white.jpg'])(
+    'aligns the real scan with a bright backing (%s)',
     async (name) => {
       const cv = await getCv()
-      const image = decodeE2eFixtureBgr(cv, name)
+      const image = decodeFlowGoldenJpgBgr(cv, 'skew-shrinkage', name)
       try {
         const result = analyzeCoupon(cv, image, { coupon: defaultCouponSpec(), pxPerMm: null })
         expect(result.aligned).toBe(true)
         expect(result.ringsDetected).toBe(23)
-        // The scanner is ~23.6 px/mm (measured via the card); the fit must land in that ballpark.
-        expect(result.measuredPxPerMmX).toBeGreaterThan(23.0)
-        expect(result.measuredPxPerMmX).toBeLessThan(24.2)
-        expect(result.measuredPxPerMmY).toBeGreaterThan(23.0)
-        expect(result.measuredPxPerMmY).toBeLessThan(24.2)
+        // The scanner is ~11.796 px/mm at 300 dpi (measured via the card); the fit must land there.
+        expect(result.measuredPxPerMmX).toBeGreaterThan(11.6)
+        expect(result.measuredPxPerMmX).toBeLessThan(12.0)
+        expect(result.measuredPxPerMmY).toBeGreaterThan(11.6)
+        expect(result.measuredPxPerMmY).toBeLessThan(12.0)
       } finally {
         image.delete()
       }
@@ -93,3 +95,5 @@ describe('background polarity resolution', () => {
     }
   })
 })
+
+

@@ -29,20 +29,28 @@ export function decodeFixtureBgr(cv: OpenCv, name: string): Mat {
   return decodePngBgr(cv, new URL(`../fixtures/${name}`, import.meta.url))
 }
 
-// The real-scan fixtures shared with the Playwright suite.
-export function decodeE2eFixtureBgr(cv: OpenCv, name: string): Mat {
-  return decodePngBgr(cv, new URL(`../../e2e/fixtures/${name}`, import.meta.url))
+// A real-scan golden JPEG shared with a Playwright flow suite (web/e2e/<flow>/golden).
+export function decodeFlowGoldenJpgBgr(cv: OpenCv, flow: string, name: string): Mat {
+  return decodeJpgBgr(cv, new URL(`../../e2e/${flow}/golden/${name}`, import.meta.url))
 }
 
 // The app accepts JPEG scans through createImageBitmap, so the JPEG fixture path mirrors a real upload.
 export function decodeJpgFixtureBgr(cv: OpenCv, name: string): Mat {
+  return decodeJpgBgr(cv, new URL(`../fixtures/${name}`, import.meta.url))
+}
+
+// The wide-gap EM golden scans shared with the Playwright flow suite (web/e2e/flow/golden).
+export function decodeGoldenJpgBgr(cv: OpenCv, name: string): Mat {
+  return decodeJpgBgr(cv, new URL(`../../e2e/flow/golden/${name}`, import.meta.url))
+}
+
+function decodeJpgBgr(cv: OpenCv, url: URL): Mat {
   const jpeg = nodeRequire('jpeg-js') as {
     decode: (
       data: Buffer,
       opts: { useTArray: boolean; maxMemoryUsageInMB: number },
     ) => { data: Uint8Array; width: number; height: number }
   }
-  const url = new URL(`../fixtures/${name}`, import.meta.url)
   // A 36 MP flatbed scan needs about 1.5 GB of decoder working buffers; 4096 gives headroom for the
   // largest scans the app accepts without capping real fixtures (jpeg-js defaults to 512 MB).
   const img = jpeg.decode(readFileSync(fileURLToPath(url)), { useTArray: true, maxMemoryUsageInMB: 4096 })

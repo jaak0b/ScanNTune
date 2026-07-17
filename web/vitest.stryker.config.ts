@@ -35,7 +35,7 @@ export default defineConfig({
       'tests/engine/em/emOverlayRenderer.spec.ts',
       'tests/engine/em/fiducialAligner.spec.ts',
       'tests/engine/em/gapMeasurer.spec.ts',
-      'tests/engine/em/realScan.spec.ts',
+      'tests/engine/em/realScanWidegapPair.spec.ts',
       'tests/engine/is/isAnalyzer.spec.ts',
       'tests/engine/is/isOverlayRenderer.spec.ts',
       'tests/engine/pa/fiducialAligner.spec.ts',

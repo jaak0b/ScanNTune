@@ -41,8 +41,15 @@ export function resolutionBadge(
   return { text: 'Wrong resolution', explanation: verdict.reason ?? '' }
 }
 
+/** Whether a per-scan measured resolution figure is usable for display. */
+export function hasMeasuredResolution(
+  measuredPxPerMm: number | null | undefined,
+): measuredPxPerMm is number {
+  return measuredPxPerMm != null && measuredPxPerMm > 0
+}
+
 /** The raw per-scan diagnostic value for a "Resolution" row, from a measured px/mm figure. */
 export function resolutionRowValue(measuredPxPerMm: number | null | undefined): string {
-  if (measuredPxPerMm == null || !(measuredPxPerMm > 0)) return 'Not resolved'
+  if (!hasMeasuredResolution(measuredPxPerMm)) return 'Not resolved'
   return `about ${Math.round(measuredPxPerMm * 25.4)} dpi`
 }

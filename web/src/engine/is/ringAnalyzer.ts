@@ -78,7 +78,7 @@ const AGREEMENT_MIN_HZ = 2
  * resonance lies inside the configured shaper's stopband.
  */
 const MAX_CI95_REL = 0.1
-import { MAD_TO_SIGMA, medianStandardError } from '../math'
+import { MAD_TO_SIGMA, mad, median, medianStandardError } from '../math'
 
 export interface RingModelParams {
   /** Background line at the fit-window start, mm. */
@@ -352,13 +352,6 @@ function rms(y: Float64Array, from: number, to: number): number {
   return c > 0 ? Math.sqrt(s / c) : 0
 }
 
-function medianOf(values: number[]): number {
-  const sorted = values.slice().sort((a, b) => a - b)
-  const n = sorted.length
-  if (n === 0) return 0
-  return n % 2 === 1 ? sorted[(n - 1) / 2] : (sorted[n / 2 - 1] + sorted[n / 2]) / 2
-}
-
 /** Damping grid of the variable projection search (log-spaced over the physical range). */
 const ZETA_GRID = [0.001, 0.002, 0.005, 0.01, 0.02, 0.035, 0.05, 0.075, 0.1, 0.15, 0.22, 0.3, 0.4]
 /** Half-width of the frequency search around the periodogram seed, as a fraction. */
@@ -616,7 +609,7 @@ export function poolAxisFits(fits: LineFit[], speedsMmS: number[], lineSpeeds: n
   }
 
   const freqs = accepted.map((a) => a.fit.params!.frequencyHz)
-  const fMedian = medianOf(freqs)
+  const fMedian = median(freqs)
   const tolerance = Math.max(AGREEMENT_MIN_HZ, AGREEMENT_REL * fMedian)
 
   // Speed invariance: the ringing frequency is a machine property, independent of the print
@@ -627,7 +620,7 @@ export function poolAxisFits(fits: LineFit[], speedsMmS: number[], lineSpeeds: n
     const tierMedians: number[] = []
     for (const v of speedsMmS) {
       const tier = accepted.filter((a) => a.speed === v).map((a) => a.fit.params!.frequencyHz)
-      if (tier.length > 0) tierMedians.push(medianOf(tier))
+      if (tier.length > 0) tierMedians.push(median(tier))
     }
     if (tierMedians.length > 1 && Math.max(...tierMedians) - Math.min(...tierMedians) > tolerance) {
       return refuse(
@@ -639,8 +632,7 @@ export function poolAxisFits(fits: LineFit[], speedsMmS: number[], lineSpeeds: n
   }
 
   // Replicate agreement: the robust spread of the per-line frequencies.
-  const mad = medianOf(freqs.map((f) => Math.abs(f - fMedian)))
-  const robustSigma = MAD_TO_SIGMA * mad
+  const robustSigma = MAD_TO_SIGMA * mad(freqs)
   if (robustSigma > tolerance) {
     return refuse(
       'The lines of this axis disagree on the ringing frequency (the replicate spread exceeds ' +
@@ -653,7 +645,7 @@ export function poolAxisFits(fits: LineFit[], speedsMmS: number[], lineSpeeds: n
   const n = accepted.length
   const seReplicate = medianStandardError(freqs)
   const crbSes = accepted.map((a) => a.fit.frequencySeHz).filter((s): s is number => s !== null)
-  const seCrb = crbSes.length > 0 ? medianOf(crbSes) / Math.sqrt(n) : 0
+  const seCrb = crbSes.length > 0 ? median(crbSes) / Math.sqrt(n) : 0
   const se = Math.max(seReplicate, seCrb)
   const ci95 = 1.96 * se
   if (ci95 > MAX_CI95_REL * fMedian) {
@@ -668,9 +660,9 @@ export function poolAxisFits(fits: LineFit[], speedsMmS: number[], lineSpeeds: n
     accepted: true,
     refusals: [],
     frequencyHz: fMedian,
-    dampingRatio: medianOf(accepted.map((a) => a.fit.params!.dampingRatio)),
+    dampingRatio: median(accepted.map((a) => a.fit.params!.dampingRatio)),
     frequencyCi95Hz: ci95,
-    amplitudeMm: medianOf(accepted.map((a) => a.fit.params!.ringAmpMm)),
+    amplitudeMm: median(accepted.map((a) => a.fit.params!.ringAmpMm)),
     linesUsed: n,
   }
 }

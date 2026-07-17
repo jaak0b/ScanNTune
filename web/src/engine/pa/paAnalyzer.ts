@@ -7,33 +7,50 @@ import type { PaAlignment } from './fiducialAligner'
 import { assessLineBackdrop, lineGatePositions, measureLineWidthProfile } from './lineMeasurer'
 import type { WidthSample } from './lineMeasurer'
 import { sampleBgrTriples, selectMeasurementChannel } from '../cvUtils'
-import { median } from '../math'
+import { hampelOutliers, median, mulberry32 } from '../math'
 import { evaluateScanSetResolution } from '../resolutionGate'
 
 // Turns an aligned PA coupon scan into a pressure-advance estimate. Each test line is profiled
-// with measureLineWidthProfile and scored by the RMS width deviation inside +/- 2 mm windows
-// around the two speed transitions, relative to the line's steady-state median width outside the
-// windows. The best PA is the discrete argmin over lines refined by three-point parabolic vertex
-// interpolation over (paValue, score), the same vertex model the sub-pixel edge refinement uses.
+// with measureLineWidthProfile, its width samples are cleaned with a Hampel identifier (isolated
+// scan artifacts such as dust or infill glare reject; NaN gaps pass through as gaps), and the
+// line is scored by the RMS width deviation inside +/- 2 mm windows around the two speed
+// transitions, relative to the line's steady-state median width outside the windows. The best PA
+// is the discrete argmin over lines refined by three-point parabolic vertex interpolation over
+// (paValue, score), the same vertex model the sub-pixel edge refinement uses.
 
 const WINDOW_HALF_MM = 2
+// Hampel identifier parameters over the 0.25 mm-stepped width series: a +/- 2 mm local window
+// (matching the transition-window scale) and a conservative 4-sigma rejection threshold.
+const HAMPEL_HALF_WINDOW = 8
+const HAMPEL_N_SIGMA = 4
 
 export function scoreLine(
   samples: WidthSample[],
   transitionXsMm: [number, number],
   nominalWidthMm: number,
+  rejected?: boolean[],
 ): { score: number; medianWidthMm: number } {
   const inWindow = (x: number) => transitionXsMm.some((t) => Math.abs(x - t) <= WINDOW_HALF_MM)
-  const steady = samples.filter((s) => !inWindow(s.xMm) && Number.isFinite(s.widthMm))
-  const med = median(steady.map((s) => s.widthMm))
-  const windowSamples = samples.filter((s) => inWindow(s.xMm))
-  let sum = 0
-  for (const s of windowSamples) {
-    // A gap (NaN) inside a window is maximal evidence of a defect: count the full nominal width.
-    const dev = Number.isFinite(s.widthMm) ? s.widthMm - med : nominalWidthMm
-    sum += dev * dev
+  const isRejected = (i: number) => rejected?.[i] === true
+  const steady: number[] = []
+  for (let i = 0; i < samples.length; i++) {
+    if (!inWindow(samples[i].xMm) && Number.isFinite(samples[i].widthMm) && !isRejected(i)) {
+      steady.push(samples[i].widthMm)
+    }
   }
-  return { score: Math.sqrt(sum / Math.max(windowSamples.length, 1)), medianWidthMm: med }
+  const med = median(steady)
+  let sum = 0
+  let n = 0
+  for (let i = 0; i < samples.length; i++) {
+    if (!inWindow(samples[i].xMm)) continue
+    // A cleaned outlier is a scan artifact, not print evidence: excluded, never a defect.
+    if (isRejected(i)) continue
+    // A gap (NaN) inside a window is maximal evidence of a defect: count the full nominal width.
+    const dev = Number.isFinite(samples[i].widthMm) ? samples[i].widthMm - med : nominalWidthMm
+    sum += dev * dev
+    n++
+  }
+  return { score: Math.sqrt(sum / Math.max(n, 1)), medianWidthMm: med }
 }
 
 /**
@@ -68,6 +85,7 @@ export function analyzePaCoupon(
   spec: PaTestSpec,
   alignmentHolder?: { alignment?: PaAlignment },
   onProgress?: PaProgressCallback,
+  bootstrapSeed: number = BOOTSTRAP_SEED,
 ): PaResult {
   if (!image || image.empty()) throw new Error('Image is null or empty.')
 
@@ -110,6 +128,9 @@ export function analyzePaCoupon(
     },
   )
   const lines: PaLineScore[] = []
+  // Per-line cleaned width series, kept for the bulge diagnostic and the bootstrap; index-aligned
+  // with `lines`, null where a line was unmeasured.
+  const cleaned: ({ samples: WidthSample[]; rejected: boolean[] } | null)[] = []
   try {
     if (backdrop.failure) {
       return {
@@ -135,10 +156,17 @@ export function analyzePaCoupon(
           medianWidthMm: NaN,
           measured: false,
         })
+        cleaned.push(null)
         continue
       }
-      const { score, medianWidthMm } = scoreLine(samples, g.transitionXsMm, spec.lineWidthMm)
+      const rejected = hampelOutliers(
+        samples.map((s) => s.widthMm),
+        HAMPEL_HALF_WINDOW,
+        HAMPEL_N_SIGMA,
+      )
+      const { score, medianWidthMm } = scoreLine(samples, g.transitionXsMm, spec.lineWidthMm, rejected)
       lines.push({ index: i, paValue: paValueForLine(spec, i), score, medianWidthMm, measured: true })
+      cleaned.push({ samples, rejected })
     }
   } finally {
     gray.delete()
@@ -162,6 +190,7 @@ export function analyzePaCoupon(
   // At a sweep edge (or next to an unmeasured neighbour) there is no bracket to interpolate in;
   // report the discrete value. The UI can detect the edge case via bestLineIndex itself.
   let bestPa = lines[bestLineIndex].paValue
+  let sePa: number | null = null
   const lo = lines[bestLineIndex - 1]
   const hi = lines[bestLineIndex + 1]
   if (lo?.measured && hi?.measured) {
@@ -173,7 +202,10 @@ export function analyzePaCoupon(
       hi.paValue,
       hi.score,
     )
+    sePa = bootstrapSePa(lines, cleaned, g.transitionXsMm, spec.lineWidthMm, bootstrapSeed)
   }
+
+  const bulges = cleaned.map((c) => (c ? transitionBulge(c.samples, c.rejected, g.transitionXsMm) : NaN))
 
   return {
     success: true,
@@ -181,10 +213,140 @@ export function analyzePaCoupon(
     lines,
     bestLineIndex,
     bestPa,
+    sweepBracket: classifySweepBracket(bulges),
+    sePa,
     measuredPxPerMm: perpPxPerMm,
     flipped: alignment.flipped,
     rotationQuarterTurns: alignment.rotationQuarterTurns,
   }
+}
+
+/**
+ * Signed median transition bulge of a line: the deceleration-window median width deviation minus
+ * the acceleration-window one, both relative to the steady-state median, over the cleaned finite
+ * samples. Too-low PA bulges at the deceleration transition (positive), too-high PA starves it
+ * (negative), so the sign points at where the optimum lies. NaN when a window or the steady
+ * region has no usable samples.
+ */
+function transitionBulge(
+  samples: WidthSample[],
+  rejected: boolean[],
+  transitionXsMm: [number, number],
+): number {
+  const usable = (i: number) => Number.isFinite(samples[i].widthMm) && !rejected[i]
+  const pick = (t: number) => {
+    const v: number[] = []
+    for (let i = 0; i < samples.length; i++) {
+      if (Math.abs(samples[i].xMm - t) <= WINDOW_HALF_MM && usable(i)) v.push(samples[i].widthMm)
+    }
+    return v
+  }
+  const steady: number[] = []
+  for (let i = 0; i < samples.length; i++) {
+    if (!transitionXsMm.some((t) => Math.abs(samples[i].xMm - t) <= WINDOW_HALF_MM) && usable(i)) {
+      steady.push(samples[i].widthMm)
+    }
+  }
+  const [t1, t2] = transitionXsMm
+  const w1 = pick(t1)
+  const w2 = pick(t2)
+  if (w1.length === 0 || w2.length === 0 || steady.length === 0) return NaN
+  const sMed = median(steady)
+  return (median(w2) - sMed) - (median(w1) - sMed)
+}
+
+/**
+ * Sign test over the per-line bulges: a bulge column that never changes sign means the sweep did
+ * not bracket the optimum (all positive: the true value lies above the range; all negative:
+ * below it). Fewer than 3 finite bulges is too little evidence to claim anything but bracketed.
+ */
+function classifySweepBracket(bulges: number[]): 'bracketed' | 'above-range' | 'below-range' {
+  const finite = bulges.filter((b) => Number.isFinite(b) && b !== 0)
+  if (finite.length < 3) return 'bracketed'
+  if (finite.every((b) => b > 0)) return 'above-range'
+  if (finite.every((b) => b < 0)) return 'below-range'
+  return 'bracketed'
+}
+
+// Nonparametric bootstrap (Efron 1979) of the full PA estimator: B = 200 replicates, the textbook
+// choice for standard-error estimation (Efron and Tibshirani, ch. 6). Per replicate, EVERY
+// measured line's cleaned in-window deviations are resampled with replacement (counts preserved,
+// steady medians held fixed), all line scores recomputed, and the whole estimator re-run: the
+// discrete argmin over the replicate score curve, then the parabolic vertex when the replicate
+// best line has a measured bracket (the discrete value otherwise, mirroring the point estimate's
+// sweep-edge behavior; such edge-clamped replicates stay in the sample). The reported standard
+// error is the sample standard deviation of the replicate estimates. A bracket-only bootstrap
+// (holding the argmin fixed at the point estimate's line) underestimates: it ignores the jitter
+// of the argmin itself, which the score noise moves between neighbouring lines. The RNG seed
+// defaults to a fixed value so a given scan reports the same value by default, but is a
+// parameter so tests can vary it.
+const BOOTSTRAP_REPLICATES = 200
+const BOOTSTRAP_SEED = 1234567
+
+function bootstrapSePa(
+  lines: PaLineScore[],
+  cleaned: ({ samples: WidthSample[]; rejected: boolean[] } | null)[],
+  transitionXsMm: [number, number],
+  nominalWidthMm: number,
+  bootstrapSeed: number = BOOTSTRAP_SEED,
+): number | null {
+  const inWindow = (x: number) => transitionXsMm.some((t) => Math.abs(x - t) <= WINDOW_HALF_MM)
+  // Per measured line, the deviations the RMS score consumes: cleaned in-window samples relative
+  // to the line's (fixed) steady median, a gap counting the full nominal width. Null where the
+  // line is unmeasured or has no in-window samples; those lines keep an Infinity score in every
+  // replicate, exactly as in the point estimate.
+  const devs: (number[] | null)[] = lines.map((l, li) => {
+    const c = cleaned[li]
+    if (!l.measured || !c) return null
+    const d: number[] = []
+    for (let i = 0; i < c.samples.length; i++) {
+      if (!inWindow(c.samples[i].xMm) || c.rejected[i]) continue
+      d.push(
+        Number.isFinite(c.samples[i].widthMm)
+          ? c.samples[i].widthMm - l.medianWidthMm
+          : nominalWidthMm,
+      )
+    }
+    return d.length > 0 ? d : null
+  })
+  if (devs.every((d) => d === null)) return null
+
+  const rand = mulberry32(bootstrapSeed)
+  const estimates: number[] = []
+  for (let b = 0; b < BOOTSTRAP_REPLICATES; b++) {
+    const scores = devs.map((d) => {
+      if (!d) return Infinity
+      let sum = 0
+      for (let i = 0; i < d.length; i++) {
+        const v = d[Math.floor(rand() * d.length)]
+        sum += v * v
+      }
+      return Math.sqrt(sum / d.length)
+    })
+    let best = -1
+    for (let i = 0; i < scores.length; i++) {
+      if (Number.isFinite(scores[i]) && (best < 0 || scores[i] < scores[best])) best = i
+    }
+    if (best < 0) continue
+    const loOk = best > 0 && Number.isFinite(scores[best - 1])
+    const hiOk = best < scores.length - 1 && Number.isFinite(scores[best + 1])
+    estimates.push(
+      loOk && hiOk
+        ? parabolicMinimum(
+            lines[best - 1].paValue,
+            scores[best - 1],
+            lines[best].paValue,
+            scores[best],
+            lines[best + 1].paValue,
+            scores[best + 1],
+          )
+        : lines[best].paValue,
+    )
+  }
+  if (estimates.length < 2) return null
+  const mean = estimates.reduce((a, v) => a + v, 0) / estimates.length
+  const variance = estimates.reduce((a, v) => a + (v - mean) ** 2, 0) / (estimates.length - 1)
+  return Math.sqrt(variance)
 }
 
 function failure(reason: string): PaResult {
@@ -194,6 +356,8 @@ function failure(reason: string): PaResult {
     lines: [],
     bestLineIndex: null,
     bestPa: null,
+    sweepBracket: null,
+    sePa: null,
     measuredPxPerMm: null,
     flipped: false,
     rotationQuarterTurns: 0,

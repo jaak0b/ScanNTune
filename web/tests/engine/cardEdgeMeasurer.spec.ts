@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { describe, it, expect } from 'vitest'
 import { fileURLToPath } from 'node:url'
-import { getCv, syntheticCard, blankGray, decodeE2eFixtureBgr, decodePngFileBgr } from '../helpers/cv'
+import { getCv, syntheticCard, blankGray, decodePngFileBgr } from '../helpers/cv'
 import { measureCard } from '../../src/engine/cardEdgeMeasurer'
 import type { Mat, OpenCv } from '../../src/engine/opencv'
 
@@ -171,12 +171,16 @@ describe('card edge measurer', () => {
     }
   }, 60000)
 
-  // The real 600 dpi card scan the e2e suite uses: about 23.6 px/mm.
+  // The real 600 dpi card scan the e2e suite uses: about 23.6 px/mm (per the card-calibration
+  // golden PROVENANCE the app displays 23.584 px/mm for this scan at 85.55 mm entered).
   it('the real 600 dpi card scan recovers ~23.6 px/mm', async () => {
     const cv = await getCv()
-    const img = decodeE2eFixtureBgr(cv, 'card.png')
+    const img = decodePngFileBgr(
+      cv,
+      fileURLToPath(new URL('../../e2e/card-calibration/golden/card_600dpi.png', import.meta.url)),
+    )
     try {
-      const r = measureCard(cv, img, 85.5, 600)
+      const r = measureCard(cv, img, 85.55, 600)
       expect(r.success).toBe(true)
       expect(r.pxPerMm).toBeGreaterThan(23.3)
       expect(r.pxPerMm).toBeLessThan(23.9)

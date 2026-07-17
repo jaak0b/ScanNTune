@@ -42,6 +42,43 @@ describe('measureLineWidthProfile', () => {
     }
   }, 120000)
 
+  it('measures nominal width when base ridges out-gradient the blurred line edges', async () => {
+    // Glossy-scan model: scanner blur softens the line-edge gradient below the gradient of the
+    // sharp specular infill ridges next to the line. A global gradient argmax locks onto the
+    // ridge instead of the edge; the flank-bounded half-amplitude edge must not.
+    const cv = await getCv()
+    const truePa = paValueForLine(spec, 8)
+    const bgr = rgbaToBgrMat(
+      cv,
+      renderPaScan({
+        truePa,
+        noiseSigma: 2,
+        pxPerMm: 24,
+        blurSigmaPx: 1.5,
+        textureAmpGray: 90,
+        ridgeExponent: 20,
+        texturePitchMm: 0.7,
+      }),
+    )
+    const gray = valueChannel(cv, bgr)
+    try {
+      const al = alignPaCoupon(cv, bgr, spec)
+      expect(al.success).toBe(true)
+
+      const uniform = measureLineWidthProfile(cv, gray, al, spec, 8)
+      const widths = uniform.map((s) => s.widthMm).filter((w) => Number.isFinite(w))
+      expect(widths.length).toBeGreaterThan(uniform.length * 0.9)
+      const mean = widths.reduce((a, b) => a + b, 0) / widths.length
+      expect(mean).toBeGreaterThan(spec.lineWidthMm * 0.7)
+      expect(mean).toBeLessThan(spec.lineWidthMm * 1.3)
+      const sd = Math.sqrt(widths.reduce((a, b) => a + (b - mean) ** 2, 0) / widths.length)
+      expect(sd / mean).toBeLessThan(0.12)
+    } finally {
+      bgr.delete()
+      gray.delete()
+    }
+  }, 120000)
+
   it('recovers nominal width with light lines on a dark base', async () => {
     const cv = await getCv()
     const truePa = paValueForLine(spec, 8)

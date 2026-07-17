@@ -2,17 +2,11 @@ import type { Mat, OpenCv } from '../opencv'
 import type { IsTestSpec } from './types'
 import type { IsCouponGeometry } from './couponGeometry'
 import { isCouponGeometry } from './couponGeometry'
-import {
-  analyzeThresholdBands,
-  deepestFailure,
-  majorityFilterBinary,
-  roiAround,
-  valueChannel,
-} from '../cvUtils'
+import { analyzeThresholdBands, deepestFailure, valueChannel } from '../cvUtils'
 import { solveCornerHoleCandidates } from '../cornerFiducialSolver'
-import type { AffineMmToPx, CornerCandidate, Point } from '../cornerFiducialSolver'
+import type { AffineMmToPx, CornerCandidate } from '../cornerFiducialSolver'
+import { locatePlateFiducialHoles } from '../plateFiducialLocator'
 import { median } from '../math'
-import { MIN_ALIGN_PX_PER_MM } from '../resolutionGate'
 
 // Locates the IS coupon's three square fiducial holes in a scan and solves the
 // exactly-determined affine mapping coupon-frame millimetres to scan pixels, following the EM
@@ -123,183 +117,60 @@ function fail(
 // One alignment attempt on one threshold band's binary (coupon plate assumed white). `gray`
 // is the scan's value channel, sampled to disambiguate the corner correspondence.
 function tryAlign(cv: OpenCv, objectWhite: Mat, gray: Mat, g: IsCouponGeometry): AlignAttempt {
-  const contours = new cv.MatVector()
-  const hierarchy = new cv.Mat()
-  try {
-    cv.findContours(objectWhite, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE)
-
-    // The coupon plate: the largest external contour. Holes are read later by a
-    // separate CCOMP pass on the cropped plate region.
-    const count = contours.size()
-    let baseIndex = -1
-    let baseArea = 0
-    for (let i = 0; i < count; i++) {
-      const contour = contours.get(i)
-      try {
-        const area = cv.contourArea(contour)
-        if (area > baseArea) {
-          baseArea = area
-          baseIndex = i
-        }
-      } finally {
-        contour.delete()
-      }
-    }
-    const nominalAreaMm2 = g.couponWidthMm * g.couponHeightMm
-    // Degenerate-alignment floor: a blob smaller than the coupon at MIN_ALIGN_PX_PER_MM
-    // cannot be a usable coupon scan (see resolutionGate for the derivation).
-    const minBasePx = nominalAreaMm2 * MIN_ALIGN_PX_PER_MM * MIN_ALIGN_PX_PER_MM
-    if (baseIndex < 0 || baseArea < minBasePx) {
-      return fail(
-        'No coupon was found in the scan. Place the printed coupon flat on the scanner glass so the whole plate is visible.',
-        0,
-      )
-    }
-
-    // Aspect-ratio gate: the largest blob must be shaped like the coupon plate.
-    const baseContour = contours.get(baseIndex)
-    let baseLong: number
-    let baseShort: number
-    let plateRect: { x: number; y: number; width: number; height: number }
-    try {
-      const rect = cv.minAreaRect(baseContour)
-      baseLong = Math.max(rect.size.width, rect.size.height)
-      baseShort = Math.min(rect.size.width, rect.size.height)
-      plateRect = cv.boundingRect(baseContour)
-    } finally {
-      baseContour.delete()
-    }
-    const nominalLong = Math.max(g.couponWidthMm, g.couponHeightMm)
-    const nominalShort = Math.min(g.couponWidthMm, g.couponHeightMm)
-    if (
-      baseShort <= 0 ||
-      Math.abs(baseLong / baseShort - nominalLong / nominalShort) / (nominalLong / nominalShort) >
-        0.1
-    ) {
-      return fail(
-        'The largest object in the scan does not match the coupon plate shape. Remove other objects from the glass and rescan.',
-        1,
-      )
-    }
-
-    // Fiducial hole candidates: children of the plate contour with a plausible area and a
-    // square shape. The area gate is wide on the low side because a scan of the coupon's bed
-    // side reads the first layer's hole rims, which elephant-foot squish shrinks to roughly
-    // half the nominal area; the upper bound stays below the smallest square-ish window
-    // pockets (about 2.5 times the fiducial area).
-    const estimatedPxPerMm = Math.sqrt(baseArea / nominalAreaMm2)
-    const expectedHoleAreaPx = (g.fiducialSizeMm * estimatedPxPerMm) ** 2
-
-    // A coupon scanned on its textured build plate shows the plate's speckle through every
-    // opening, littering the binary with noise blobs; a majority filter well under the fiducial
-    // size removes them without moving the surviving centroids. The plate is re-located in the
-    // filtered binary (contour indices differ from the first pass). The holes lie strictly
-    // inside the plate, so the denoise/contour stage runs on the plate's bounding rectangle
-    // plus a kernel-sized margin instead of the full scan (identical results, a fraction of
-    // the cost); the crop origin is added back onto every hole centroid.
-    const denoiseKernelPx = (g.fiducialSizeMm / 5) * estimatedPxPerMm
-    const cropped = roiAround(cv, objectWhite, plateRect, denoiseKernelPx)
-    let denoised: Mat
-    try {
-      denoised = majorityFilterBinary(cv, cropped.roi, denoiseKernelPx)
-    } finally {
-      cropped.roi.delete()
-    }
-    const holes: Point[] = []
-    const denoisedContours = new cv.MatVector()
-    const denoisedHierarchy = new cv.Mat()
-    try {
-      cv.findContours(
-        denoised,
-        denoisedContours,
-        denoisedHierarchy,
-        cv.RETR_CCOMP,
-        cv.CHAIN_APPROX_SIMPLE,
-      )
-      const denoisedCount = denoisedContours.size()
-      let denoisedBaseIndex = -1
-      let denoisedBaseArea = 0
-      for (let i = 0; i < denoisedCount; i++) {
-        if (denoisedHierarchy.data32S[i * 4 + 3] !== -1) continue
-        const contour = denoisedContours.get(i)
-        try {
-          const area = cv.contourArea(contour)
-          if (area > denoisedBaseArea) {
-            denoisedBaseArea = area
-            denoisedBaseIndex = i
-          }
-        } finally {
-          contour.delete()
-        }
-      }
-      for (let i = 0; i < denoisedCount; i++) {
-        if (denoisedHierarchy.data32S[i * 4 + 3] !== denoisedBaseIndex) continue // not a hole in the plate
-        const contour = denoisedContours.get(i)
-        try {
-          const area = cv.contourArea(contour)
-          if (area < expectedHoleAreaPx * 0.3 || area > expectedHoleAreaPx * 1.8) continue
-          // A fiducial is square, so its minimum-area rectangle is not elongated.
-          const rect = cv.minAreaRect(contour)
-          const long = Math.max(rect.size.width, rect.size.height)
-          const short = Math.min(rect.size.width, rect.size.height)
-          if (short <= 0 || long / short > 2) continue
-          const m = cv.moments(contour)
-          if (m.m00 <= 0) continue
-          holes.push({ x: m.m10 / m.m00 + cropped.x, y: m.m01 / m.m00 + cropped.y })
-        } finally {
-          contour.delete()
-        }
-      }
-    } finally {
-      denoised.delete()
-      denoisedContours.delete()
-      denoisedHierarchy.delete()
-    }
-    if (holes.length < 3) {
-      return fail(
-        `Expected the coupon's 3 corner holes but found ${holes.length}. Make sure the coupon is scanned with no hole covered.`,
-        2,
-      )
-    }
-    if (holes.length > MAX_HOLE_CANDIDATES) {
-      return fail(
-        'Too many hole-sized openings were detected on the coupon, so the corner holes could not be told apart. Check for debris or reflections on the scan and try again.',
-        2,
-      )
-    }
-
-    // Every 3-subset of the candidates is tried against the known fiducial layout; the shared
-    // corner solver's right-angle and per-arm scale gates reject subsets that include a window
-    // pocket, and a plate-scale gate rejects subsets whose implied px/mm disagrees with the
-    // plate blob. All surviving orientation hypotheses compete in the content-probe model
-    // selection below (the same doctrine that picks the threshold polarity).
-    const candidates: CornerCandidate[] = []
-    let lastReason: string | null = null
-    for (let i = 0; i < holes.length - 2; i++) {
-      for (let j = i + 1; j < holes.length - 1; j++) {
-        for (let k = j + 1; k < holes.length; k++) {
-          const subset = [holes[i], holes[j], holes[k]]
-          const { candidates: subsetCandidates, reason } = solveCornerHoleCandidates(
-            subset,
-            g.fiducials,
-          )
-          if (reason) lastReason = reason
-          for (const c of subsetCandidates) {
-            const scale = Math.sqrt(Math.abs(c.affine.a * c.affine.d - c.affine.b * c.affine.c))
-            if (Math.abs(scale / estimatedPxPerMm - 1) > 0.1) continue
-            candidates.push(c)
-          }
-        }
-      }
-    }
-    if (candidates.length === 0) {
-      return fail(lastReason ?? 'The coupon orientation could not be determined.', 3)
-    }
-    return selectCandidateByContent(gray, g, candidates)
-  } finally {
-    contours.delete()
-    hierarchy.delete()
+  // Fiducial hole candidates: the area gate is wide on the low side because a scan of the
+  // coupon's bed side reads the first layer's hole rims, which elephant-foot squish shrinks
+  // to roughly half the nominal area; the upper bound stays below the smallest square-ish
+  // window pockets (about 2.5 times the fiducial area). No morphological close: the open
+  // window's slots and grid cells are rejected by the size and squareness gates instead.
+  const located = locatePlateFiducialHoles(cv, objectWhite, {
+    plateWidthMm: g.couponWidthMm,
+    plateHeightMm: g.couponHeightMm,
+    fiducialSizeMm: g.fiducialSizeMm,
+    holeAreaBand: { min: 0.3, max: 1.8 },
+  })
+  if (!located.ok) return fail(located.reason, located.stage)
+  const { holes, estimatedPxPerMm } = located
+  if (holes.length < 3) {
+    return fail(
+      `Expected the coupon's 3 corner holes but found ${holes.length}. Make sure the coupon is scanned with no hole covered.`,
+      2,
+    )
   }
+  if (holes.length > MAX_HOLE_CANDIDATES) {
+    return fail(
+      'Too many hole-sized openings were detected on the coupon, so the corner holes could not be told apart. Check for debris or reflections on the scan and try again.',
+      2,
+    )
+  }
+
+  // Every 3-subset of the candidates is tried against the known fiducial layout; the shared
+  // corner solver's right-angle and per-arm scale gates reject subsets that include a window
+  // pocket, and a plate-scale gate rejects subsets whose implied px/mm disagrees with the
+  // plate blob. All surviving orientation hypotheses compete in the content-probe model
+  // selection below (the same doctrine that picks the threshold polarity).
+  const candidates: CornerCandidate[] = []
+  let lastReason: string | null = null
+  for (let i = 0; i < holes.length - 2; i++) {
+    for (let j = i + 1; j < holes.length - 1; j++) {
+      for (let k = j + 1; k < holes.length; k++) {
+        const subset = [holes[i], holes[j], holes[k]]
+        const { candidates: subsetCandidates, reason } = solveCornerHoleCandidates(
+          subset,
+          g.fiducials,
+        )
+        if (reason) lastReason = reason
+        for (const c of subsetCandidates) {
+          const scale = Math.sqrt(Math.abs(c.affine.a * c.affine.d - c.affine.b * c.affine.c))
+          if (Math.abs(scale / estimatedPxPerMm - 1) > 0.1) continue
+          candidates.push(c)
+        }
+      }
+    }
+  }
+  if (candidates.length === 0) {
+    return fail(lastReason ?? 'The coupon orientation could not be determined.', 3)
+  }
+  return selectCandidateByContent(gray, g, candidates)
 }
 
 // The two-axis IS coupon is square by construction, so its two fiducial arms are equal and

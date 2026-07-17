@@ -6,17 +6,20 @@ import { mmToPx } from './fiducialAligner'
 import { median } from '../math'
 import { assessMeasurementBackdrop, MIN_BACKDROP_CONTRAST } from '../measurementBackdrop'
 import type { BackdropAssessment } from '../measurementBackdrop'
-import { EDGE_REFINE_WINDOW_PX, gradientCentroid } from '../subpixelEdge'
+import { EDGE_REFINE_WINDOW_PX, bilinear, gradientCentroid } from '../subpixelEdge'
 
 // Profiles a PA test line's extruded width along its length to sub-pixel precision. Every 0.25 mm
 // along the line (skipping the ragged 2 mm at each end), a perpendicular intensity profile is
-// extracted by bilinear interpolation, and the line's two edges are located as the strongest
-// intensity-gradient peak on each side of the profile's extremum (the point deviating most from
-// the base tone, so lines darker or brighter than the base measure identically), refined by a
-// gradient centroid (center-of-gravity, the same sub-pixel edge estimator the EM gap measurer
-// uses). Width is converted to mm
-// with the alignment's local scale along the perpendicular, so rotation, flip, and scanner
-// anisotropy are all accounted for by the affine itself.
+// extracted by bilinear interpolation, and the line's two edges are located by the half-amplitude
+// (50 percent contrast) crossing: walking outward from the profile extremum (the point deviating
+// most from the base tone, so lines darker or brighter than the base measure identically) to the
+// first crossing of the level midway between the extremum and the base median, refined by a
+// gradient centroid (center-of-gravity, the same local sub-pixel edge pattern as the EM gap
+// measurer's refineEdge). The search and the centroid window are both bounded to the flank next
+// to the extremum, so a strong gradient elsewhere on the base (glossy infill ridges, dust) cannot
+// capture the edge. Width is converted to mm with the alignment's local scale along the
+// perpendicular, so rotation, flip, and scanner anisotropy are all accounted for by the affine
+// itself.
 
 export interface WidthSample {
   xMm: number // line-local x
@@ -30,8 +33,9 @@ const PROFILE_STEP_PX = 0.25
 // extremum must deviate at least this far from the profile median (in either direction), else the
 // sample is a gap. The same brightness-separation floor as the shared backdrop gate.
 export const MIN_LINE_CONTRAST = MIN_BACKDROP_CONTRAST
-// Noise floor for a genuine edge, matching the card measurer's gradient gate.
-const MIN_EDGE_GRADIENT = 8
+// How far from the extremum an edge may sit, as a multiple of the nominal line width: covers the
+// widest physical bulge a PA transient produces while excluding the neighbouring base texture.
+const EDGE_BOUND_WIDTH_FACTOR = 1.6
 
 export function measureLineWidthProfile(
   cv: OpenCv,
@@ -67,12 +71,16 @@ export function measureLineWidthProfile(
   const s0 = -Math.floor(halfRangePx / PROFILE_STEP_PX) * PROFILE_STEP_PX
 
   const rows = gray.rows
+  const boundSamples = Math.round(
+    (EDGE_BOUND_WIDTH_FACTOR * spec.lineWidthMm * perpPxPerMm) / PROFILE_STEP_PX,
+  )
   const samples: WidthSample[] = []
   const profile = new Float64Array(profileLen)
   for (let xMm = END_SKIP_MM; xMm <= lineLenMm - END_SKIP_MM + 1e-9; xMm += SAMPLE_STEP_MM) {
     const centre = mmToPx(alignment, g.lineStartXMm + xMm, yMm)
     const widthMm =
-      measureAt(data, cols, rows, centre.x, centre.y, ux, uy, s0, profileLen, profile) / perpPxPerMm
+      measureAt(data, cols, rows, centre.x, centre.y, ux, uy, s0, profileLen, profile, boundSamples) /
+      perpPxPerMm
     samples.push({ xMm, widthMm })
   }
   return samples
@@ -142,6 +150,7 @@ function measureAt(
   s0: number,
   profileLen: number,
   profile: Float64Array,
+  boundSamples: number,
 ): number {
   for (let k = 0; k < profileLen; k++) {
     const s = s0 + k * PROFILE_STEP_PX
@@ -159,50 +168,44 @@ function measureAt(
   }
   if (Math.abs(profile[extIdx] - med) < MIN_LINE_CONTRAST) return NaN // no line here: a gap
 
-  // Gradient magnitude (central difference); the strongest peak on each flank of the extremum is
-  // the edge, refined with a gradient centroid around the peak.
+  // Half-amplitude (50 percent contrast) level between the extremum and the base median, the
+  // classic threshold-crossing edge definition; the gradient centroid then refines each crossing.
+  const halfLevel = (profile[extIdx] + med) / 2
   const grad = (k: number) => Math.abs(profile[k + 1] - profile[k - 1])
-  const left = subPixEdge(grad, 1, extIdx - 1)
-  const right = subPixEdge(grad, extIdx + 1, profileLen - 2)
+  const winS = Math.round(EDGE_REFINE_WINDOW_PX / PROFILE_STEP_PX)
+  const left = subPixLocal(profile, grad, extIdx, -1, 1, profileLen - 2, boundSamples, halfLevel, winS)
+  const right = subPixLocal(profile, grad, extIdx, 1, 1, profileLen - 2, boundSamples, halfLevel, winS)
   if (Number.isNaN(left) || Number.isNaN(right)) return NaN
   return (right - left) * PROFILE_STEP_PX
 }
 
-// Sub-pixel index of the strongest gradient peak within [kLo, kHi], refined by the gradient
-// centroid (center-of-gravity) over a window around the peak: the first moment of the gradient
-// magnitude. For a symmetric edge-spread function the centroid is the true edge position, and
-// unlike a parabolic fit of the peak it stays continuous where bilinear resampling makes the
-// gradient piecewise constant (the same estimator the EM gap measurer uses). NaN when the window
-// is empty or the peak is below the noise floor.
-function subPixEdge(grad: (k: number) => number, kLo: number, kHi: number): number {
-  if (kHi < kLo) return NaN
-  let best = -1
-  let bk = -1
-  for (let k = kLo; k <= kHi; k++) {
-    const gk = grad(k)
-    if (gk > best) {
-      best = gk
-      bk = k
+// Local half-amplitude edge: walking outward from the profile extremum in direction dir, the
+// first crossing of the half-contrast level, refined by the gradient centroid in a window around
+// the crossing. Both the walk and the centroid window are clamped to the flank (at most
+// boundSamples from the extremum), so a stronger gradient beyond the edge (base texture) cannot
+// pull the estimate; the crossing sample itself is the fallback when the window carries no
+// gradient weight. NaN when no crossing exists inside the bound.
+function subPixLocal(
+  profile: Float64Array,
+  grad: (k: number) => number,
+  extIdx: number,
+  dir: -1 | 1,
+  kLo: number,
+  kHi: number,
+  boundSamples: number,
+  halfLevel: number,
+  winS: number,
+): number {
+  const to = dir < 0 ? Math.max(kLo, extIdx - boundSamples) : Math.min(kHi, extIdx + boundSamples)
+  const extSide = Math.sign(profile[extIdx] - halfLevel) // which side of the level the line sits on
+  for (let k = extIdx + dir; dir < 0 ? k >= to : k <= to; k += dir) {
+    if (Math.sign(profile[k] - halfLevel) !== extSide) {
+      // Crossing between k-dir and k; centroid window clamped to the flank.
+      const flankLo = dir < 0 ? to : extIdx + 1
+      const flankHi = dir < 0 ? extIdx - 1 : to
+      const seed = k - (dir < 0 ? 0 : dir) // sample just inside the crossing pair
+      return gradientCentroid(grad, Math.min(Math.max(seed, flankLo), flankHi), winS, flankLo, flankHi) ?? seed
     }
   }
-  if (bk < 0 || best < MIN_EDGE_GRADIENT) return NaN
-
-  const windowSamples = Math.round(EDGE_REFINE_WINDOW_PX / PROFILE_STEP_PX)
-  return gradientCentroid(grad, bk, windowSamples, kLo, kHi) ?? bk
-}
-
-// Bilinear intensity at a fractional pixel position; NaN outside the image.
-function bilinear(data: Uint8Array, cols: number, rows: number, x: number, y: number): number {
-  const x0 = Math.floor(x)
-  const y0 = Math.floor(y)
-  if (x0 < 0 || y0 < 0 || x0 + 1 >= cols || y0 + 1 >= rows) return NaN
-  const fx = x - x0
-  const fy = y - y0
-  const p = (yy: number, xx: number) => data[yy * cols + xx]
-  return (
-    p(y0, x0) * (1 - fx) * (1 - fy) +
-    p(y0, x0 + 1) * fx * (1 - fy) +
-    p(y0 + 1, x0) * (1 - fx) * fy +
-    p(y0 + 1, x0 + 1) * fx * fy
-  )
+  return NaN
 }

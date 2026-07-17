@@ -1,7 +1,12 @@
 import type { FilamentProfile, PrinterProfile } from '../gcode/profileTypes'
 import {
+  baseLayers,
   couponOrigin,
   EDGE_MARGIN_MM,
+  fiducialHoleBoxes,
+  filamentSwapPause,
+  firstLayerSpeedCap,
+  layerZBracket,
   prepareProfile,
   setupPreamble,
   teardownLines,
@@ -20,8 +25,6 @@ import {
   NOMINAL_WIDTH_FACTOR,
   PEDESTAL_LAYERS,
   PEDESTAL_WIDTH_FACTOR,
-  PERIMETER_LOOPS,
-  rasterBase,
   retract,
   travel,
 } from '../gcode/emitter'
@@ -175,12 +178,7 @@ function emitIsGcode(profile: PrinterProfile, filament: FilamentProfile, spec: I
   )
 
   const nominal = profile.nozzleDiameterMm * NOMINAL_WIDTH_FACTOR
-  const holes: Box[] = g.fiducials.map((f) => ({
-    x0: ox + f.xMm - g.fiducialSizeMm / 2,
-    y0: oy + f.yMm - g.fiducialSizeMm / 2,
-    x1: ox + f.xMm + g.fiducialSizeMm / 2,
-    y1: oy + f.yMm + g.fiducialSizeMm / 2,
-  }))
+  const holes: Box[] = fiducialHoleBoxes(g.fiducials, g.fiducialSizeMm, ox, oy)
 
   const e: Emitter = { lines: [], x: 0, y: 0 }
   const L = e.lines
@@ -215,39 +213,15 @@ function emitIsGcode(profile: PrinterProfile, filament: FilamentProfile, spec: I
   // face (the top) is unchanged.
   const zOffsetMm = spec.contrastBase ? BASE_LAYERS * profile.layerHeightMm : 0
   if (spec.contrastBase) {
-    const infillInset = PERIMETER_LOOPS * nominal
-    const baseRasterHoles = holes.map((h) => ({
-      x0: h.x0 - infillInset,
-      y0: h.y0 - infillInset,
-      x1: h.x1 + infillInset,
-      y1: h.y1 + infillInset,
-    }))
-    for (let layer = 0; layer < BASE_LAYERS; layer++) {
-      const z = profile.layerHeightMm * (layer + 1)
-      L.push(`G1 Z${z.toFixed(3)} F600`)
-      // The first base layer prints at the profile's first layer speed for bed adhesion.
-      const speed = layer === 0 ? profile.firstLayerSpeedMmS : undefined
-      basePerimeters(e, profile, filament, nominal, ox, oy, g.couponWidthMm, g.couponHeightMm,
-        holes, extrude, speed)
-      rasterBase(e, profile, filament, nominal, ox + infillInset, oy + infillInset,
-        g.couponWidthMm - 2 * infillInset, g.couponHeightMm - 2 * infillInset,
-        layer % 2 === 0, baseRasterHoles, extrude, speed)
-    }
-    // Filament change to the contrasting color.
-    retract(e, profile, 1)
-    L.push(...profile.pauseGcode.split('\n'))
-    // Printers whose PAUSE/M600 macro already retracts may see a small blob at the band
-    // start; set retractMm to 0 in the profile if that happens.
-    L.push('; if your pause macro already retracts, set retractMm to 0 in the profile')
-    retract(e, profile, -1)
+    baseLayers(e, profile, filament, nominal, ox, oy, g.couponWidthMm, g.couponHeightMm, holes)
+    filamentSwapPause(e, profile)
   }
 
   const totalLayers = PEDESTAL_LAYERS + IS_MEASURED_LAYERS
   for (let layer = 0; layer < totalLayers; layer++) {
     const z = profile.layerHeightMm * (layer + 1) + zOffsetMm
     // Retract before the Z push; the travel to the band perimeters runs retracted.
-    retract(e, profile, 1)
-    L.push(`G1 Z${z.toFixed(3)} F600`)
+    layerZBracket(e, profile, z, ox + 0.5 * nominal, oy + 0.5 * nominal)
 
     // Per-layer order: band perimeters, test lines, band raster. The perimeters come
     // first so the nozzle primes over sacrificial geometry instead of a test line's
@@ -258,12 +232,7 @@ function emitIsGcode(profile: PrinterProfile, filament: FilamentProfile, spec: I
     // layers.
     const pedestal = layer < PEDESTAL_LAYERS
     const width = pedestal ? PEDESTAL_WIDTH_FACTOR * nominal : nominal
-    // On the bed (no contrast base) the pedestal layer IS the first layer: everything on
-    // it prints at the profile's first layer speed for adhesion.
-    const firstLayerSpeed =
-      !spec.contrastBase && layer === 0 ? profile.firstLayerSpeedMmS : undefined
-    travel(e, profile, ox + 0.5 * nominal, oy + 0.5 * nominal)
-    retract(e, profile, -1)
+    const firstLayerSpeed = firstLayerSpeedCap(profile, spec.contrastBase, layer)
     // Nothing of this layer exists yet under the perimeters, so they extrude plainly; the
     // window box is the hole that turns the outline loops into a band frame.
     basePerimeters(e, profile, filament, nominal, ox, oy, g.couponWidthMm, g.couponHeightMm,

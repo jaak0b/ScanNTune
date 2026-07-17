@@ -1,15 +1,12 @@
-import { createFlowSettingsStore, type FieldKinds } from './createFlowSettingsStore'
-import { PART_COLORS, SCAN_PLACES, type PartColors, type ScanPlace } from '../model/scanPlan'
+import { createFlowSettingsStore, SCAN_PLAN_FIELDS, type FieldKinds, type ScanPlanSettings } from './createFlowSettingsStore'
 
 /** User-adjustable settings of the flow calibration; defaults come from `defaultEmTestSpec`. */
-export type EmSettings = {
+export type EmSettings = ScanPlanSettings & {
   pitchMinMm: number | null
   pitchMaxMm: number | null
   blockCount: number | null
   linesPerBlock: number | null
   printSpeedMmS: number | null
-  scanPlace: ScanPlace
-  partColors: PartColors
 }
 
 const FIELDS: FieldKinds<EmSettings> = {
@@ -18,8 +15,7 @@ const FIELDS: FieldKinds<EmSettings> = {
   blockCount: { kind: 'nullableNumber' },
   linesPerBlock: { kind: 'nullableNumber' },
   printSpeedMmS: { kind: 'nullableNumber' },
-  scanPlace: { kind: 'enum', values: SCAN_PLACES },
-  partColors: { kind: 'enum', values: PART_COLORS },
+  ...SCAN_PLAN_FIELDS,
 }
 
 export const useEmSettings = createFlowSettingsStore<EmSettings>({
