@@ -188,6 +188,14 @@ backing is.
    belong to the unit test tree (`web/tests/`) as render-recovery, never as a webtest fixture and
    never under `web/e2e/`.
 
+   The two-home rule cuts both ways. A real scan has exactly one home: the owning feature's
+   `web/e2e/<feature>/golden/` folder, under its `PROVENANCE.md` and the golden filename
+   convention. Synthetic renders and generated fixtures have exactly one home: `web/tests/fixtures/`.
+   A unit test that needs a real scan references it in its `golden/` home (see
+   `decodeFlowGoldenJpgBgr` in `web/tests/helpers/cv.ts` and the `em/realScanWidegapPair` spec);
+   it never copies the scan into the unit tree. A real scan under `web/tests/fixtures/`, or a
+   synthetic image under any `golden/`, is a defect to fix on sight.
+
 3. **Freeze owner-approved app output, never unapproved app output.** The golden value is the
    app's displayed output captured for a case the owner approved, in either tier: hardware-validated
    (printed the coupon, applied the emitted correction or command, confirmed the defect is gone,

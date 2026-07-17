@@ -34,12 +34,6 @@ export function decodeFlowGoldenJpgBgr(cv: OpenCv, flow: string, name: string): 
   return decodeJpgBgr(cv, new URL(`../../e2e/${flow}/golden/${name}`, import.meta.url))
 }
 
-// Legacy real-scan PNG fixtures (web/e2e/fixtures); the directory is gone, kept only so the
-// specs still referencing the retired fixtures fail on the missing file, not at import.
-export function decodeE2eFixtureBgr(cv: OpenCv, name: string): Mat {
-  return decodePngBgr(cv, new URL(`../../e2e/fixtures/${name}`, import.meta.url))
-}
-
 // The app accepts JPEG scans through createImageBitmap, so the JPEG fixture path mirrors a real upload.
 export function decodeJpgFixtureBgr(cv: OpenCv, name: string): Mat {
   return decodeJpgBgr(cv, new URL(`../fixtures/${name}`, import.meta.url))
