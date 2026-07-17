@@ -26,7 +26,7 @@ test('pressure advance calibration: 600 dpi golden scan', async ({ page }) => {
 
   await page
     .getByTestId('pa-scan-input')
-    .setInputFiles(path.join(here, 'golden/pa_micron_asa.jpg'))
+    .setInputFiles(path.join(here, 'golden/pa_0d_black_white.jpg'))
 
   await expect(page.getByTestId('pa-best')).toBeVisible({ timeout: RESULT_VISIBLE_TIMEOUT_MS })
   await expect(page.getByTestId('scan-error')).toHaveCount(0)
