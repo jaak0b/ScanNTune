@@ -34,7 +34,7 @@ interface EmCase {
 const cases: EmCase[] = [
   {
     name: '600 dpi pair',
-    fixtures: ['golden/em_widegap_0_600dpi.jpg', 'golden/em_widegap_180_600dpi.jpg'],
+    fixtures: ['golden/em_widegap_0d_600dpi_black_white.jpg', 'golden/em_widegap_180d_600dpi_black_white.jpg'],
     dpi: 600,
     pxPerMm: 23.622,
     flow: { value: 1.0028, tolerance: 0.01 },
@@ -45,7 +45,7 @@ const cases: EmCase[] = [
   },
   {
     name: '600 dpi single scan',
-    fixtures: ['golden/em_widegap_0_600dpi.jpg'],
+    fixtures: ['golden/em_widegap_0d_600dpi_black_white.jpg'],
     dpi: 600,
     pxPerMm: 23.622,
     flow: { value: 1.006, tolerance: 0.015 },
@@ -56,7 +56,7 @@ const cases: EmCase[] = [
   },
   {
     name: '300 dpi single scan',
-    fixtures: ['golden/em_widegap_0_300dpi.jpg'],
+    fixtures: ['golden/em_widegap_0d_300dpi_black_white.jpg'],
     dpi: 300,
     pxPerMm: 11.811,
     flow: { value: 1.006, tolerance: 0.015 },

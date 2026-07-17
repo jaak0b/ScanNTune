@@ -15,9 +15,9 @@ in every case (defaults are valid, only the name is entered).
 
 | case | fixtures | resolution | seeded px/mm |
 |---|---|---|---|
-| 600 dpi pair | `golden/em_widegap_0_600dpi.jpg`, `golden/em_widegap_180_600dpi.jpg` | 600 dpi | 23.622 |
-| 600 dpi single scan | `golden/em_widegap_0_600dpi.jpg` | 600 dpi | 23.622 |
-| 300 dpi single scan | `golden/em_widegap_0_300dpi.jpg` | 300 dpi | 11.811 |
+| 600 dpi pair | `golden/em_widegap_0d_600dpi_black_white.jpg`, `golden/em_widegap_180d_600dpi_black_white.jpg` | 600 dpi | 23.622 |
+| 600 dpi single scan | `golden/em_widegap_0d_600dpi_black_white.jpg` | 600 dpi | 23.622 |
+| 300 dpi single scan | `golden/em_widegap_0d_300dpi_black_white.jpg` | 300 dpi | 11.811 |
 
 All three cases share the identical journey below and differ only in the fixture(s), the
 seeded calibration, and the expected literals in "Assertions per case". Generate one named test

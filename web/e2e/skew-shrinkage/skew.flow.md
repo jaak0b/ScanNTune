@@ -56,8 +56,8 @@ normalized `toHaveText`) reads it as the single-spaced string above; assert that
 
 | case | fixtures | seed calibration | expected `scale-X` | expected `scale-Y` | expected `skew-XY` |
 |---|---|---|---|---|---|
-| 300 dpi | `golden/xy_0d_300dpi.jpg` + `golden/xy_90d_300dpi.jpg` | 300 dpi seed (below) | `+0.144 %` | `+0.117 %` | `+0.489°` |
-| 150 dpi | `golden/xy_0d_150dpi.jpg` + `golden/xy_90d_150dpi.jpg` | 150 dpi seed (below) | `+0.243 %` | `+0.216 %` | `+0.486°` |
+| 300 dpi | `golden/xy_0d_300dpi_black_white.jpg` + `golden/xy_90d_300dpi_black_white.jpg` | 300 dpi seed (below) | `+0.144 %` | `+0.117 %` | `+0.489°` |
+| 150 dpi | `golden/xy_0d_150dpi_black_white.jpg` + `golden/xy_90d_150dpi_black_white.jpg` | 150 dpi seed (below) | `+0.243 %` | `+0.216 %` | `+0.486°` |
 
 Both cases share the identical journey below and differ only in the fixtures, the seed calibration,
 and the expected literals in "Assertions per case". Generate one named test per row from a shared
@@ -199,7 +199,7 @@ literals below are the assertion contract only.
 
 ### 3.1 Two scans of (nearly) the same angle
 
-Seed the 300 dpi calibration. Upload `golden/xy_0d_300dpi.jpg` twice in one `setInputFiles` call
+Seed the 300 dpi calibration. Upload `golden/xy_0d_300dpi_black_white.jpg` twice in one `setInputFiles` call
 (the same file both times; the two uploaded `File` objects should be given distinct names, for
 example by wrapping the fixture bytes in two differently-named `File`s, since the app keys scans
 by upload identity, not by file name, but distinct names make the test's intent clear).
@@ -217,7 +217,7 @@ this case's concern), then:
 ### 3.4 Mixed-resolution pair: one scan matches the calibration DPI, one does not (per-scan hard block, one scan flagged)
 
 Captured against commit 181ba92 (per-scan resolution validation). Seed the 300 dpi calibration.
-Upload `golden/xy_0d_300dpi.jpg` (matches the seed) + `golden/xy_90d_150dpi.jpg` (does not) in one
+Upload `golden/xy_0d_300dpi_black_white.jpg` (matches the seed) + `golden/xy_90d_150dpi_black_white.jpg` (does not) in one
 `setInputFiles` call.
 
 Journey: identical steps 1 through 6 above (the calibration/DPI-hint assertions of steps 3-4 may be
@@ -242,8 +242,8 @@ here; the resolution block is expressed through `analyze-reason` and the disable
 
 ### 3.5 Uniform resolution mismatch: both scans at a DPI different from the seeded calibration (mandatory rejection; per-scan hard block, both scans flagged)
 
-Captured against commit 181ba92. Seed the 300 dpi calibration. Upload `golden/xy_0d_150dpi.jpg` +
-`golden/xy_90d_150dpi.jpg` (both native 150 dpi, mutually consistent, both differing from the seeded
+Captured against commit 181ba92. Seed the 300 dpi calibration. Upload `golden/xy_0d_150dpi_black_white.jpg` +
+`golden/xy_90d_150dpi_black_white.jpg` (both native 150 dpi, mutually consistent, both differing from the seeded
 300 dpi by a clean 2x factor).
 
 Journey: identical steps 1 through 6 above, then:
@@ -267,8 +267,8 @@ enters wrong values for both, then uploads an otherwise-valid, matching-calibrat
 
 Seed the 300 dpi calibration. Before uploading, set "Rings per side" to `6` and "Plate baseline
 (mm)" to `150` (both fields need testids added first, per `PROVENANCE.md`'s open items; suggested
-`grid-n-input` and `baseline-mm-input`). Then upload `golden/xy_0d_300dpi.jpg` +
-`golden/xy_90d_300dpi.jpg` (the real, correct-geometry plate's scans).
+`grid-n-input` and `baseline-mm-input`). Then upload `golden/xy_0d_300dpi_black_white.jpg` +
+`golden/xy_90d_300dpi_black_white.jpg` (the real, correct-geometry plate's scans).
 
 1. Wait for both scans' `ring-count` to become visible.
 2. Assert both read exactly `4 of 34`.
@@ -286,9 +286,9 @@ a mirrored XY read means the countersunk face was on the glass or the plate was 
 The app rejects such a scan on its own card, the same hard-block pattern as the resolution
 verdicts of 3.4/3.5.
 
-Fixture: the untouched `golden/xy_0d_150dpi.jpg` serves as the valid input (the 2026-07-14 goldens
+Fixture: the untouched `golden/xy_0d_150dpi_black_white.jpg` serves as the valid input (the 2026-07-14 goldens
 were scanned first-layer side on the glass, so the raw golden reads unmirrored under the
-face-on-glass flip convention), plus a horizontally flipped copy of `golden/xy_90d_150dpi.jpg`
+face-on-glass flip convention), plus a horizontally flipped copy of `golden/xy_90d_150dpi_black_white.jpg`
 produced by the test itself as the mirrored input (flipping the pixel rows of the fixture in the
 test helper is display-independent preprocessing of the test input, not a measurement-path
 resample; no derived file is committed). Seed the 150 dpi calibration. Upload both in one

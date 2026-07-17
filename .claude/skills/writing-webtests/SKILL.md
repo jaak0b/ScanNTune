@@ -348,14 +348,18 @@ enough; this is not an exhaustive edge-case matrix.
   real scan is large (35 MP+), it may be downsampled to keep the repo light, but only after
   re-capturing the golden values from the app run on the downsampled image, because scale changes
   with resolution and a value captured on the original would silently drift against a resized image.
-- **Golden filenames encode flow, orientation, and both colors.** A golden sample filename is
-  `<flow>_<orientation>_<backplate color>_<part color>.<ext>`, for example `pa_0d_black_white.jpg`:
-  the flow is the short flow tag (`pa`, `em`, `is`, `skew`, `card`); the orientation is the printed
-  or scanned rotation when the flow distinguishes one (`0d`, `90d`, `180d`, `270d`), omitted only for
-  a flow with no orientation concept (the card); the backplate color is the scanner backing behind
-  the part; the part color is the printed part's main color. Keep the DPI suffix from the bullet
-  above when the flow also needs it (`card_300dpi.png` stays DPI-only, since the card has no
-  orientation or second color to encode).
+- **Golden filenames encode flow, orientation, dpi, and colors, ranked by importance.** A golden
+  sample filename is `<flow>_<orientation>_<dpi>_<colors...>.<ext>`, tokens ranked flow, then
+  orientation, then dpi, then colors: the flow is the short flow tag (`pa`, `em`, `is`, `skew`,
+  `card`); the orientation is the printed or scanned rotation when the flow distinguishes one
+  (`0d`, `90d`, `180d`, `270d`), omitted only for a flow with no orientation concept (the card); the
+  dpi is the scan resolution (`300dpi`, `600dpi`). Colors are ordered by proximity to the scanner
+  glass, nearest first (the part touching or closest to the glass first, background last). For
+  example, `xy_90d_300dpi_black_white.jpg` is a black part scanned on a white background. A PA
+  (pressure advance) part with black lines on a white solid base scanned against a grey backdrop
+  would be `pa_..._black_white_grey.jpg`: line color nearest the glass, base color next, backdrop
+  last. Card calibration goldens are exempt from the orientation and color tokens, since the card
+  has no per-flow geometry to encode (`card_300dpi.png` stays flow plus dpi only).
 - **Track every real scan and gcode golden with Git LFS.** `.gitattributes` should cover
   `web/e2e/**/*.png` and the gcode golden extension so the feature-local `golden/` binaries and
   gcode files do not leak into plain git history.

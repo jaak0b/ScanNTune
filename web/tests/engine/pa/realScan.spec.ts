@@ -6,7 +6,7 @@ import { analyzePaCoupon } from '../../../src/engine/pa/paAnalyzer'
 import { defaultPaTestSpec } from '../../../src/engine/pa/types'
 
 // Regression test over the golden real flatbed scan of a printed PA coupon
-// (web/e2e/pressure-advance/golden/pa_0d_black_white.jpg; default spec: 16 lines, PA 0 to 0.06).
+// (web/e2e/pressure-advance/golden/pa_0d_600dpi_black_white_black.jpg; default spec: 16 lines, PA 0 to 0.06).
 // EXPECTED_PA is what the pipeline measured when the golden was captured (see the golden's
 // PROVENANCE.md); the tolerance is one sweep step (0.06 / 15 = 0.004), a regression bound. The
 // owner's truth band for this printer and filament (0.024 to 0.032) is asserted independently, so
@@ -21,7 +21,7 @@ describe('real-scan PA regression', () => {
     async () => {
       const cv = await getCv()
       const spec = defaultPaTestSpec()
-      const bgr = decodeFlowGoldenJpgBgr(cv, 'pressure-advance', 'pa_0d_black_white.jpg')
+      const bgr = decodeFlowGoldenJpgBgr(cv, 'pressure-advance', 'pa_0d_600dpi_black_white_black.jpg')
       try {
         const alignment = alignPaCoupon(cv, bgr, spec)
         expect(alignment.success).toBe(true)

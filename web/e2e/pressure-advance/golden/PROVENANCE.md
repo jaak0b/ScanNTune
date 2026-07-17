@@ -11,7 +11,7 @@ field needs to be touched to reproduce the capture.
 
 ## The scan
 
-- `pa_0d_black_white.jpg`: one real flatbed scan, JPEG, an unmodified byte-for-byte copy of the
+- `pa_0d_600dpi_black_white_black.jpg`: one real flatbed scan, JPEG, an unmodified byte-for-byte copy of the
   original capture (`Micron_Ambrosia_ASA_PA.jpg`, owner's capture session), per the project's
   rule against resampling any scan image anywhere. The coupon was scanned face-down; the
   pipeline reads it as mirrored (flipped yes) at rotation 0, and measures the scan's own

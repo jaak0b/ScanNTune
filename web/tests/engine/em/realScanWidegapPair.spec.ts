@@ -24,8 +24,8 @@ describe('real-scan EM regression, wide-gap coupon scanned at 0 and 180 degrees'
   beforeAll(async () => {
     const cv = await getCv()
     const spec = defaultEmTestSpec(defaultPrinterProfile())
-    const m0 = decodeGoldenJpgBgr(cv, 'em_widegap_0_600dpi.jpg')
-    const m180 = decodeGoldenJpgBgr(cv, 'em_widegap_180_600dpi.jpg')
+    const m0 = decodeGoldenJpgBgr(cv, 'em_widegap_0d_600dpi_black_white.jpg')
+    const m180 = decodeGoldenJpgBgr(cv, 'em_widegap_180d_600dpi_black_white.jpg')
     try {
       r0 = analyzeEmCoupon(cv, m0, spec, SCAN_PX_PER_MM)
       r180 = analyzeEmCoupon(cv, m180, spec, SCAN_PX_PER_MM)

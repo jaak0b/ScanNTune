@@ -16,8 +16,8 @@ values in the high 0.49 to 0.50 degree range across every capture below, which i
 Four scans of the same physical XY plate, a quarter turn apart on the glass, at two representative
 resolutions (the flow's mandatory low/high boundary-value pair):
 
-- `xy_0d_300dpi.jpg`, `xy_90d_300dpi.jpg`, `xy_180d_300dpi.jpg`, `xy_270d_300dpi.jpg` (300 dpi)
-- `xy_0d_150dpi.jpg`, `xy_90d_150dpi.jpg`, `xy_180d_150dpi.jpg`, `xy_270d_150dpi.jpg` (150 dpi)
+- `xy_0d_300dpi_black_white.jpg`, `xy_90d_300dpi_black_white.jpg`, `xy_180d_300dpi_black_white.jpg`, `xy_270d_300dpi_black_white.jpg` (300 dpi)
+- `xy_0d_150dpi_black_white.jpg`, `xy_90d_150dpi_black_white.jpg`, `xy_180d_150dpi_black_white.jpg`, `xy_270d_150dpi_black_white.jpg` (150 dpi)
 
 Each scan detects `23 of 23` rings against the plate's own 5x5 geometry (25 grid vertices minus the
 2 solid orientation-marker rings), confirming every fixture is a clean, fully-inside-frame scan of
@@ -158,7 +158,7 @@ real `scans-input` file input, waited for each scan's `ring-count` and the plane
 verbatim. No value below was computed, derived, or read from engine source; every literal is what
 the app showed on screen.
 
-### Case: 300 dpi, quarter-turn pair (`xy_0d_300dpi.jpg` + `xy_90d_300dpi.jpg`)
+### Case: 300 dpi, quarter-turn pair (`xy_0d_300dpi_black_white.jpg` + `xy_90d_300dpi_black_white.jpg`)
 
 Per-scan: `ring-count` `23 of 23` (both), `scan-angle` `359.5°` and `90.1°`, `scan-flip` `None` (both).
 `plane-status-XY`: `Ready to analyze.`
@@ -189,7 +189,7 @@ displayed string exactly, newlines included; there is no partial/regex assertion
 `size-code` (Format: `Shrinkage %`, same value under all three firmware selections):
 **`XY shrinkage: 100.13 %`**
 
-### Case: 150 dpi, quarter-turn pair (`xy_0d_150dpi.jpg` + `xy_90d_150dpi.jpg`)
+### Case: 150 dpi, quarter-turn pair (`xy_0d_150dpi_black_white.jpg` + `xy_90d_150dpi_black_white.jpg`)
 
 Per-scan: `ring-count` `23 of 23` (both), `scan-angle` `359.5°` and `90.1°`, `scan-flip` `None` (both).
 `plane-status-XY`: `Ready to analyze.`
@@ -254,7 +254,7 @@ as an optional extra case demonstrating the confidence-range feature.
 
 ### 3.1 Two scans at (nearly) the same angle: hard-blocked before Analyze, no exception thrown
 
-Uploaded `xy_0d_300dpi.jpg` twice (renamed on upload so the app treats them as two distinct scans;
+Uploaded `xy_0d_300dpi_black_white.jpg` twice (renamed on upload so the app treats them as two distinct scans;
 the underlying image bytes are identical). Calibration seeded at 300 dpi.
 
 Result: both scans individually measure fine (`ring-count` `23 of 23` each, `scan-angle` `359.5°` for
@@ -285,7 +285,7 @@ canonical, deterministic case for the golden set: two scans of the literal same 
 
 ### 3.4 Mixed-resolution scan pair (one scan matches the calibration DPI, one does not): hard block, one scan flagged
 
-Uploaded `xy_0d_300dpi.jpg` (true 300 dpi) + `xy_90d_150dpi.jpg` (true 150 dpi) together as one
+Uploaded `xy_0d_300dpi_black_white.jpg` (true 300 dpi) + `xy_90d_150dpi_black_white.jpg` (true 150 dpi) together as one
 plate's scan set, with the calibration seeded at 300 dpi.
 
 Both scans still measure their rings fine (`23 of 23` each) and the plate's angle spread is fine
@@ -298,8 +298,8 @@ Per-scan cards:
 
 | scan | `scan-resolution` row | pill (class `.pill`, no testid) | `failure-reason` explanation |
 |---|---|---|---|
-| `xy_0d_300dpi.jpg` (359.5°) | `about 300 dpi` | `XY plane` (ok) | (none) |
-| `xy_90d_150dpi.jpg` (90.1°) | `about 150 dpi` | `Wrong resolution` (err) | `This scan measures about 150 dpi, but the expected resolution is 300 dpi. Rescan at the expected resolution, or recalibrate the scanner at this one.` |
+| `xy_0d_300dpi_black_white.jpg` (359.5°) | `about 300 dpi` | `XY plane` (ok) | (none) |
+| `xy_90d_150dpi_black_white.jpg` (90.1°) | `about 150 dpi` | `Wrong resolution` (err) | `This scan measures about 150 dpi, but the expected resolution is 300 dpi. Rescan at the expected resolution, or recalibrate the scanner at this one.` |
 
 Analyze gate:
 
@@ -311,7 +311,7 @@ Analyze gate:
 
 ### 3.5 Both scans at a DPI different from the calibration (uniform 2x mismatch): hard block, both scans flagged
 
-Uploaded `xy_0d_150dpi.jpg` + `xy_90d_150dpi.jpg` (both native 150 dpi), calibration seeded at
+Uploaded `xy_0d_150dpi_black_white.jpg` + `xy_90d_150dpi_black_white.jpg` (both native 150 dpi), calibration seeded at
 300 dpi.
 
 Both scans measure fine individually (`23 of 23` rings, angle spread fine), but **both** fail the
@@ -322,8 +322,8 @@ Per-scan cards (identical on both):
 
 | scan | `scan-resolution` row | pill (class `.pill`, no testid) | `failure-reason` explanation |
 |---|---|---|---|
-| `xy_0d_150dpi.jpg` (359.5°) | `about 150 dpi` | `Wrong resolution` (err) | `This scan measures about 150 dpi, but the expected resolution is 300 dpi. Rescan at the expected resolution, or recalibrate the scanner at this one.` |
-| `xy_90d_150dpi.jpg` (90.1°) | `about 150 dpi` | `Wrong resolution` (err) | (same string as above) |
+| `xy_0d_150dpi_black_white.jpg` (359.5°) | `about 150 dpi` | `Wrong resolution` (err) | `This scan measures about 150 dpi, but the expected resolution is 300 dpi. Rescan at the expected resolution, or recalibrate the scanner at this one.` |
+| `xy_90d_150dpi_black_white.jpg` (90.1°) | `about 150 dpi` | `Wrong resolution` (err) | (same string as above) |
 
 Analyze gate:
 
@@ -341,7 +341,7 @@ refusal, and unlike the pre-181ba92 behavior it produces no (wrong) result at al
 
 Correct geometry (see "Coupon geometry" above): rings per side `5`, plate baseline `100` mm. Entered
 instead: rings per side **`6`**, plate baseline **`150`** mm (larger than the real plate), then
-uploaded the valid, matching-calibration `xy_0d_300dpi.jpg` + `xy_90d_300dpi.jpg` pair (calibration
+uploaded the valid, matching-calibration `xy_0d_300dpi_black_white.jpg` + `xy_90d_300dpi_black_white.jpg` pair (calibration
 seeded at 300 dpi).
 
 Both scans fail individually (the ring detector searches for a 6x6 grid's marker pattern against an

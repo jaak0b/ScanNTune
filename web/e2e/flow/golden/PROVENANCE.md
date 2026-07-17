@@ -17,9 +17,9 @@ originals (no resampling, per the project's rule against downscaling any scan im
 
 Source images (owner's capture session, `ScanNTune/Data/EM`):
 
-- `em_widegap_0_600dpi.jpg` (from `skew_0_600dpi.jpg`)
-- `em_widegap_180_600dpi.jpg` (from `skew_180_600dpi.jpg`)
-- `em_widegap_0_300dpi.jpg` (from `skew_0_300dpi.jpg`)
+- `em_widegap_0d_600dpi_black_white.jpg` (from `skew_0_600dpi.jpg`)
+- `em_widegap_180d_600dpi_black_white.jpg` (from `skew_180_600dpi.jpg`)
+- `em_widegap_0d_300dpi_black_white.jpg` (from `skew_0_300dpi.jpg`)
 
 The matching 300 dpi rotated scan (`skew_180_300dpi.jpg`) exists in the owner's capture
 session but was not run through the app to produce a combined-pair result in this session, so
@@ -55,7 +55,7 @@ webtest's golden expectations under the owner-reviewed tier.
 Spec header for every case: pitch 1.14 to 1.35 mm, 9 blocks x 5 lines, nominal line width
 0.42 mm.
 
-### Case: 600 dpi pair (`em_widegap_0_600dpi.jpg` + `em_widegap_180_600dpi.jpg`)
+### Case: 600 dpi pair (`em_widegap_0d_600dpi_black_white.jpg` + `em_widegap_180d_600dpi_black_white.jpg`)
 
 | field | value | tolerance | rationale |
 |---|---|---|---|
@@ -65,7 +65,7 @@ Spec header for every case: pitch 1.14 to 1.35 mm, 9 blocks x 5 lines, nominal l
 | separator check (bias) | 0.0025 mm | ± 0.003 mm | Matches the pipeline's `biasMm=0.0025`; band covers rounding. |
 | pitch scale | 0.9956 | ± 0.003 | Matches the pipeline's `pitchScale=0.99560` (average of the two per-scan pitch scales 0.99571 and 0.99550); band covers rounding and the per-scan spread. |
 
-### Case: 600 dpi single scan (0 degrees only, `em_widegap_0_600dpi.jpg`)
+### Case: 600 dpi single scan (0 degrees only, `em_widegap_0d_600dpi_black_white.jpg`)
 
 | field | value | tolerance | rationale |
 |---|---|---|---|
@@ -75,7 +75,7 @@ Spec header for every case: pitch 1.14 to 1.35 mm, 9 blocks x 5 lines, nominal l
 | separator check (bias) | 0.0015 mm | ± 0.003 mm | Matches pipeline's `biasMm=0.0015`. |
 | pitch scale | 0.9957 | ± 0.003 | Matches pipeline's `pitchScale=0.99571`. |
 
-### Case: 300 dpi single scan (0 degrees only, `em_widegap_0_300dpi.jpg`)
+### Case: 300 dpi single scan (0 degrees only, `em_widegap_0d_300dpi_black_white.jpg`)
 
 | field | value | tolerance | rationale |
 |---|---|---|---|

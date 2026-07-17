@@ -192,7 +192,7 @@ const twoScanCases: TwoScanCase[] = [
     name: '300 dpi',
     dpi: 300,
     seed: SEED_300DPI,
-    fixtures: [golden('xy_0d_300dpi.jpg'), golden('xy_90d_300dpi.jpg')],
+    fixtures: [golden('xy_0d_300dpi_black_white.jpg'), golden('xy_90d_300dpi_black_white.jpg')],
     scaleX: { value: 0.144, tolerance: 0.05 },
     scaleY: { value: 0.117, tolerance: 0.05 },
     skewXY: { value: 0.489, tolerance: 0.03 },
@@ -219,7 +219,7 @@ const twoScanCases: TwoScanCase[] = [
     name: '150 dpi',
     dpi: 150,
     seed: SEED_150DPI,
-    fixtures: [golden('xy_0d_150dpi.jpg'), golden('xy_90d_150dpi.jpg')],
+    fixtures: [golden('xy_0d_150dpi_black_white.jpg'), golden('xy_90d_150dpi_black_white.jpg')],
     scaleX: { value: 0.243, tolerance: 0.05 },
     scaleY: { value: 0.216, tolerance: 0.05 },
     skewXY: { value: 0.486, tolerance: 0.03 },
@@ -300,10 +300,10 @@ const fourScanCases: FourScanCase[] = [
     dpi: 300,
     seed: SEED_300DPI,
     fixtures: [
-      golden('xy_0d_300dpi.jpg'),
-      golden('xy_90d_300dpi.jpg'),
-      golden('xy_180d_300dpi.jpg'),
-      golden('xy_270d_300dpi.jpg'),
+      golden('xy_0d_300dpi_black_white.jpg'),
+      golden('xy_90d_300dpi_black_white.jpg'),
+      golden('xy_180d_300dpi_black_white.jpg'),
+      golden('xy_270d_300dpi_black_white.jpg'),
     ],
     scaleX: { value: 0.145, tolerance: 0.05 },
     scaleY: { value: 0.112, tolerance: 0.05 },
@@ -318,10 +318,10 @@ const fourScanCases: FourScanCase[] = [
     dpi: 150,
     seed: SEED_150DPI,
     fixtures: [
-      golden('xy_0d_150dpi.jpg'),
-      golden('xy_90d_150dpi.jpg'),
-      golden('xy_180d_150dpi.jpg'),
-      golden('xy_270d_150dpi.jpg'),
+      golden('xy_0d_150dpi_black_white.jpg'),
+      golden('xy_90d_150dpi_black_white.jpg'),
+      golden('xy_180d_150dpi_black_white.jpg'),
+      golden('xy_270d_150dpi_black_white.jpg'),
     ],
     scaleX: { value: 0.242, tolerance: 0.05 },
     scaleY: { value: 0.208, tolerance: 0.05 },
@@ -367,7 +367,7 @@ test('rejection 3.1: two scans at nearly the same angle are blocked before Analy
 
   // The same file uploaded twice, given distinct names so the app's upload-identity keying treats
   // them as two scans (per skew.flow.md 3.1).
-  const bytes = fs.readFileSync(golden('xy_0d_300dpi.jpg'))
+  const bytes = fs.readFileSync(golden('xy_0d_300dpi_black_white.jpg'))
   await page.getByTestId('scans-input').setInputFiles([
     { name: 'xy_0d_300dpi_a.jpg', mimeType: 'image/jpeg', buffer: bytes },
     { name: 'xy_0d_300dpi_b.jpg', mimeType: 'image/jpeg', buffer: bytes },
@@ -404,7 +404,7 @@ test('rejection 3.4: a mixed-resolution pair flags only the wrong scan and block
 
   await page
     .getByTestId('scans-input')
-    .setInputFiles([golden('xy_0d_300dpi.jpg'), golden('xy_90d_150dpi.jpg')])
+    .setInputFiles([golden('xy_0d_300dpi_black_white.jpg'), golden('xy_90d_150dpi_black_white.jpg')])
 
   const ringCounts = page.getByTestId('ring-count')
   await expect(ringCounts).toHaveCount(2, { timeout: RESULT_VISIBLE_TIMEOUT_MS })
@@ -438,7 +438,7 @@ test('rejection 3.5: a uniform resolution mismatch flags both scans and blocks A
 
   await page
     .getByTestId('scans-input')
-    .setInputFiles([golden('xy_0d_150dpi.jpg'), golden('xy_90d_150dpi.jpg')])
+    .setInputFiles([golden('xy_0d_150dpi_black_white.jpg'), golden('xy_90d_150dpi_black_white.jpg')])
 
   const ringCounts = page.getByTestId('ring-count')
   await expect(ringCounts).toHaveCount(2, { timeout: RESULT_VISIBLE_TIMEOUT_MS })
@@ -478,14 +478,14 @@ test('rejection 3.7: a mirrored flat-plate scan is flagged on its card and block
   // which reads as the mirrored scan.
   await page.getByTestId('scans-input').setInputFiles([
     {
-      name: 'xy_0d_150dpi.jpg',
+      name: 'xy_0d_150dpi_black_white.jpg',
       mimeType: 'image/jpeg',
-      buffer: fs.readFileSync(golden('xy_0d_150dpi.jpg')),
+      buffer: fs.readFileSync(golden('xy_0d_150dpi_black_white.jpg')),
     },
     {
       name: 'xy_90d_150dpi_mirrored.jpg',
       mimeType: 'image/jpeg',
-      buffer: flipHorizontally(golden('xy_90d_150dpi.jpg')),
+      buffer: flipHorizontally(golden('xy_90d_150dpi_black_white.jpg')),
     },
   ])
 
@@ -549,7 +549,7 @@ test('rejection 3.6: wrong declared coupon geometry is a hard refusal before Ana
 
   await page
     .getByTestId('scans-input')
-    .setInputFiles([golden('xy_0d_300dpi.jpg'), golden('xy_90d_300dpi.jpg')])
+    .setInputFiles([golden('xy_0d_300dpi_black_white.jpg'), golden('xy_90d_300dpi_black_white.jpg')])
 
   const ringCounts = page.getByTestId('ring-count')
   await expect(ringCounts).toHaveCount(2, { timeout: RESULT_VISIBLE_TIMEOUT_MS })
