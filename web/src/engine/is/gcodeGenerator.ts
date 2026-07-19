@@ -28,7 +28,7 @@ import {
   retract,
   travel,
 } from '../gcode/emitter'
-import { isCouponGeometry, type IsSegment } from './couponGeometry'
+import { isCouponGeometry, type IsSegment, sweepPeakSpeedMmS } from './couponGeometry'
 import { dipsForMove, extrudeWithDips, type PrintedBead } from './crossings'
 import {
   disableShapingCommands,
@@ -78,6 +78,24 @@ export function generateIsGcodeWithReport(
             : `the roughly ${flowLimit} mm^3/s a typical hotend melts, `) +
           'so the lines print thinner. The ringing wavelength is still readable from ' +
           'slightly thinned lines.',
+      )
+    }
+  }
+
+  // The sweep's fastest chord runs at the vector sum of the forward speed and the peak
+  // lateral swing speed (about 18.75 mm/s under the accel_per_hz scaling); at high
+  // corner speeds it can pass the hotend flow limit even when every tier stays below it.
+  if (fitted.sweep) {
+    const peak = sweepPeakSpeedMmS(fitted)
+    const flow = peak * nominal * profile.layerHeightMm
+    if (flow > flowLimit) {
+      warnings.push(
+        `The resonance sweep peaks at ${peak.toFixed(0)} mm/s, extruding ${flow.toFixed(1)} mm^3/s, above ` +
+          (filament.maxVolumetricFlowMm3S > 0
+            ? `the filament's configured ${flowLimit} mm^3/s maximum volumetric flow, `
+            : `the roughly ${flowLimit} mm^3/s a typical hotend melts, `) +
+          'so the sweep leg prints thinner near the swing extremes. The sweep leg is ' +
+          'not measured, and the ringing readout is unaffected.',
       )
     }
   }
@@ -168,7 +186,7 @@ function finishLine(
 }
 
 function emitIsGcode(profile: PrinterProfile, filament: FilamentProfile, spec: IsTestSpec): string {
-  const g = isCouponGeometry(spec)
+  const g = isCouponGeometry(spec, profile.squareCornerVelocityMmS)
   const { ox, oy } = couponOrigin(
     profile,
     g.couponWidthMm,
@@ -197,8 +215,18 @@ function emitIsGcode(profile: PrinterProfile, filament: FilamentProfile, spec: I
           : []),
       ],
       // The test rings the frame on purpose: the spec's acceleration and corner speed
-      // replace the profile's limits for the whole print.
-      { motionLines: isMotionLimitCommands(profile, spec.accelMmS2, spec.cornerSpeedMmS) },
+      // replace the profile's limits for the whole print, and the velocity ceiling is
+      // raised to the fastest commanded move so a low configured maximum can never clamp
+      // a tier or a sweep chord (a clamped chord stretches its time slice and shifts the
+      // cell off its labeled frequency).
+      {
+        motionLines: isMotionLimitCommands(
+          profile,
+          spec.accelMmS2,
+          spec.cornerSpeedMmS,
+          Math.max(...spec.speedsMmS, sweepPeakSpeedMmS(spec), profile.travelSpeedMmS),
+        ),
+      },
     ),
   )
   // Input shaping and pressure advance both mask ringing; switch them off before any
@@ -265,6 +293,14 @@ function emitIsGcode(profile: PrinterProfile, filament: FilamentProfile, spec: I
           ? Math.min(line.speedMmS, profile.firstLayerSpeedMmS)
           : line.speedMmS
         const runUpSpeed = Math.min(spec.cornerSpeedMmS, speed)
+        // The sweep chords carry their own commanded speeds; the pedestal layer scales
+        // them uniformly in time (same path, slower everywhere) so even the fastest
+        // chord, the peak of the deepest swing, stays at or below the first layer
+        // speed cap. The pedestal only needs to stick and is not measured.
+        const pedestalScale =
+          pedestal && spec.sweep
+            ? Math.min(1, profile.firstLayerSpeedMmS / sweepPeakSpeedMmS(spec))
+            : 1
         travel(e, profile, ox + line.prime.x0, oy + line.prime.y0)
         primeOnTheMove(e, profile, filament, width, ox + line.prime.x1, oy + line.prime.y1)
         // Full-flow run-up straight into the corner at the corner speed: under
@@ -274,12 +310,16 @@ function emitIsGcode(profile: PrinterProfile, filament: FilamentProfile, spec: I
         // taken without deceleration, so the corner dumps no pressure and the bead stays
         // continuous through it.
         extrude(e, profile, filament, width, ox + line.runUp.x1, oy + line.runUp.y1, runUpSpeed)
-        // Resonant run-up teeth (empty without the sweep): consecutive 90 degree corners
-        // at the run-up cruise, each an unbraked per-axis velocity step under the same
-        // junction limits as the launch corner, ending colinear with the measured
-        // segment so the built-up ring carries into it. One continuous bead throughout.
+        // Resonant run-up chords (empty without the sweep): the ramped zigzag of
+        // Klipper's resonance tester, constant forward speed with a bang-bang lateral
+        // acceleration. Each chord is commanded at its own average speed so every sweep
+        // cell lasts exactly one forcing period; adjacent chord velocities differ per
+        // axis by at most the profile's square corner velocity, so the planner blends
+        // them without junction slowdowns and the launch corner stays the only full
+        // velocity step. One continuous bead throughout, ending on the corner.
         for (const tooth of line.teeth) {
-          extrude(e, profile, filament, width, ox + tooth.x1, oy + tooth.y1, runUpSpeed)
+          extrude(e, profile, filament, width, ox + tooth.x1, oy + tooth.y1,
+            tooth.speedMmS * pedestalScale)
         }
         // Crossings over beads printed earlier this layer are taken at full flow, the way
         // grid infill crosses itself: the free beads must weld into the stiff grid, and

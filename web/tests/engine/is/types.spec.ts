@@ -188,10 +188,11 @@ describe('validateIsSpec sweep', () => {
       /below the end/,
     )
   })
-  it('throws on odd or out-of-range cycle counts', () => {
-    expect(() => validateIsSpec({ ...spec, sweepCycles: 15 })).toThrow(/even number/)
-    expect(() => validateIsSpec({ ...spec, sweepCycles: 2 })).toThrow(/even number/)
-    expect(() => validateIsSpec({ ...spec, sweepCycles: 42 })).toThrow(/even number/)
+  it('throws on out-of-range cycle counts and accepts any count in range', () => {
+    expect(() => validateIsSpec({ ...spec, sweepCycles: 2 })).toThrow(/sweep cycles/i)
+    expect(() => validateIsSpec({ ...spec, sweepCycles: 42 })).toThrow(/sweep cycles/i)
+    // Every cell returns to the centreline on its own, so odd counts are valid.
+    expect(() => validateIsSpec({ ...spec, sweepCycles: 15 })).not.toThrow()
     expect(() => validateIsSpec({ ...spec, sweepCycles: 4 })).not.toThrow()
   })
   it('throws when the line pitch leaves no room for the tooth clearance', () => {

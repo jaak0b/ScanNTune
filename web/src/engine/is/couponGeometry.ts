@@ -1,3 +1,4 @@
+import { defaultPrinterProfile } from '../gcode/profileTypes'
 import type { IsAxis, IsTestSpec } from './types'
 
 export const MIN_FRAME_BAND_MM = 12
@@ -22,6 +23,14 @@ export const SWEEP_STUB_MM = 5
 /** Bead width plus working clearance reserved between a tooth tip and the neighbouring
  *  line's leg; it caps the lateral tooth depth at `linePitchMm` minus this value. */
 export const SWEEP_TOOTH_CLEARANCE_MM = 1
+/**
+ * Excitation acceleration per hertz of forcing frequency: the `accel_per_hz` default of
+ * Klipper's resonance tester (resonance_tester.py), the established
+ * reference-implementation scaling that keeps the swing's velocity amplitude near
+ * constant (a / (4 f) = 18.75 mm/s) across the band instead of driving every cell at
+ * the machine's absolute acceleration ceiling.
+ */
+export const SWEEP_ACCEL_PER_HZ_MM_S2 = 75
 
 /** Distance to reach `speedMmS` from rest (or stop from it) at `accelMmS2`: v^2 / (2a). */
 export function accelRampMm(speedMmS: number, accelMmS2: number): number {
@@ -37,47 +46,64 @@ export function tierRampMm(spec: IsTestSpec, speedMmS: number): number {
 }
 
 /**
- * One forcing period of the resonant run-up sweep: the leg advances `forwardMm` at the
- * corner speed, then steps `lateralMm` sideways (signed, perpendicular to the leg). The
- * leg-axis velocity is therefore a square wave, v during the advance and 0 during the
- * side step, whose fundamental frequency is cornerSpeed / (forwardMm + |lateralMm|):
- * every 90 degree tooth corner is a full per-axis velocity step at the corner speed,
- * and steps arriving at the structure's resonance period add in phase (forced resonance,
- * the same excitation principle as the community's swept ringing-tower zigzags).
+ * One forcing cell of the resonant run-up sweep: one full period of the ramped zigzag
+ * excitation of Klipper's resonance tester (resonance_tester.py, vibrate_axis). Over the
+ * period T = 1/freqHz the toolhead advances along the leg at the constant corner speed
+ * while a bang-bang lateral acceleration of constant magnitude `accelMmS2` drives one
+ * smooth parabolic swing away from the measured direction and back: a quarter period
+ * outward, a half period through the extreme, a quarter period back, with zero lateral
+ * velocity on the centreline at both cell boundaries, so consecutive cells join tangent
+ * parabolas without a cusp. The one-sided swing amplitude is accelMmS2 / (16 freqHz^2).
  */
 export interface SweepCell {
-  forwardMm: number
-  lateralMm: number
+  freqHz: number
+  /** Effective lateral acceleration: the resonance tester's accel_per_hz scaling
+   *  (SWEEP_ACCEL_PER_HZ_MM_S2 * f), never above the spec's acceleration, and capped at
+   *  16 f^2 * (linePitchMm - SWEEP_TOOTH_CLEARANCE_MM) so the swing amplitude keeps the
+   *  tooth clearance to the neighbouring line's leg. */
+  accelMmS2: number
 }
 
 /**
  * The sweep's forcing cells: one per cycle, frequencies geometrically spaced from
  * `sweepFromHz` to `sweepToHz` (low first, so the highest frequencies, where stiff
  * machines resonate, excite last and reach the launch corner with the least decay).
- * Cells are paired with a common lateral depth so every out step is undone by the next
- * cell's back step and the leg returns exactly to its centreline. The lateral depth is
- * the equal-dwell ideal v / (2f), capped so a tooth tip keeps its clearance from the
- * neighbouring line's leg.
  */
 export function sweepCells(spec: IsTestSpec): SweepCell[] {
   if (!spec.sweep) return []
-  const v = spec.cornerSpeedMmS
   const depthCap = spec.linePitchMm - SWEEP_TOOTH_CLEARANCE_MM
   const n = spec.sweepCycles
   const ratio = Math.pow(spec.sweepToHz / spec.sweepFromHz, 1 / (n - 1))
-  const freqs = Array.from({ length: n }, (_, k) => spec.sweepFromHz * Math.pow(ratio, k))
-  const cells: SweepCell[] = []
-  for (let k = 0; k < n; k += 2) {
-    const depth = Math.min(depthCap, v / (2 * freqs[k]), v / (2 * freqs[k + 1]))
-    cells.push({ forwardMm: v / freqs[k] - depth, lateralMm: -depth })
-    cells.push({ forwardMm: v / freqs[k + 1] - depth, lateralMm: depth })
-  }
-  return cells
+  return Array.from({ length: n }, (_, k) => {
+    const freqHz = spec.sweepFromHz * Math.pow(ratio, k)
+    const accelMmS2 = Math.min(
+      spec.accelMmS2,
+      SWEEP_ACCEL_PER_HZ_MM_S2 * freqHz,
+      16 * freqHz * freqHz * depthCap,
+    )
+    return { freqHz, accelMmS2 }
+  })
 }
 
-/** In-window leg length the sweep needs: the straight stub plus every cell's advance. */
+/**
+ * The fastest commanded chord speed of the sweep: the vector sum of the constant forward
+ * speed and the peak lateral speed a_eff / (4 f) of a cell, maximized over the cells (the
+ * chord speeds are per-slice averages, so this instantaneous peak bounds every one of
+ * them). Zero when the sweep is disabled.
+ */
+export function sweepPeakSpeedMmS(spec: IsTestSpec): number {
+  const cells = sweepCells(spec)
+  if (cells.length === 0) return 0
+  return Math.max(
+    ...cells.map((c) => Math.hypot(spec.cornerSpeedMmS, c.accelMmS2 / (4 * c.freqHz))),
+  )
+}
+
+/** In-window leg length the sweep needs: the straight stub plus one corner-speed period
+ *  of forward travel per cell, cornerSpeed * sum(1 / f_k). */
 export function sweepLegMm(spec: IsTestSpec): number {
-  return SWEEP_STUB_MM + sweepCells(spec).reduce((s, c) => s + c.forwardMm, 0)
+  const v = spec.cornerSpeedMmS
+  return SWEEP_STUB_MM + sweepCells(spec).reduce((s, c) => s + v / c.freqHz, 0)
 }
 
 /** In-window run-up length actually laid out: the sweep's leg when enabled, else the
@@ -124,6 +150,13 @@ export interface IsSegment {
 
 export type IsBox = IsSegment
 
+/** One chord of the sweep polyline. */
+export interface SweepToothSegment extends IsSegment {
+  /** Commanded speed of the chord: its length divided by its fixed time slice (the true
+   *  average speed over the slice), so each sweep cell lasts exactly one forcing period. */
+  speedMmS: number
+}
+
 export interface IsLine {
   speedMmS: number
   /** First stretch of the leg, starting one inset inside the coupon outer edge, entirely
@@ -144,11 +177,12 @@ export interface IsLine {
   /** Colinear continuation of the measured segment: the deceleration tail in the band. */
   tail: IsSegment
   /**
-   * The resonant run-up teeth: consecutive axis-aligned segments from the run-up end to
-   * the corner, alternating leg advances and lateral side steps (see `sweepCells`).
-   * Empty when the sweep is disabled; the run-up then reaches the corner directly.
+   * The resonant run-up chords: a polyline from the run-up end to the corner, sampling
+   * the sweep cells' lateral parabolas uniformly in time (see `sweepCells` and
+   * `sweepTeeth`), each chord carrying the commanded speed that makes its time slice
+   * exact. Empty when the sweep is disabled; the run-up then reaches the corner directly.
    */
-  teeth: IsSegment[]
+  teeth: SweepToothSegment[]
   /**
    * Protected span from the corner: acceleration ramp plus the clean read length. All
    * crossings of this line lie beyond it.
@@ -224,32 +258,78 @@ export function maxPackedRampMm(spec: IsTestSpec): number {
 }
 
 /**
- * The sweep teeth of one line, built backward from its corner. `leg` is the unit travel
- * direction of the run-up leg and `lateral` the unit direction of the measured segment:
- * every out step (negative cell lateral) points AWAY from the measured direction, toward
- * the neighbouring legs whose in-phase teeth keep the same pitch, and the final back step
- * runs colinear into the measured segment, so the launch carries the built-up ring.
+ * Chord samples of one cell, uniform in time per constant-acceleration span. Each
+ * quarter-period span of duration tau is split into ceil(a * tau / vScv) equal time
+ * slices, and the half-period span into twice that count (so its midpoint, the swing's
+ * extreme, lands on a vertex); the common slice keeps every adjacent-chord per-axis
+ * velocity step within the square corner velocity: within a span the average lateral
+ * chord velocities differ by exactly a * dt, they are equal across the two span
+ * boundaries inside a cell (the lateral velocity is continuous and the accelerations
+ * mirror), and across a cell boundary they differ by at most a * dt again. Vertices lie
+ * on the exact parabolas lat(t) = lat0 + v0 t + a t^2 / 2.
+ */
+function cellChords(cell: SweepCell, vScvMmS: number): { dtS: number; latMm: number }[] {
+  const T = 1 / cell.freqHz
+  const a = cell.accelMmS2
+  const nQ = Math.max(1, Math.ceil((a * (T / 4)) / vScvMmS))
+  const dtS = T / 4 / nQ
+  const vP = (a * T) / 4
+  const lat1 = (-a * (T / 4) ** 2) / 2
+  const chords: { dtS: number; latMm: number }[] = []
+  // Span 1, T/4 at -a: rest on the centreline down to lateral speed -vP.
+  for (let i = 1; i <= nQ; i++) {
+    const t = i * dtS
+    chords.push({ dtS, latMm: (-a * t * t) / 2 })
+  }
+  // Span 2, T/2 at +a: -vP through the extreme -a / (16 f^2) at mid-span, up to +vP.
+  for (let i = 1; i <= 2 * nQ; i++) {
+    const t = i * dtS
+    chords.push({ dtS, latMm: lat1 - vP * t + (a * t * t) / 2 })
+  }
+  // Span 3, T/4 at -a: +vP back to rest exactly on the centreline.
+  for (let i = 1; i <= nQ; i++) {
+    const t = i * dtS
+    chords.push({ dtS, latMm: i === nQ ? 0 : lat1 + vP * t - (a * t * t) / 2 })
+  }
+  return chords
+}
+
+/**
+ * The sweep chords of one line, built backward from its corner: the total forward
+ * advance is cornerSpeed * sum(1 / f_k), so the polyline starts that far behind the
+ * corner and its last vertex is the corner. `leg` is the unit travel direction of the
+ * run-up leg and `lateral` the unit direction of the measured segment: every swing
+ * (negative lateral offset) points AWAY from the measured direction, into the corridor
+ * toward the neighbouring legs whose in-phase swings keep the same pitch. The leg starts
+ * and ends on the centreline with zero lateral velocity, so the launch corner stays the
+ * only full per-axis velocity step.
  */
 function sweepTeeth(
   spec: IsTestSpec,
+  vScvMmS: number,
   corner: { x: number; y: number },
   leg: { x: number; y: number },
   lateral: { x: number; y: number },
-): IsSegment[] {
+): SweepToothSegment[] {
   const cells = sweepCells(spec)
   if (cells.length === 0) return []
-  const advance = cells.reduce((s, c) => s + c.forwardMm, 0)
-  let px = corner.x - leg.x * advance
-  let py = corner.y - leg.y * advance
-  const segs: IsSegment[] = []
-  const step = (x: number, y: number) => {
-    segs.push({ x0: px, y0: py, x1: x, y1: y })
-    px = x
-    py = y
-  }
-  for (const c of cells) {
-    step(px + leg.x * c.forwardMm, py + leg.y * c.forwardMm)
-    step(px + lateral.x * c.lateralMm, py + lateral.y * c.lateralMm)
+  const v = spec.cornerSpeedMmS
+  const advance = cells.reduce((s, c) => s + v / c.freqHz, 0)
+  const startX = corner.x - leg.x * advance
+  const startY = corner.y - leg.y * advance
+  let fwd = 0
+  let px = startX
+  let py = startY
+  const segs: SweepToothSegment[] = []
+  for (const cell of cells) {
+    for (const { dtS, latMm } of cellChords(cell, vScvMmS)) {
+      fwd += v * dtS
+      const x = startX + leg.x * fwd + lateral.x * latMm
+      const y = startY + leg.y * fwd + lateral.y * latMm
+      segs.push({ x0: px, y0: py, x1: x, y1: y, speedMmS: Math.hypot(x - px, y - py) / dtS })
+      px = x
+      py = y
+    }
   }
   return segs
 }
@@ -273,7 +353,12 @@ function boundingBox(lines: IsLine[]): IsBox {
  * segment. Tier order runs bottom-up, so the slowest lines (smallest protected span) take
  * the largest corner x, nearest the crossing zone: the per-pair packing.
  */
-function buildYGroup(spec: IsTestSpec, bandMm: number, couponW: number): IsLineGroup {
+function buildYGroup(
+  spec: IsTestSpec,
+  vScvMmS: number,
+  bandMm: number,
+  couponW: number,
+): IsLineGroup {
   const offsets = lineOffsets(spec)
   const F = fieldExtentMm(spec)
   const advance = effectiveRunUpMm(spec) - (spec.sweep ? SWEEP_STUB_MM : 0)
@@ -281,7 +366,7 @@ function buildYGroup(spec: IsTestSpec, bandMm: number, couponW: number): IsLineG
     const speedMmS = speedOf(spec, i)
     const y = bandMm + effectiveRunUpMm(spec) + off
     const x = bandMm + INNER_MARGIN_MM + (F - off)
-    const teeth = sweepTeeth(spec, { x, y }, { x: 0, y: 1 }, { x: 1, y: 0 })
+    const teeth = sweepTeeth(spec, vScvMmS, { x, y }, { x: 0, y: 1 }, { x: 1, y: 0 })
     const legEndY = spec.sweep ? y - advance : y
     return {
       speedMmS,
@@ -313,6 +398,7 @@ function buildYGroup(spec: IsTestSpec, bandMm: number, couponW: number): IsLineG
  */
 function buildXGroup(
   spec: IsTestSpec,
+  vScvMmS: number,
   bandMm: number,
   couponW: number,
   couponH: number,
@@ -332,7 +418,7 @@ function buildXGroup(
     const speedMmS = speedOf(spec, i)
     const x = firstX + (F - off)
     const y = couponH - bandMm - INNER_MARGIN_MM - (F - off)
-    const teeth = sweepTeeth(spec, { x, y }, { x: -1, y: 0 }, { x: 0, y: -1 })
+    const teeth = sweepTeeth(spec, vScvMmS, { x, y }, { x: -1, y: 0 }, { x: 0, y: -1 })
     const legEndX = spec.sweep ? x + advance : x
     return {
       speedMmS,
@@ -365,7 +451,13 @@ function buildXGroup(
  * the two-axis coupon is square. With a single axis the crossing terms drop: the measured
  * direction needs margin + packed and the perpendicular one margin + F + runUp.
  */
-export function isCouponGeometry(spec: IsTestSpec): IsCouponGeometry {
+export function isCouponGeometry(
+  spec: IsTestSpec,
+  // The square corner velocity only shapes the sweep chords' time slicing; the footprint,
+  // line positions, and swing amplitudes are independent of it, so consumers that never
+  // read the chords (aligner, analyzer, previews) may rely on the profile default.
+  squareCornerVelocityMmS: number = defaultPrinterProfile().squareCornerVelocityMmS,
+): IsCouponGeometry {
   const hasX = spec.axes.includes('x')
   const hasY = spec.axes.includes('y')
   const packed = maxPackedRampMm(spec) + spec.measuredLineMm
@@ -385,9 +477,13 @@ export function isCouponGeometry(spec: IsTestSpec): IsCouponGeometry {
   // Print order: the Y group first (its measured lines cross nothing), then the X group,
   // whose measured lines carry the crossing dips over the Y beads.
   const groups: IsLineGroup[] = []
-  const yGroup = hasY ? buildYGroup(spec, bandMm, couponWidthMm) : null
+  const yGroup = hasY ? buildYGroup(spec, squareCornerVelocityMmS, bandMm, couponWidthMm) : null
   if (yGroup) groups.push(yGroup)
-  if (hasX) groups.push(buildXGroup(spec, bandMm, couponWidthMm, couponHeightMm, yGroup))
+  if (hasX) {
+    groups.push(
+      buildXGroup(spec, squareCornerVelocityMmS, bandMm, couponWidthMm, couponHeightMm, yGroup),
+    )
+  }
 
   const inset = FIDUCIAL_INSET_MM
   const size = FIDUCIAL_SIZE_MM

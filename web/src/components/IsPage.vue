@@ -506,7 +506,7 @@ async function analyze(): Promise<void> {
           <NumericField
             v-model="sweepCycles"
             label="Sweep cycles"
-            :step="2"
+            :step="1"
             :min="4"
             data-testid="is-sweep-cycles"
             hint="More cycles strengthen the buildup but lengthen the coupon."
