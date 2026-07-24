@@ -6,8 +6,12 @@
 //
 // Single-tool model: the initial/current extruder is 0, and is_extruder_used[N] is true iff N === 0.
 
-/** A slicer setting resolver: setting name to its value, or null when the name is not mapped. */
-export type SettingResolver = (name: string) => string | null
+/**
+ * A slicer setting resolver: setting name (and, for an indexed vector setting such as the plate
+ * bounding box, the numeric index) to its value, or null when the name (or that index of it) is
+ * not mapped. `idx` is omitted for a plain, unindexed placeholder reference.
+ */
+export type SettingResolver = (name: string, idx?: number) => string | null
 
 export interface TemplateResult {
   text: string
@@ -17,10 +21,32 @@ export interface TemplateResult {
   warnings: string[]
 }
 
-const UNEVALUATED_CONDITION_WARNING = 'A conditional block could not be evaluated; review it.'
+/** One user-facing warning for a conditional block that could not be evaluated: names the
+ *  construct (its condition, or the condition's first line if it spans several), and states
+ *  that the whole block was left in the G-code untouched. */
+function unevaluatedConditionWarning(conditionSource: string): string {
+  const firstLine = conditionSource.split('\n')[0].trim()
+  return (
+    `The conditional "{if ${firstLine}}" could not be evaluated, so the whole block was left ` +
+    'in the G-code exactly as written. Review the block in your start G-code, and either fix ' +
+    'the condition or replace the block with the lines from the branch you intend to use.'
+  )
+}
+
+/** One user-facing warning for a placeholder that holds a slicer arithmetic expression (e.g.
+ *  `{retraction_length[0]*0.75}`) rather than a plain variable reference: names the exact
+ *  expression and states that it was left untouched because this tool does not evaluate
+ *  slicer arithmetic. */
+function unevaluatedExpressionWarning(expressionText: string): string {
+  return (
+    `The expression "${expressionText}" was left exactly as written in the G-code. This tool ` +
+    'does not evaluate slicer arithmetic expressions. Replace the whole expression with the ' +
+    'computed number before printing.'
+  )
+}
 
 // Tool-index constants that resolve to the single active extruder, 0.
-const TOOL_INDEX_VARS = new Set(['initial_tool', 'current_extruder', 'initial_extruder'])
+export const TOOL_INDEX_VARS = new Set(['initial_tool', 'current_extruder', 'initial_extruder'])
 
 // Control keywords that must never be reported as unknown variables.
 const CONTROL_KEYWORDS = new Set(['if', 'elif', 'else', 'endif'])
@@ -30,10 +56,17 @@ const CONTROL_KEYWORDS = new Set(['if', 'elif', 'else', 'endif'])
  * branches dropped, unevaluable blocks left literal with one warning), then remaining placeholders
  * are substituted, then genuinely-unknown simple placeholders are collected.
  */
-export function evaluateTemplate(source: string, resolveSetting: SettingResolver): TemplateResult {
+export function evaluateTemplate(
+  source: string,
+  resolveSetting: SettingResolver,
+  isKnownVariable?: (name: string) => boolean,
+): TemplateResult {
   const unknown = new Set<string>()
   const warnings = new Set<string>()
-  const afterConditionals = evaluateConditionals(source, warnings)
+  const afterConditionals = evaluateConditionals(source, warnings, resolveSetting)
+  if (isKnownVariable) {
+    detectExpressionPlaceholders(afterConditionals, isKnownVariable, warnings)
+  }
   const text = substitutePlaceholders(afterConditionals, resolveSetting, unknown)
   return { text, unknown: [...unknown], warnings: [...warnings] }
 }
@@ -71,9 +104,13 @@ function tokenize(source: string): Token[] {
  * Resolve every top-level {if}...{endif} block, recursing into the kept branch. An unbalanced or
  * unevaluable block is emitted verbatim (with one warning) so nothing is partially mangled.
  */
-function evaluateConditionals(source: string, warnings: Set<string>): string {
+function evaluateConditionals(
+  source: string,
+  warnings: Set<string>,
+  resolveSetting: SettingResolver,
+): string {
   const tokens = tokenize(source)
-  const { text } = renderTokens(tokens, 0, warnings)
+  const { text } = renderTokens(tokens, 0, warnings, resolveSetting)
   return text
 }
 
@@ -88,6 +125,7 @@ function renderTokens(
   tokens: Token[],
   start: number,
   warnings: Set<string>,
+  resolveSetting: SettingResolver,
 ): { text: string; next: number } {
   let out = ''
   let i = start
@@ -98,7 +136,7 @@ function renderTokens(
       i++
     } else if (tok.kind === 'if') {
       const block = parseBlock(tokens, i)
-      out += renderBlock(block, tokens, warnings)
+      out += renderBlock(block, tokens, warnings, resolveSetting)
       i = block.end
     } else {
       // A stray elif/else/endif with no opening if: leave it literal so nothing is lost.
@@ -160,23 +198,29 @@ function parseBlock(tokens: Token[], open: number): ParsedBlock {
 
 /** Render a parsed block: pick the first branch whose condition is true, recursing into it. If any
  * condition is unevaluable (or the block is unbalanced), emit the whole block literally + warn. */
-function renderBlock(block: ParsedBlock, _tokens: Token[], warnings: Set<string>): string {
+function renderBlock(
+  block: ParsedBlock,
+  _tokens: Token[],
+  warnings: Set<string>,
+  resolveSetting: SettingResolver,
+): string {
+  const conditionSource = block.branches[0]?.cond ?? block.raw.split('\n')[0]
   if (!block.balanced) {
-    warnings.add(UNEVALUATED_CONDITION_WARNING)
+    warnings.add(unevaluatedConditionWarning(conditionSource))
     return block.raw
   }
   for (const branch of block.branches) {
     if (branch.cond === null) continue
-    const value = evaluateCondition(branch.cond)
+    const value = evaluateCondition(branch.cond, resolveSetting)
     if (value === null) {
-      warnings.add(UNEVALUATED_CONDITION_WARNING)
+      warnings.add(unevaluatedConditionWarning(conditionSource))
       return block.raw
     }
   }
   for (const branch of block.branches) {
-    const taken = branch.cond === null || evaluateCondition(branch.cond) === true
+    const taken = branch.cond === null || evaluateCondition(branch.cond, resolveSetting) === true
     if (taken) {
-      return renderTokens(branch.tokens, 0, warnings).text
+      return renderTokens(branch.tokens, 0, warnings, resolveSetting).text
     }
   }
   return ''
@@ -189,26 +233,40 @@ function renderBlock(block: ParsedBlock, _tokens: Token[], warnings: Set<string>
 type Expr =
   | { kind: 'num'; value: number }
   | { kind: 'bool'; value: boolean }
+  | { kind: 'str'; value: string }
   | { kind: 'not'; arg: Expr }
   | { kind: 'binary'; op: string; left: Expr; right: Expr }
 
 /**
  * Evaluate a condition expression to a boolean, or null if it contains anything the bounded grammar
  * does not understand (so the caller leaves the whole block literal). Grammar: integer literals;
- * is_extruder_used[N]; the tool-index constants (= 0); == != < > <= >=; and/or/not; parentheses.
+ * quoted string literals; is_extruder_used[N]; the tool-index constants (= 0); any variable
+ * `resolveSetting` knows, bare (e.g. `layer_height`) or indexed (e.g. `retraction_length[0]`,
+ * `first_layer_print_min[0]`), resolved via the SAME resolver the placeholder substitution layer
+ * uses, so a condition can reference anything a placeholder can; == != < > <= >=; and/or/not;
+ * parentheses. String-valued variables support only == and != against another string (a quoted
+ * literal or another string-valued variable); comparing a string to a number, or using a string
+ * with <, >, <=, >=, and, or, makes the whole condition unevaluable, never silently coerced.
+ * `resolveSetting` defaults to resolving nothing, so a bare condition check (as in tests) still
+ * treats any variable outside the built-in constants as unevaluable.
  */
-export function evaluateCondition(source: string): boolean | null {
-  const tokens = lex(source)
+export function evaluateCondition(
+  source: string,
+  resolveSetting: SettingResolver = () => null,
+): boolean | null {
+  const tokens = lex(source, resolveSetting)
   if (tokens === null) return null
   const parser = new Parser(tokens)
   const expr = parser.parseExpression()
   if (expr === null || !parser.atEnd()) return null
+  if (hasTypeMismatch(expr)) return null
   const value = evalExpr(expr)
   return typeof value === 'boolean' ? value : value !== 0
 }
 
 type Lexeme =
   | { t: 'num'; v: number }
+  | { t: 'str'; v: string }
   | { t: 'op'; v: string }
   | { t: 'lparen' }
   | { t: 'rparen' }
@@ -216,7 +274,7 @@ type Lexeme =
 
 const OPERATORS = ['<=', '>=', '==', '!=', '<', '>']
 
-function lex(source: string): Lexeme[] | null {
+function lex(source: string, resolveSetting: SettingResolver): Lexeme[] | null {
   const out: Lexeme[] = []
   let i = 0
   const s = source
@@ -236,6 +294,15 @@ function lex(source: string): Lexeme[] | null {
       i++
       continue
     }
+    if (c === '"' || c === "'") {
+      const quote = c
+      let j = i + 1
+      while (j < s.length && s[j] !== quote) j++
+      if (j >= s.length) return null // unterminated string literal
+      out.push({ t: 'str', v: s.slice(i + 1, j) })
+      i = j + 1
+      continue
+    }
     const two = s.slice(i, i + 2)
     const op = OPERATORS.find((o) => (o.length === 2 ? two === o : s[i] === o))
     if (op) {
@@ -246,6 +313,10 @@ function lex(source: string): Lexeme[] | null {
     if (/[0-9]/.test(c)) {
       let j = i
       while (j < s.length && /[0-9]/.test(s[j])) j++
+      if (s[j] === '.' && /[0-9]/.test(s[j + 1] ?? '')) {
+        j++
+        while (j < s.length && /[0-9]/.test(s[j])) j++
+      }
       out.push({ t: 'num', v: Number(s.slice(i, j)) })
       i = j
       continue
@@ -271,8 +342,16 @@ function lex(source: string): Lexeme[] | null {
         i = parsed.next
         continue
       }
-      // Unknown identifier: whole condition is unevaluable.
-      return null
+      // Any other variable the substitution layer knows, indexed (e.g.
+      // first_layer_print_min[0], retraction_length[0]) or bare (e.g. layer_height): resolved
+      // through the SAME resolveSetting used for placeholder substitution, so a condition can
+      // reference anything a placeholder can. An unresolved reference is unevaluable.
+      const indexed = parseIndex(s, i)
+      const value = indexed !== null ? resolveSetting(word, indexed.index) : resolveSetting(word)
+      if (value === null) return null
+      out.push(valueToLexeme(value))
+      if (indexed !== null) i = indexed.next
+      continue
     }
     return null
   }
@@ -302,6 +381,14 @@ function resolveIndexToken(token: string): number | null {
   if (/^[0-9]+$/.test(token)) return Number(token)
   if (TOOL_INDEX_VARS.has(token)) return 0
   return null
+}
+
+/** A resolved setting value lexes as a number when it parses as one (the normal case: every
+ *  numeric slicer setting), otherwise as a string (e.g. filament_type's "PETG"). */
+function valueToLexeme(value: string): Lexeme {
+  const trimmed = value.trim()
+  const num = Number(trimmed)
+  return trimmed !== '' && Number.isFinite(num) ? { t: 'num', v: num } : { t: 'str', v: value }
 }
 
 class Parser {
@@ -393,23 +480,81 @@ class Parser {
       this.pos++
       return { kind: 'bool', value: tok.v === 1 }
     }
+    if (tok.t === 'str') {
+      this.pos++
+      return { kind: 'str', value: tok.v }
+    }
     return null
   }
 }
 
-function evalExpr(expr: Expr): number | boolean {
+/** The value type an expression node produces, used to reject a comparison that would otherwise
+ *  silently coerce a string (e.g. comparing filament_type to a number, or ordering strings with
+ *  <). Nested comparisons/booleans are typed 'bool'; 'not' is always 'bool'. */
+type ValueType = 'num' | 'bool' | 'str'
+
+function inferType(expr: Expr): ValueType {
+  switch (expr.kind) {
+    case 'num':
+      return 'num'
+    case 'bool':
+      return 'bool'
+    case 'str':
+      return 'str'
+    case 'not':
+      return 'bool'
+    case 'binary':
+      return 'bool'
+  }
+}
+
+/**
+ * True if `expr` contains a comparison that mixes an incompatible type: a string used with a
+ * relational operator (<, >, <=, >=), a string compared with == / != against a non-string, or a
+ * string used as an and/or operand. Such a condition must be treated as unevaluable (rule: never
+ * guess), not silently coerced (e.g. via NaN comparisons or JS's loose truthiness on strings).
+ */
+function hasTypeMismatch(expr: Expr): boolean {
+  switch (expr.kind) {
+    case 'num':
+    case 'bool':
+    case 'str':
+      return false
+    case 'not':
+      return hasTypeMismatch(expr.arg)
+    case 'binary': {
+      if (hasTypeMismatch(expr.left) || hasTypeMismatch(expr.right)) return true
+      const lt = inferType(expr.left)
+      const rt = inferType(expr.right)
+      if (lt !== 'str' && rt !== 'str') return false
+      // At least one side is a string: only == / != between two strings is allowed.
+      if (expr.op !== '==' && expr.op !== '!=') return true
+      return lt !== rt
+    }
+  }
+}
+
+function evalExpr(expr: Expr): number | boolean | string {
   switch (expr.kind) {
     case 'num':
       return expr.value
     case 'bool':
+      return expr.value
+    case 'str':
       return expr.value
     case 'not':
       return !toBool(evalExpr(expr.arg))
     case 'binary': {
       if (expr.op === 'and') return toBool(evalExpr(expr.left)) && toBool(evalExpr(expr.right))
       if (expr.op === 'or') return toBool(evalExpr(expr.left)) || toBool(evalExpr(expr.right))
-      const l = toNum(evalExpr(expr.left))
-      const r = toNum(evalExpr(expr.right))
+      const lVal = evalExpr(expr.left)
+      const rVal = evalExpr(expr.right)
+      if (typeof lVal === 'string' || typeof rVal === 'string') {
+        // hasTypeMismatch already guarantees both sides are strings and the op is == or != here.
+        return expr.op === '==' ? lVal === rVal : lVal !== rVal
+      }
+      const l = toNum(lVal)
+      const r = toNum(rVal)
       switch (expr.op) {
         case '==':
           return l === r
@@ -429,12 +574,16 @@ function evalExpr(expr: Expr): number | boolean {
   }
 }
 
-function toBool(v: number | boolean): boolean {
-  return typeof v === 'boolean' ? v : v !== 0
+function toBool(v: number | boolean | string): boolean {
+  if (typeof v === 'boolean') return v
+  if (typeof v === 'string') return v.length > 0
+  return v !== 0
 }
 
-function toNum(v: number | boolean): number {
-  return typeof v === 'number' ? v : v ? 1 : 0
+function toNum(v: number | boolean | string): number {
+  if (typeof v === 'number') return v
+  if (typeof v === 'string') return Number(v)
+  return v ? 1 : 0
 }
 
 // ---------------------------------------------------------------------------
@@ -442,10 +591,51 @@ function toNum(v: number | boolean): number {
 // ---------------------------------------------------------------------------
 
 // A placeholder is [name] or {name}, with an optional index [idx] or [name[idx]] / {name[idx]}. The
-// index is a number or an identifier (resolved as a tool constant); its value is ignored because
-// settings are single-valued here. Anything else (jinja {% %}, dotted {a.b}) is not matched.
+// index is a number or an identifier (resolved as a tool constant); most settings here are
+// single-valued and ignore it, but an indexed vector setting (e.g. first_layer_print_min[0]) uses
+// it to pick the component. Anything else (jinja {% %}, dotted {a.b}) is not matched.
 const PLACEHOLDER =
   /\[([A-Za-z_][A-Za-z0-9_]*)(?:\[([A-Za-z0-9_]+)\])?\]|\{([A-Za-z_][A-Za-z0-9_]*)(?:\[([A-Za-z0-9_]+)\])?\}/g
+
+// A plain placeholder reference: identifier, or identifier[idx]. Used to tell an expression-shaped
+// group apart from an ordinary variable placeholder (which substitutePlaceholders already handles).
+const PLAIN_REFERENCE = /^[A-Za-z_][A-Za-z0-9_]*(?:\[[A-Za-z0-9_]+\])?$/
+
+// A brace or bracket group that might hold a slicer arithmetic expression rather than a plain
+// variable reference: `[...]` allows one embedded `[idx]` (for an indexed setting inside the
+// expression, e.g. `retraction_length[0]*0.75`); `{...}` allows the same via its own character
+// class. Control-flow braces ({if}, {elif}, {else}, {endif}) are excluded by the caller.
+const EXPRESSION_GROUP = /\[([^[\]]*(?:\[[A-Za-z0-9_]+\])?[^[\]]*)\]|\{([^{}]*)\}/g
+
+const IDENTIFIER = /[A-Za-z_][A-Za-z0-9_]*/g
+
+/**
+ * Find brace/bracket groups that are not plain variable placeholders (see PLAIN_REFERENCE) but
+ * whose contents reference a recognized variable name, e.g. `{retraction_length[0]*0.75}`. These
+ * are slicer arithmetic expressions this tool does not evaluate: they are left untouched by
+ * substitutePlaceholders (the PLACEHOLDER regex does not match them), so this reports one warning
+ * per distinct expression rather than leaving the user with no explanation at all.
+ */
+function detectExpressionPlaceholders(
+  source: string,
+  isKnownVariable: (name: string) => boolean,
+  warnings: Set<string>,
+): void {
+  for (const m of source.matchAll(EXPRESSION_GROUP)) {
+    const content = (m[1] ?? m[2] ?? '').trim()
+    if (content === '') continue
+    if (PLAIN_REFERENCE.test(content)) continue
+    // {if COND}/{elif COND}/{else}/{endif} are control-flow tokens, not expressions; conditional
+    // evaluation already reports its own warning for one it could not resolve.
+    if (/^(if|elif|else|endif)\b/.test(content)) continue
+    const referencesKnownVariable = [...content.matchAll(IDENTIFIER)].some(
+      ([name]) => TOOL_INDEX_VARS.has(name) || isKnownVariable(name),
+    )
+    if (referencesKnownVariable) {
+      warnings.add(unevaluatedExpressionWarning(m[0]))
+    }
+  }
+}
 
 function substitutePlaceholders(
   source: string,
@@ -460,10 +650,11 @@ function substitutePlaceholders(
       if (name === undefined) return match
       // If an index is present it must be a number or a tool constant; otherwise this is not a
       // setting reference we own, so leave it verbatim without reporting.
-      if (idx !== undefined && resolveIndexToken(idx) === null) return match
+      const idxNum = idx !== undefined ? resolveIndexToken(idx) : null
+      if (idx !== undefined && idxNum === null) return match
       if (CONTROL_KEYWORDS.has(name)) return match
       if (TOOL_INDEX_VARS.has(name)) return '0'
-      const value = resolveSetting(name)
+      const value = resolveSetting(name, idxNum ?? undefined)
       if (value === null) {
         unknown.add(name)
         return match

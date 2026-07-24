@@ -9,6 +9,7 @@ import {
   layerZBracket,
   prepareProfile,
   setupPreamble,
+  shellSlicerContext,
   teardownLines,
 } from '../gcode/couponShell'
 import {
@@ -66,13 +67,24 @@ export function generateEmGcodeWithReport(
   if (spec.lineLengthMm <= 0) throw new Error('Line length must be positive')
   if (spec.nominalLineWidthMm <= 0) throw new Error('Nominal line width must be positive')
 
+  const g = emCouponGeometry(spec)
+  const { ox, oy } = couponOrigin(profile, g.couponWidthMm, g.couponHeightMm, spec.placement, EDGE_MARGIN_MM)
+  const context = shellSlicerContext(
+    profile,
+    spec.nominalLineWidthMm,
+    ox,
+    oy,
+    g.couponWidthMm,
+    g.couponHeightMm,
+  )
+
   // The pause gcode is only emitted (and its placeholders only reported) with a contrast base.
   const {
     profile: substituted,
     filament: substitutedFilament,
     unknownVariables,
     warnings,
-  } = prepareProfile(profile, filament, { includePause: spec.contrastBase })
+  } = prepareProfile(profile, filament, context, { includePause: spec.contrastBase })
 
   const flow = volumetricFlowMm3S(spec, profile.layerHeightMm)
   const flowLimit = flowWarningLimitMm3S(filament)

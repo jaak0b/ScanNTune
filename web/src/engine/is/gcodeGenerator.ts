@@ -9,6 +9,7 @@ import {
   layerZBracket,
   prepareProfile,
   setupPreamble,
+  shellSlicerContext,
   teardownLines,
 } from '../gcode/couponShell'
 import {
@@ -56,13 +57,25 @@ export function generateIsGcodeWithReport(
   validateIsSpec(spec)
   const { spec: fitted, notes } = fitSpecToBed(spec, profile)
 
+  const g = isCouponGeometry(fitted)
+  const { ox, oy } = couponOrigin(profile, g.couponWidthMm, g.couponHeightMm, spec.placement, EDGE_MARGIN_MM)
+  const nominalWallWidth = profile.nozzleDiameterMm * NOMINAL_WIDTH_FACTOR
+  const context = shellSlicerContext(
+    profile,
+    nominalWallWidth,
+    ox,
+    oy,
+    g.couponWidthMm,
+    g.couponHeightMm,
+  )
+
   // The pause G-code is only emitted (and its placeholders only reported) with a contrast base.
   const {
     profile: substituted,
     filament: substitutedFilament,
     unknownVariables,
     warnings,
-  } = prepareProfile(profile, filament, { includePause: spec.contrastBase })
+  } = prepareProfile(profile, filament, context, { includePause: spec.contrastBase })
   warnings.push(...notes)
   warnings.push(...rampWarnings(fitted))
 
