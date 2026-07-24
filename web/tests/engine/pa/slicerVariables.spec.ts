@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { substituteSlicerVariables } from '../../../src/engine/pa/slicerVariables'
+import {
+  substituteSlicerVariables,
+  unresolvedVariablesWarning,
+  type SlicerGenerationContext,
+} from '../../../src/engine/pa/slicerVariables'
 import { defaultFilamentProfile, defaultPrinterProfile } from '../../../src/engine/pa/types'
 import type { FilamentProfile, PrinterProfile } from '../../../src/engine/pa/types'
 
@@ -15,8 +19,9 @@ function substitute(
   gcode: string,
   p: Partial<PrinterProfile> = {},
   f: Partial<FilamentProfile> = {},
+  context?: SlicerGenerationContext,
 ): { gcode: string; unknown: string[]; warnings: string[] } {
-  return substituteSlicerVariables(gcode, printer(p), filament(f))
+  return substituteSlicerVariables(gcode, printer(p), filament(f), context)
 }
 
 describe('substituteSlicerVariables', () => {
@@ -151,13 +156,16 @@ describe('substituteSlicerVariables', () => {
     expect(r.gcode).toBe('B')
   })
 
-  it('leaves an unresolvable conditional literal with a single warning', () => {
+  it('leaves an unresolvable conditional literal with a single warning naming the condition', () => {
     const src = 'X {if some_unknown_flag > 3}Y{endif} Z'
     const r = substitute(src)
     expect(r.gcode).toBe(src)
     expect(r.unknown).toEqual([])
     expect(r.warnings).toEqual([
-      'A conditional block could not be evaluated; review it.',
+      'The conditional "{if some_unknown_flag > 3}" could not be evaluated, so the whole block ' +
+        'was left in the G-code exactly as written. Review the block in your start G-code, and ' +
+        'either fix the condition or replace the block with the lines from the branch you ' +
+        'intend to use.',
     ])
   })
 
@@ -180,5 +188,211 @@ describe('substituteSlicerVariables', () => {
     expect(r.gcode).toBe(src)
     expect(r.unknown).toEqual([])
     expect(r.warnings).toEqual([])
+  })
+
+  it('maps nozzle_temperature_initial_layer and bed_temperature_initial_layer_single to the filament temperatures', () => {
+    const r = substitute(
+      '[nozzle_temperature_initial_layer] [bed_temperature_initial_layer_single]',
+      {},
+      { nozzleTempC: 220, bedTempC: 70 },
+    )
+    expect(r.gcode).toBe('220 70')
+    expect(r.unknown).toEqual([])
+  })
+
+  it('substitutes filament_max_volumetric_speed when the filament has one configured', () => {
+    const r = substitute('[filament_max_volumetric_speed]', {}, { maxVolumetricFlowMm3S: 15 })
+    expect(r.gcode).toBe('15')
+    expect(r.unknown).toEqual([])
+  })
+
+  it('leaves filament_max_volumetric_speed unresolved rather than substituting 0 when unset', () => {
+    const r = substitute('MAX_FLOW=[filament_max_volumetric_speed]', {}, { maxVolumetricFlowMm3S: 0 })
+    expect(r.gcode).toBe('MAX_FLOW=[filament_max_volumetric_speed]')
+    expect(r.unknown).toEqual(['filament_max_volumetric_speed'])
+  })
+
+  it('substitutes outer_wall_speed and outer_wall_line_width from the generation context', () => {
+    const r = substitute('SPEED=[outer_wall_speed] WIDTH=[outer_wall_line_width]', {}, {}, {
+      outerWallSpeedMmS: 45.5,
+      outerWallLineWidthMm: 0.42,
+    })
+    expect(r.gcode).toBe('SPEED=45.5 WIDTH=0.42')
+    expect(r.unknown).toEqual([])
+  })
+
+  it('leaves outer_wall_speed and outer_wall_line_width unresolved without a generation context', () => {
+    const r = substitute('SPEED=[outer_wall_speed] WIDTH=[outer_wall_line_width]')
+    expect(r.gcode).toBe('SPEED=[outer_wall_speed] WIDTH=[outer_wall_line_width]')
+    expect(r.unknown).toEqual(['outer_wall_speed', 'outer_wall_line_width'])
+  })
+
+  it('substitutes first_layer_print_min/max components via the indexed [name[idx]] form', () => {
+    const context: SlicerGenerationContext = {
+      firstLayerBboxMm: { minXMm: 10, minYMm: 5, maxXMm: 90, maxYMm: 45 },
+    }
+    const r = substitute(
+      'MINX=[first_layer_print_min[0]] MINY=[first_layer_print_min[1]] ' +
+        'MAXX={first_layer_print_max[0]} MAXY={first_layer_print_max[1]}',
+      {},
+      {},
+      context,
+    )
+    expect(r.gcode).toBe('MINX=10 MINY=5 MAXX=90 MAXY=45')
+    expect(r.unknown).toEqual([])
+  })
+
+  it('substitutes first_layer_print_min as a comma-joined pair in the bare, unindexed form', () => {
+    const context: SlicerGenerationContext = {
+      firstLayerBboxMm: { minXMm: 10, minYMm: 5, maxXMm: 90, maxYMm: 45 },
+    }
+    const r = substitute('[first_layer_print_min]', {}, {}, context)
+    expect(r.gcode).toBe('10,5')
+    expect(r.unknown).toEqual([])
+  })
+
+  it('leaves first_layer_print_min/max unresolved without a generation context', () => {
+    const r = substitute('[first_layer_print_min[0]]')
+    expect(r.gcode).toBe('[first_layer_print_min[0]]')
+    expect(r.unknown).toEqual(['first_layer_print_min'])
+  })
+
+  it('evaluates the {if first_layer_print_min[0] < 50 and first_layer_print_min[1] < 20} conditional true branch', () => {
+    const context: SlicerGenerationContext = {
+      firstLayerBboxMm: { minXMm: 10, minYMm: 5, maxXMm: 90, maxYMm: 45 },
+    }
+    const src =
+      '{if first_layer_print_min[0] < 50 and first_layer_print_min[1] < 20}small{else}large{endif}'
+    const r = substitute(src, {}, {}, context)
+    expect(r.gcode).toBe('small')
+    expect(r.warnings).toEqual([])
+  })
+
+  it('evaluates the {if first_layer_print_min[0] < 50 and first_layer_print_min[1] < 20} conditional else branch', () => {
+    const context: SlicerGenerationContext = {
+      firstLayerBboxMm: { minXMm: 60, minYMm: 30, maxXMm: 140, maxYMm: 70 },
+    }
+    const src =
+      '{if first_layer_print_min[0] < 50 and first_layer_print_min[1] < 20}small{else}large{endif}'
+    const r = substitute(src, {}, {}, context)
+    expect(r.gcode).toBe('large')
+    expect(r.warnings).toEqual([])
+  })
+
+  it('evaluates a conditional on a bare scalar profile variable, e.g. layer_height', () => {
+    const src = '{if layer_height < 0.2}THIN{else}THICK{endif}'
+    const thin = substitute(src, { layerHeightMm: 0.12 })
+    expect(thin.gcode).toBe('THIN')
+    expect(thin.warnings).toEqual([])
+    const thick = substitute(src, { layerHeightMm: 0.28 })
+    expect(thick.gcode).toBe('THICK')
+    expect(thick.warnings).toEqual([])
+  })
+
+  it('evaluates a conditional on an indexed single-tool scalar variable, e.g. retraction_length[0]', () => {
+    const src = '{if retraction_length[0] < 1}SHORT{else}LONG{endif}'
+    const short = substitute(src, { retractMm: 0.5 })
+    expect(short.gcode).toBe('SHORT')
+    const long = substitute(src, { retractMm: 5 })
+    expect(long.gcode).toBe('LONG')
+  })
+
+  it('evaluates a conditional comparing a string-valued variable to a quoted string literal', () => {
+    const src = '{if filament_type == "PETG"}PETG SETTINGS{else}OTHER SETTINGS{endif}'
+    const petg = substitute(src, {}, { filamentType: 'PETG' })
+    expect(petg.gcode).toBe('PETG SETTINGS')
+    expect(petg.warnings).toEqual([])
+    const pla = substitute(src, {}, { filamentType: 'PLA' })
+    expect(pla.gcode).toBe('OTHER SETTINGS')
+    expect(pla.warnings).toEqual([])
+  })
+
+  it('leaves a conditional on an unknown identifier unevaluated with the standard warning', () => {
+    const src = '{if some_unmapped_setting > 3}A{else}B{endif}'
+    const r = substitute(src)
+    expect(r.gcode).toBe(src)
+    expect(r.warnings).toEqual([
+      'The conditional "{if some_unmapped_setting > 3}" could not be evaluated, so the whole ' +
+        'block was left in the G-code exactly as written. Review the block in your start ' +
+        'G-code, and either fix the condition or replace the block with the lines from the ' +
+        'branch you intend to use.',
+    ])
+  })
+
+  describe('unresolvedVariablesWarning', () => {
+    it('produces the exact user-facing text', () => {
+      expect(unresolvedVariablesWarning(['foo', 'bar'])).toBe(
+        'These slicer variables could not be filled in: foo, bar. ' +
+          'They were left exactly as written in the G-code, and a printer macro that reads one ' +
+          'of them as a number will fail. Replace each one with a real number in your start ' +
+          'G-code, in the profile editor, before printing.',
+      )
+    })
+  })
+
+  it('resolves this real user profile fixture end to end: all eight variables, the bbox conditional (both branches), and the unevaluated bowden-length expression', () => {
+    const macro =
+      'PRINT_START EXTRUDER=[nozzle_temperature_initial_layer] BED=[bed_temperature_initial_layer_single] ' +
+      'MAX_FLOW=[filament_max_volumetric_speed] WALL_SPEED=[outer_wall_speed] WALL_WIDTH=[outer_wall_line_width] ' +
+      'BOWDEN_LENGTH=[retraction_length[0]*0.75]\n' +
+      '{if first_layer_print_min[0] < 50 and first_layer_print_min[1] < 20}\n' +
+      '; small part start\n' +
+      '{else}\n' +
+      '; large part start\n' +
+      '{endif}'
+    const p: Partial<PrinterProfile> = { retractMm: 0.8 }
+    const f: Partial<FilamentProfile> = {
+      nozzleTempC: 230,
+      bedTempC: 65,
+      maxVolumetricFlowMm3S: 11,
+    }
+    const smallContext: SlicerGenerationContext = {
+      outerWallSpeedMmS: 40,
+      outerWallLineWidthMm: 0.45,
+      firstLayerBboxMm: { minXMm: 10, minYMm: 5, maxXMm: 40, maxYMm: 15 },
+    }
+    const expressionWarning =
+      'The expression "[retraction_length[0]*0.75]" was left exactly as written in the G-code. ' +
+      'This tool does not evaluate slicer arithmetic expressions. Replace the whole expression ' +
+      'with the computed number before printing.'
+    const small = substitute(macro, p, f, smallContext)
+    expect(small.unknown).toEqual([])
+    expect(small.warnings).toEqual([expressionWarning])
+    expect(small.gcode).toContain(
+      'PRINT_START EXTRUDER=230 BED=65 MAX_FLOW=11 WALL_SPEED=40 WALL_WIDTH=0.45 ' +
+        'BOWDEN_LENGTH=[retraction_length[0]*0.75]',
+    )
+    expect(small.gcode).toContain('; small part start')
+    expect(small.gcode).not.toContain('; large part start')
+
+    const largeContext: SlicerGenerationContext = {
+      ...smallContext,
+      firstLayerBboxMm: { minXMm: 60, minYMm: 30, maxXMm: 200, maxYMm: 150 },
+    }
+    const large = substitute(macro, p, f, largeContext)
+    expect(large.unknown).toEqual([])
+    expect(large.warnings).toEqual([expressionWarning])
+    expect(large.gcode).toContain('; large part start')
+    expect(large.gcode).not.toContain('; small part start')
+  })
+
+  describe('unevaluated slicer arithmetic expressions', () => {
+    it('resolves a plain retraction_length[0] placeholder to retractMm', () => {
+      const r = substitute('BOWDEN=[retraction_length[0]]', { retractMm: 0.8 })
+      expect(r.gcode).toBe('BOWDEN=0.8')
+      expect(r.unknown).toEqual([])
+      expect(r.warnings).toEqual([])
+    })
+
+    it('leaves an expression referencing retraction_length[0] verbatim and warns, without an unresolved-variable warning', () => {
+      const r = substitute('BOWDEN_LENGTH={retraction_length[0]*0.75}', { retractMm: 0.8 })
+      expect(r.gcode).toBe('BOWDEN_LENGTH={retraction_length[0]*0.75}')
+      expect(r.unknown).toEqual([])
+      expect(r.warnings).toEqual([
+        'The expression "{retraction_length[0]*0.75}" was left exactly as written in the ' +
+          'G-code. This tool does not evaluate slicer arithmetic expressions. Replace the ' +
+          'whole expression with the computed number before printing.',
+      ])
+    })
   })
 })

@@ -7,6 +7,7 @@ import {
   filamentSwapPause,
   prepareProfile,
   setupPreamble,
+  shellSlicerContext,
   teardownLines,
 } from '../gcode/couponShell'
 import { BASE_LAYERS, type Emitter, extrude, retract, travel } from '../gcode/emitter'
@@ -61,12 +62,15 @@ export function generatePaGcodeWithReport(
       throw new Error('A smooth time sweep needs a fixed pressure advance value (fixedAdvance).')
     }
   }
+  const g = couponGeometry(spec)
+  const { ox, oy } = couponOrigin(profile, g.baseWidthMm, g.baseHeightMm)
+  const context = shellSlicerContext(profile, spec.lineWidthMm, ox, oy, g.baseWidthMm, g.baseHeightMm)
   const {
     profile: substituted,
     filament: substitutedFilament,
     unknownVariables,
     warnings,
-  } = prepareProfile(profile, filament)
+  } = prepareProfile(profile, filament, context)
   return { gcode: emitPaGcode(substituted, substitutedFilament, spec), unknownVariables, warnings }
 }
 

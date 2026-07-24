@@ -7,6 +7,7 @@ import {
   tryParseOrcaPreset,
 } from './slicerImport'
 import { matchOrcaVendor } from './orcaVendors'
+import { ORCA_PROFILES_LOCATION, type OsName } from './orcaInstallPaths'
 
 export interface SlicerFile {
   fileName: string
@@ -16,7 +17,7 @@ export interface SlicerFile {
 /** One unresolved "inherits" parent, structured for the UI instead of parsed out of a prose
  *  warning string. pathHint is ALWAYS a real, existing path: the exact '<name>.json' file when the
  *  missing parent is a machine preset that resolves to a real Orca vendor folder, otherwise the
- *  '<installBase>\resources\profiles\' base folder that definitely exists. pathIsExactFile tells the
+ *  install's profiles base folder (layout varies by OS) that definitely exists. pathIsExactFile tells the
  *  two apart so the UI does not string-sniff: true means the chip is the file itself; false means
  *  the chip is the base folder and the file (fileToFind) is somewhere inside it. */
 export interface UnresolvedParent {
@@ -45,11 +46,13 @@ interface ParsedFile {
  * parents (an uploaded preset of the same name wins) but are never imported standalone, so the
  * cache can only fill fields an uploaded chain asks for. `installPath` is the OrcaSlicer install
  * folder used to make unresolved-parent path hints absolute; null keeps the generic relative hint.
+ * `os` picks the install layout (path separator, resources subpath) the hint is rendered with.
  */
 export function importSlicerConfigs(
   files: SlicerFile[],
   cachedPresets: SlicerFile[] = [],
   installPath: string | null = null,
+  os: OsName = 'Windows',
 ): SlicerImportResult {
   const parsed = files.map(parseFile)
   const orcaByName = buildOrcaNameMap([...cachedPresets.map(parseFile), ...parsed])
@@ -81,7 +84,7 @@ export function importSlicerConfigs(
       fileName: file.fileName,
       result: prefixWarnings(
         file.fileName,
-        importOrcaChain(file, orcaByName, installPath, cachedOnlyNames),
+        importOrcaChain(file, orcaByName, installPath, os, cachedOnlyNames),
       ),
     })
   }
@@ -172,6 +175,7 @@ function importOrcaChain(
   file: ParsedFile,
   orcaByName: Map<string, Record<string, unknown>>,
   installPath: string | null,
+  os: OsName,
   cachedOnlyNames: Set<string>,
 ): SlicerImportResult {
   const preset = file.orca as Record<string, unknown>
@@ -189,9 +193,9 @@ function importOrcaChain(
     )
   } else if (chain.unresolvedParent !== undefined) {
     const kind = orcaPresetKind(preset)
-    result.warnings.push(unresolvedInheritsWarning(chain.unresolvedParent, kind, installPath))
+    result.warnings.push(unresolvedInheritsWarning(chain.unresolvedParent, kind, os))
     const vendorCandidates = [chain.unresolvedParent, ...chain.ancestryToRoot]
-    const hint = parentPathHint(chain.unresolvedParent, kind, installPath, vendorCandidates)
+    const hint = parentPathHint(chain.unresolvedParent, kind, installPath, vendorCandidates, os)
     result.unresolvedParents.push({
       presetName: chain.unresolvedParent,
       pathHint: hint.path,
@@ -218,28 +222,22 @@ interface PathHint {
  * their exact file is never derived. Candidates come most-specific first: the missing parent's own
  * name, then every preset between it and the uploaded chain root, nearest child first (an
  * intermediate system preset like "Voron 2.4 300 0.4 nozzle" carries the vendor even when it sits
- * deep in the chain), then the root. When nothing qualifies we return the resources\profiles base
- * folder (which always exists) and the UI tells the user to find the file somewhere inside it.
+ * deep in the chain), then the root. When nothing qualifies we return the OS-appropriate profiles
+ * base folder (which always exists) and the UI tells the user to find the file somewhere inside it.
  */
 function parentPathHint(
   presetName: string,
   kind: OrcaPresetKind,
   installPath: string | null,
   vendorCandidates: string[],
+  os: OsName,
 ): PathHint {
-  const isPosix = installPath !== null && installPath.includes('/')
-  const sep = isPosix ? '/' : '\\'
-
   const base =
     installPath !== null && installPath.trim() !== ''
       ? installPath.trim().replace(/[\\/]+$/, '')
       : 'OrcaSlicer'
-
-  const needsResources = !base.toLowerCase().endsWith('resources')
-  const profilesBase = needsResources
-    ? `${base}${sep}resources${sep}profiles${sep}`
-    : `${base}${sep}profiles${sep}`
-
+  const { separator, subpath } = ORCA_PROFILES_LOCATION[os]
+  const profilesBase = `${base}${separator}${subpath}${separator}`
   if (kind !== 'machine') return { path: profilesBase, isExactFile: false }
   let vendor: string | null = null
   for (const candidate of vendorCandidates) {
@@ -247,7 +245,10 @@ function parentPathHint(
     if (vendor !== null) break
   }
   if (vendor === null) return { path: profilesBase, isExactFile: false }
-  return { path: `${profilesBase}${vendor}${sep}${kind}${sep}${presetName}.json`, isExactFile: true }
+  return {
+    path: `${profilesBase}${vendor}${separator}${kind}${separator}${presetName}.json`,
+    isExactFile: true,
+  }
 }
 
 interface ChainResolution {
@@ -321,15 +322,9 @@ function resolveChain(
   }
 }
 
-function unresolvedInheritsWarning(parentName: string, kind: OrcaPresetKind, installPath: string | null): string {
-  const isPosix = installPath !== null && installPath.includes('/')
-  const sep = isPosix ? '/' : '\\'
-
-  const base = installPath !== null ? installPath.trim() : ''
-  const needsResources = !base.toLowerCase().endsWith('resources')
-  const prefix = needsResources ? `resources${sep}profiles${sep}` : `profiles${sep}`
-
-  const placeholderHint = `${prefix}<vendor>${sep}${kind}${sep}${parentName}.json`
+function unresolvedInheritsWarning(parentName: string, kind: OrcaPresetKind, os: OsName): string {
+  const { separator, subpath } = ORCA_PROFILES_LOCATION[os]
+  const placeholderHint = `${subpath}${separator}<vendor>${separator}${kind}${separator}${parentName}.json`
   return (
     `This preset inherits from '${parentName}' which was not uploaded. ` +
     `Find it under the OrcaSlicer installation: ${placeholderHint}`
