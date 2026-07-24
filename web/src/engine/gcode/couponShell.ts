@@ -1,5 +1,5 @@
 import type { FilamentProfile, PrinterProfile } from './profileTypes'
-import { substituteSlicerVariables } from '../pa/slicerVariables'
+import { substituteSlicerVariables, type SlicerGenerationContext } from '../pa/slicerVariables'
 import {
   BASE_LAYERS,
   basePerimeters,
@@ -11,9 +11,34 @@ import {
   PERIMETER_LOOPS,
   rasterBase,
   retract,
+  shellSpeedMmS,
   startGcodeHeats,
   travel,
 } from './emitter'
+
+export type { SlicerGenerationContext }
+
+/**
+ * The generation context every coupon generator must build and pass to `prepareProfile`: the
+ * shell's actual line width and print speed (the same values `baseLayers` below will use to
+ * print the outer wall) and the first layer's bounding box (the same `ox`/`oy`/width/height the
+ * generator's own `couponOrigin` call already produced). Centralizing this here means a slicer
+ * placeholder can never see a value the generator did not actually print (rule: single source).
+ */
+export function shellSlicerContext(
+  profile: PrinterProfile,
+  lineWidthMm: number,
+  ox: number,
+  oy: number,
+  widthMm: number,
+  heightMm: number,
+): SlicerGenerationContext {
+  return {
+    outerWallSpeedMmS: shellSpeedMmS(profile),
+    outerWallLineWidthMm: lineWidthMm,
+    firstLayerBboxMm: { minXMm: ox, minYMm: oy, maxXMm: ox + widthMm, maxYMm: oy + heightMm },
+  }
+}
 
 /** A profile and filament with slicer variables substituted, plus the substitution report. */
 export interface PreparedProfile {
@@ -33,16 +58,17 @@ export interface PreparedProfile {
 export function prepareProfile(
   profile: PrinterProfile,
   filament: FilamentProfile,
+  context: SlicerGenerationContext,
   opts?: { includePause?: boolean },
 ): PreparedProfile {
-  const start = substituteSlicerVariables(profile.startGcode, profile, filament)
+  const start = substituteSlicerVariables(profile.startGcode, profile, filament, context)
   const pause =
     (opts?.includePause ?? true)
-      ? substituteSlicerVariables(profile.pauseGcode, profile, filament)
+      ? substituteSlicerVariables(profile.pauseGcode, profile, filament, context)
       : { gcode: profile.pauseGcode, unknown: [] as string[], warnings: [] as string[] }
-  const end = substituteSlicerVariables(profile.endGcode, profile, filament)
-  const filamentStart = substituteSlicerVariables(filament.startGcode, profile, filament)
-  const filamentEnd = substituteSlicerVariables(filament.endGcode, profile, filament)
+  const end = substituteSlicerVariables(profile.endGcode, profile, filament, context)
+  const filamentStart = substituteSlicerVariables(filament.startGcode, profile, filament, context)
+  const filamentEnd = substituteSlicerVariables(filament.endGcode, profile, filament, context)
   const substituted: PrinterProfile = {
     ...profile,
     startGcode: start.gcode,

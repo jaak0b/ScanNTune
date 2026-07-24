@@ -81,6 +81,7 @@ describe('importSlicerConfigs: multi-file Orca inherits resolution', () => {
     expect(warning).toBeDefined()
     expect(warning).toContain('Voron 2.4 300 0.4 nozzle')
     expect(warning).toContain('resources\\profiles\\<vendor>\\machine\\Voron 2.4 300 0.4 nozzle.json')
+    // Windows is the default OS when the caller does not pass one.
   })
 
   it('exposes the unresolved parent structurally with a real vendor guess', () => {
@@ -269,6 +270,28 @@ describe('importSlicerConfigs: multi-file Orca inherits resolution', () => {
         presetName: 'Voron 2.4 300 0.4 nozzle',
         pathHint:
           'C:\\Program Files\\OrcaSlicer\\resources\\profiles\\Voron\\machine\\Voron 2.4 300 0.4 nozzle.json',
+        pathIsExactFile: true,
+        fileToFind: 'Voron 2.4 300 0.4 nozzle.json',
+        fileName: 'orca_machine_chubechanger.json',
+      },
+    ])
+  })
+
+  it('renders the macOS base-preset path hint without a duplicated resources folder', () => {
+    // The .app bundle's Contents/Resources folder is already Orca's resources directory on
+    // macOS, so the hint must not append an extra "resources" segment, and it must use forward
+    // slashes throughout instead of mixing in backslashes.
+    const result = importSlicerConfigs(
+      [{ fileName: 'orca_machine_chubechanger.json', content: chubechanger }],
+      [],
+      '/Applications/OrcaSlicer.app/Contents/Resources',
+      'macOS',
+    )
+    expect(result.unresolvedParents).toEqual([
+      {
+        presetName: 'Voron 2.4 300 0.4 nozzle',
+        pathHint:
+          '/Applications/OrcaSlicer.app/Contents/Resources/profiles/Voron/machine/Voron 2.4 300 0.4 nozzle.json',
         pathIsExactFile: true,
         fileToFind: 'Voron 2.4 300 0.4 nozzle.json',
         fileName: 'orca_machine_chubechanger.json',

@@ -9,6 +9,7 @@ import { hasMeasuredResolution } from '../util/scanResolution'
 import { analyzePaScan } from '../workerClient'
 import type { PaProcessing } from '../workerClient'
 import { generatePaGcodeWithReport } from '../engine/pa/gcodeGenerator'
+import { unresolvedVariablesWarning } from '../engine/pa/slicerVariables'
 import { paCorrection, sweepCorrection } from '../engine/pa/paCorrectionFormatter'
 import {
   couponGeometry,
@@ -96,6 +97,7 @@ const generateError = ref('')
 const unknownVariables = ref<string[]>([])
 const templateWarnings = ref<string[]>([])
 const canGenerate = computed(() => store.selected !== null && store.selectedFilament !== null)
+const unknownVariablesWarning = computed(() => unresolvedVariablesWarning(unknownVariables.value))
 
 function sanitizeName(name: string): string {
   return name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || 'printer'
@@ -480,7 +482,7 @@ const stCorrection = computed(() => {
         type="warning"
         variant="tonal"
         class="mt-3"
-        :text="`Unknown slicer variables left as-is: ${unknownVariables.join(', ')}. Replace them with real values if your firmware does not resolve them.`"
+        :text="unknownVariablesWarning"
         data-testid="unknown-variables-warning"
       />
       <v-alert

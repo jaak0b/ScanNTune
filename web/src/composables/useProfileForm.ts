@@ -301,7 +301,7 @@ export function useProfileForm() {
       fileName: `${p.name}.json`,
       content: p.content,
     }))
-    const result = importSlicerConfigs(slicerFiles, cached, presetStore.installPath)
+    const result = importSlicerConfigs(slicerFiles, cached, presetStore.installPath, presetStore.os)
     warnings.push(...result.warnings)
     const orcaMachine = uploads.some(
       (u) => u.orca !== null && orcaPresetKind(u.orca) === 'machine',

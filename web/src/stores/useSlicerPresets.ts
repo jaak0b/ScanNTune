@@ -2,13 +2,15 @@ import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import type { OrcaPresetKind } from '../engine/pa/slicerImport'
 import { orcaPresetKind, orcaPresetName, tryParseOrcaPreset } from '../engine/pa/slicerImport'
+import type { OsName } from '../engine/pa/orcaInstallPaths'
+
+export type { OsName }
 
 const STORAGE_KEY = 'scanntune.slicerPresets'
 
 const PRESET_KINDS: readonly OrcaPresetKind[] = ['filament', 'process', 'machine']
 
 export type SlicerName = 'OrcaSlicer' | 'PrusaSlicer'
-export type OsName = 'Windows' | 'macOS' | 'Linux'
 
 const SLICER_NAMES: readonly SlicerName[] = ['OrcaSlicer', 'PrusaSlicer']
 const OS_NAMES: readonly OsName[] = ['Windows', 'macOS', 'Linux']
