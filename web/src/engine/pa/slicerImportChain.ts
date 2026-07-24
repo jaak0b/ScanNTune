@@ -189,7 +189,7 @@ function importOrcaChain(
     )
   } else if (chain.unresolvedParent !== undefined) {
     const kind = orcaPresetKind(preset)
-    result.warnings.push(unresolvedInheritsWarning(chain.unresolvedParent, kind))
+    result.warnings.push(unresolvedInheritsWarning(chain.unresolvedParent, kind, installPath))
     const vendorCandidates = [chain.unresolvedParent, ...chain.ancestryToRoot]
     const hint = parentPathHint(chain.unresolvedParent, kind, installPath, vendorCandidates)
     result.unresolvedParents.push({
@@ -227,11 +227,19 @@ function parentPathHint(
   installPath: string | null,
   vendorCandidates: string[],
 ): PathHint {
+  const isPosix = installPath !== null && installPath.includes('/')
+  const sep = isPosix ? '/' : '\\'
+
   const base =
     installPath !== null && installPath.trim() !== ''
       ? installPath.trim().replace(/[\\/]+$/, '')
       : 'OrcaSlicer'
-  const profilesBase = `${base}\\resources\\profiles\\`
+
+  const needsResources = !base.toLowerCase().endsWith('resources')
+  const profilesBase = needsResources
+    ? `${base}${sep}resources${sep}profiles${sep}`
+    : `${base}${sep}profiles${sep}`
+
   if (kind !== 'machine') return { path: profilesBase, isExactFile: false }
   let vendor: string | null = null
   for (const candidate of vendorCandidates) {
@@ -239,7 +247,7 @@ function parentPathHint(
     if (vendor !== null) break
   }
   if (vendor === null) return { path: profilesBase, isExactFile: false }
-  return { path: `${profilesBase}${vendor}\\${kind}\\${presetName}.json`, isExactFile: true }
+  return { path: `${profilesBase}${vendor}${sep}${kind}${sep}${presetName}.json`, isExactFile: true }
 }
 
 interface ChainResolution {
@@ -313,8 +321,15 @@ function resolveChain(
   }
 }
 
-function unresolvedInheritsWarning(parentName: string, kind: OrcaPresetKind): string {
-  const placeholderHint = `resources\\profiles\\<vendor>\\${kind}\\${parentName}.json`
+function unresolvedInheritsWarning(parentName: string, kind: OrcaPresetKind, installPath: string | null): string {
+  const isPosix = installPath !== null && installPath.includes('/')
+  const sep = isPosix ? '/' : '\\'
+
+  const base = installPath !== null ? installPath.trim() : ''
+  const needsResources = !base.toLowerCase().endsWith('resources')
+  const prefix = needsResources ? `resources${sep}profiles${sep}` : `profiles${sep}`
+
+  const placeholderHint = `${prefix}<vendor>${sep}${kind}${sep}${parentName}.json`
   return (
     `This preset inherits from '${parentName}' which was not uploaded. ` +
     `Find it under the OrcaSlicer installation: ${placeholderHint}`

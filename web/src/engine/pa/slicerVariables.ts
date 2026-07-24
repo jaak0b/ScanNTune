@@ -23,6 +23,14 @@ const VARIABLE_MAP: Record<
   first_layer_height: (p) => p.layerHeightMm,
   nozzle_diameter: (p) => p.nozzleDiameterMm,
   travel_speed: (p) => p.travelSpeedMmS,
+  nozzle_temperature_initial_layer: (_p, f) => f.nozzleTempC,
+  bed_temperature_initial_layer_single: (_p, f) => f.bedTempC,
+  first_layer_print_min: () => 0,
+  first_layer_print_max: (p) => Math.min(p.bedWidthMm, p.bedDepthMm),
+  outer_wall_speed: (p) => p.travelSpeedMmS / 2, // approximation
+  outer_wall_line_width: (p) => p.nozzleDiameterMm,
+  filament_max_volumetric_speed: (_p, f) => f.maxVolumetricFlowMm3S || 0,
+  retraction_length: (p) => p.retractMm,
 }
 
 /**
