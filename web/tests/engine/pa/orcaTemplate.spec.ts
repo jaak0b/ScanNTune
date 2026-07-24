@@ -9,24 +9,24 @@ const resolve = (name: string): string | null => {
 
 describe('evaluateCondition', () => {
   it('treats the single tool as extruder 0', () => {
-    expect(evaluateCondition('is_extruder_used[0]')).toBe(true)
-    expect(evaluateCondition('is_extruder_used[1]')).toBe(false)
-    expect(evaluateCondition('is_extruder_used[initial_tool]')).toBe(true)
+    expect(evaluateCondition('is_extruder_used[0]', resolve)).toBe(true)
+    expect(evaluateCondition('is_extruder_used[1]', resolve)).toBe(false)
+    expect(evaluateCondition('is_extruder_used[initial_tool]', resolve)).toBe(true)
   })
 
   it('evaluates comparisons and boolean logic', () => {
-    expect(evaluateCondition('initial_tool == 0')).toBe(true)
-    expect(evaluateCondition('current_extruder != 0')).toBe(false)
-    expect(evaluateCondition('is_extruder_used[0] and not is_extruder_used[1]')).toBe(true)
-    expect(evaluateCondition('(is_extruder_used[1] or is_extruder_used[0])')).toBe(true)
-    expect(evaluateCondition('1 < 2')).toBe(true)
+    expect(evaluateCondition('initial_tool == 0', resolve)).toBe(true)
+    expect(evaluateCondition('current_extruder != 0', resolve)).toBe(false)
+    expect(evaluateCondition('is_extruder_used[0] and not is_extruder_used[1]', resolve)).toBe(true)
+    expect(evaluateCondition('(is_extruder_used[1] or is_extruder_used[0])', resolve)).toBe(true)
+    expect(evaluateCondition('1 < 2', resolve)).toBe(true)
   })
 
   it('returns null for anything outside the grammar', () => {
-    expect(evaluateCondition('some_unknown_flag > 3')).toBeNull()
-    expect(evaluateCondition('is_extruder_used')).toBeNull()
-    expect(evaluateCondition('1 +')).toBeNull()
-    expect(evaluateCondition('is_extruder_used[foo]')).toBeNull()
+    expect(evaluateCondition('some_unknown_flag > 3', resolve)).toBeNull()
+    expect(evaluateCondition('is_extruder_used', resolve)).toBeNull()
+    expect(evaluateCondition('1 +', resolve)).toBeNull()
+    expect(evaluateCondition('is_extruder_used[foo]', resolve)).toBeNull()
   })
 })
 

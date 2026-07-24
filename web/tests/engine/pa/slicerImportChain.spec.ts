@@ -276,6 +276,43 @@ describe('importSlicerConfigs: multi-file Orca inherits resolution', () => {
     ])
   })
 
+  it('uses forward slashes and avoids duplicate resources dir for macOS install path', () => {
+    const result = importSlicerConfigs(
+      [{ fileName: 'orca_machine_chubechanger.json', content: chubechanger }],
+      [],
+      '/Applications/OrcaSlicer.app/Contents/Resources',
+    )
+    expect(result.unresolvedParents).toEqual([
+      {
+        presetName: 'Voron 2.4 300 0.4 nozzle',
+        pathHint:
+          '/Applications/OrcaSlicer.app/Contents/Resources/profiles/Voron/machine/Voron 2.4 300 0.4 nozzle.json',
+        pathIsExactFile: true,
+        fileToFind: 'Voron 2.4 300 0.4 nozzle.json',
+        fileName: 'orca_machine_chubechanger.json',
+      },
+    ])
+  })
+
+  it('uses forward slashes and appends resources/profiles/ for Linux install path', () => {
+    const result = importSlicerConfigs(
+      [{ fileName: 'orca_machine_chubechanger.json', content: chubechanger }],
+      [],
+      '/usr/share/OrcaSlicer',
+    )
+    expect(result.unresolvedParents).toEqual([
+      {
+        presetName: 'Voron 2.4 300 0.4 nozzle',
+        pathHint:
+          '/usr/share/OrcaSlicer/resources/profiles/Voron/machine/Voron 2.4 300 0.4 nozzle.json',
+        pathIsExactFile: true,
+        fileToFind: 'Voron 2.4 300 0.4 nozzle.json',
+        fileName: 'orca_machine_chubechanger.json',
+      },
+    ])
+  })
+
+
   it('reports a per-file sources breakdown of imported fields', () => {
     const result = importSlicerConfigs([
       { fileName: 'orca_machine_chubechanger.json', content: chubechanger },

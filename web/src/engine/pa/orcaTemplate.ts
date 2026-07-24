@@ -33,7 +33,7 @@ const CONTROL_KEYWORDS = new Set(['if', 'elif', 'else', 'endif'])
 export function evaluateTemplate(source: string, resolveSetting: SettingResolver): TemplateResult {
   const unknown = new Set<string>()
   const warnings = new Set<string>()
-  const afterConditionals = evaluateConditionals(source, warnings)
+  const afterConditionals = evaluateConditionals(source, resolveSetting, warnings)
   const text = substitutePlaceholders(afterConditionals, resolveSetting, unknown)
   return { text, unknown: [...unknown], warnings: [...warnings] }
 }
@@ -71,9 +71,9 @@ function tokenize(source: string): Token[] {
  * Resolve every top-level {if}...{endif} block, recursing into the kept branch. An unbalanced or
  * unevaluable block is emitted verbatim (with one warning) so nothing is partially mangled.
  */
-function evaluateConditionals(source: string, warnings: Set<string>): string {
+function evaluateConditionals(source: string, resolveSetting: SettingResolver, warnings: Set<string>): string {
   const tokens = tokenize(source)
-  const { text } = renderTokens(tokens, 0, warnings)
+  const { text } = renderTokens(tokens, 0, resolveSetting, warnings)
   return text
 }
 
@@ -87,6 +87,7 @@ interface Branch {
 function renderTokens(
   tokens: Token[],
   start: number,
+  resolveSetting: SettingResolver,
   warnings: Set<string>,
 ): { text: string; next: number } {
   let out = ''
@@ -98,7 +99,7 @@ function renderTokens(
       i++
     } else if (tok.kind === 'if') {
       const block = parseBlock(tokens, i)
-      out += renderBlock(block, tokens, warnings)
+      out += renderBlock(block, tokens, resolveSetting, warnings)
       i = block.end
     } else {
       // A stray elif/else/endif with no opening if: leave it literal so nothing is lost.
@@ -160,23 +161,23 @@ function parseBlock(tokens: Token[], open: number): ParsedBlock {
 
 /** Render a parsed block: pick the first branch whose condition is true, recursing into it. If any
  * condition is unevaluable (or the block is unbalanced), emit the whole block literally + warn. */
-function renderBlock(block: ParsedBlock, _tokens: Token[], warnings: Set<string>): string {
+function renderBlock(block: ParsedBlock, _tokens: Token[], resolveSetting: SettingResolver, warnings: Set<string>): string {
   if (!block.balanced) {
     warnings.add(UNEVALUATED_CONDITION_WARNING)
     return block.raw
   }
   for (const branch of block.branches) {
     if (branch.cond === null) continue
-    const value = evaluateCondition(branch.cond)
+    const value = evaluateCondition(branch.cond, resolveSetting)
     if (value === null) {
       warnings.add(UNEVALUATED_CONDITION_WARNING)
       return block.raw
     }
   }
   for (const branch of block.branches) {
-    const taken = branch.cond === null || evaluateCondition(branch.cond) === true
+    const taken = branch.cond === null || evaluateCondition(branch.cond, resolveSetting) === true
     if (taken) {
-      return renderTokens(branch.tokens, 0, warnings).text
+      return renderTokens(branch.tokens, 0, resolveSetting, warnings).text
     }
   }
   return ''
@@ -197,8 +198,8 @@ type Expr =
  * does not understand (so the caller leaves the whole block literal). Grammar: integer literals;
  * is_extruder_used[N]; the tool-index constants (= 0); == != < > <= >=; and/or/not; parentheses.
  */
-export function evaluateCondition(source: string): boolean | null {
-  const tokens = lex(source)
+export function evaluateCondition(source: string, resolveSetting: SettingResolver): boolean | null {
+  const tokens = lex(source, resolveSetting)
   if (tokens === null) return null
   const parser = new Parser(tokens)
   const expr = parser.parseExpression()
@@ -216,7 +217,7 @@ type Lexeme =
 
 const OPERATORS = ['<=', '>=', '==', '!=', '<', '>']
 
-function lex(source: string): Lexeme[] | null {
+function lex(source: string, resolveSetting: SettingResolver): Lexeme[] | null {
   const out: Lexeme[] = []
   let i = 0
   const s = source
@@ -270,6 +271,20 @@ function lex(source: string): Lexeme[] | null {
         out.push({ t: 'used', v: parsed.index === 0 ? 1 : 0 })
         i = parsed.next
         continue
+      }
+      let nextI = i
+      if (nextI < s.length && s[nextI] === '[') {
+        const parsed = parseIndex(s, nextI)
+        if (parsed !== null) nextI = parsed.next
+      }
+      const valStr = resolveSetting(word)
+      if (valStr !== null) {
+        i = nextI
+        const numVal = Number(valStr)
+        if (!Number.isNaN(numVal)) {
+          out.push({ t: 'num', v: numVal })
+          continue
+        }
       }
       // Unknown identifier: whole condition is unevaluable.
       return null
