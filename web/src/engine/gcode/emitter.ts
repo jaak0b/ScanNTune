@@ -138,6 +138,15 @@ export const MEASURED_LAYERS = 2
 /** Volumetric flow above which typical hotends under-extrude; generators warn past it. */
 export const HIGH_FLOW_WARNING_THRESHOLD_MM3_S = 12
 
+/** The shell/perimeter print speed used by every base-layer perimeter and raster fill that
+ *  takes no explicit speed override (see `basePerimeters`, `rasterBase`, `frameBandLayer`,
+ *  `frameBandInfill`): a fraction of the profile's travel speed. The single source for what a
+ *  coupon's outer wall actually prints at, so a slicer placeholder reporting it never drifts
+ *  from what the generator emits. */
+export function shellSpeedMmS(p: PrinterProfile): number {
+  return p.travelSpeedMmS * RASTER_SPEED_FACTOR
+}
+
 /** One closed rectangular loop: travel to a corner, then four extrude moves. */
 export function rectLoop(
   e: Emitter,
@@ -172,7 +181,7 @@ export function basePerimeters(
   doExtrude: ExtrudeFn = extrude,
   speedMmS?: number,
 ): void {
-  const speed = speedMmS ?? p.travelSpeedMmS * RASTER_SPEED_FACTOR
+  const speed = speedMmS ?? shellSpeedMmS(p)
   for (let k = 0; k < PERIMETER_LOOPS; k++) {
     const ins = (k + 0.5) * lineWidthMm
     rectLoop(e, p, f, lineWidthMm, x0 + ins, y0 + ins, x0 + w - ins, y0 + h - ins, speed, doExtrude)
@@ -200,7 +209,7 @@ export function rasterBase(
   doExtrude: ExtrudeFn = extrude,
   speedMmS?: number,
 ): void {
-  const speed = speedMmS ?? p.travelSpeedMmS * RASTER_SPEED_FACTOR
+  const speed = speedMmS ?? shellSpeedMmS(p)
   const step = lineWidthMm * RASTER_STEP_FACTOR
   // Diagonal raster: iterate scanlines along the diagonal direction. Each
   // scanline is clipped against the rectangle and split around holes.
@@ -336,7 +345,7 @@ export function frameBandInfill(
     for (let k = 0; k < HOLE_PERIMETER_LOOPS; k++) {
       const out = (k + 0.5) * lineWidthMm
       rectLoop(e, p, f, lineWidthMm, hole.x0 - out, hole.y0 - out, hole.x1 + out, hole.y1 + out,
-        speedMmS ?? p.travelSpeedMmS * RASTER_SPEED_FACTOR, doExtrude)
+        speedMmS ?? shellSpeedMmS(p), doExtrude)
     }
   }
 }

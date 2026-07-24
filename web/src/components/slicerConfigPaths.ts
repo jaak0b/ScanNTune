@@ -1,5 +1,11 @@
 import type { OsName, SlicerName } from '../stores/useSlicerPresets'
 import type { ImportKind } from '../composables/useProfileForm'
+import { ORCA_PROFILES_LOCATION } from '../engine/pa/orcaInstallPaths'
+
+/** Re-exported so existing importers of this module keep working: the per-OS profiles
+ *  separator/subpath table is owned by the engine (it feeds the framework-agnostic base-preset
+ *  path hint too), this module just presents it alongside the other slicer path data. */
+export { ORCA_PROFILES_LOCATION }
 
 /** Preset-folder paths to copy for a given slicer + OS, per import kind. Data-driven so the
  *  ImportView stays a thin presenter over the selected slicer/OS. */
