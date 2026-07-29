@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { defaultFilamentProfile, defaultPrinterProfile } from '../../../src/engine/pa/types'
 import type { PrinterProfile } from '../../../src/engine/gcode/profileTypes'
@@ -98,8 +100,10 @@ describe('generateIsGcodeWithReport (Klipper)', () => {
   })
 
   it('sets the test motion limits with the raised corner velocity before any extrusion', () => {
+    // VELOCITY raises the ceiling to the fastest commanded move (the 150 mm/s tier and
+    // travel speed here), so a low configured maximum can never clamp a commanded feed.
     const limit = lines.indexOf(
-      'SET_VELOCITY_LIMIT ACCEL=4000 SQUARE_CORNER_VELOCITY=100 MINIMUM_CRUISE_RATIO=0',
+      'SET_VELOCITY_LIMIT VELOCITY=150 ACCEL=4000 SQUARE_CORNER_VELOCITY=100 MINIMUM_CRUISE_RATIO=0',
     )
     expect(limit).toBeGreaterThan(0)
     expect(limit).toBeLessThan(firstExtrusionIndex(lines))
@@ -411,6 +415,7 @@ describe('generateIsGcodeWithReport (Marlin and RepRapFirmware)', () => {
   it('uses Marlin commands for limits, disable, and restore', () => {
     const marlin: PrinterProfile = { ...profile, firmware: 'Marlin' }
     const gcode = generateIsGcodeWithReport(marlin, filament, spec).gcode
+    expect(gcode).toContain('M203 X150 Y150') // velocity ceiling in mm/s
     expect(gcode).toContain('M204 P4000 T4000') // test limits
     // No numeric restore: the restart note replaces the profile-value block.
     expect(gcode).not.toContain('M204 P3000 T3000')
@@ -430,6 +435,7 @@ describe('generateIsGcodeWithReport (Marlin and RepRapFirmware)', () => {
   it('uses RepRapFirmware commands for limits, disable, and restore', () => {
     const rrf: PrinterProfile = { ...profile, firmware: 'RepRapFirmware' }
     const gcode = generateIsGcodeWithReport(rrf, filament, spec).gcode
+    expect(gcode).toContain('M203 X9000 Y9000') // velocity ceiling in mm/min
     expect(gcode).toContain('M204 P4000 T4000') // test limits
     // No numeric restore: the restart note replaces the profile-value block.
     expect(gcode).not.toContain('M204 P3000 T3000')
@@ -654,14 +660,14 @@ describe('validation and reporting', () => {
     expect(spec20k.accelMmS2).toBe(20000)
     const gcode = generateIsGcodeWithReport(fast, filament, spec20k).gcode
     expect(gcode).toContain(
-      'SET_VELOCITY_LIMIT ACCEL=20000 SQUARE_CORNER_VELOCITY=100 MINIMUM_CRUISE_RATIO=0',
+      'SET_VELOCITY_LIMIT VELOCITY=150 ACCEL=20000 SQUARE_CORNER_VELOCITY=100 MINIMUM_CRUISE_RATIO=0',
     )
   })
 })
 
 describe('resonant run-up sweep emission', () => {
   const sweepSpec = { ...spec, sweep: true }
-  const gs = isCouponGeometry(sweepSpec)
+  const gs = isCouponGeometry(sweepSpec, profile.squareCornerVelocityMmS)
   const oxs = (profile.bedWidthMm - gs.couponWidthMm) / 2
   const oys = (profile.bedDepthMm - gs.couponHeightMm) / 2
   const report = generateIsGcodeWithReport(profile, filament, sweepSpec)
@@ -675,7 +681,7 @@ describe('resonant run-up sweep emission', () => {
     )
   })
 
-  it('extrudes every tooth as a full-flow move at the run-up feedrate', () => {
+  it('extrudes every chord at full flow with its own commanded feedrate', () => {
     const chunk = measuredChunk(lines)
     for (const group of gs.groups) {
       for (const line of group.lines) {
@@ -683,11 +689,89 @@ describe('resonant run-up sweep emission', () => {
           const len = Math.hypot(tooth.x1 - tooth.x0, tooth.y1 - tooth.y0)
           const move =
             `G1 X${(oxs + tooth.x1).toFixed(3)} Y${(oys + tooth.y1).toFixed(3)} ` +
-            `E${(len * ePerMm(nominal)).toFixed(5)} F${runUpFeed}`
+            `E${(len * ePerMm(nominal)).toFixed(5)} F${Math.round(tooth.speedMmS * 60)}`
           expect(chunk).toContain(move)
         }
       }
     }
+  })
+
+  it('scales the pedestal chords uniformly in time to the first layer cap', () => {
+    // Same path as the measured layer, every chord slowed by the same hand-derived
+    // factor: the 30 mm/s first layer cap over the 101.7426 mm/s peak chord (100 mm/s
+    // forward with the 18.75 mm/s accel_per_hz swing peak), so even the fastest chord
+    // obeys the cap.
+    const scale = 0.2948616560802966
+    const pedestal = layerChunks(lines)[0]
+    for (const group of gs.groups) {
+      for (const line of group.lines) {
+        for (const tooth of line.teeth) {
+          const len = Math.hypot(tooth.x1 - tooth.x0, tooth.y1 - tooth.y0)
+          const move =
+            `G1 X${(oxs + tooth.x1).toFixed(3)} Y${(oys + tooth.y1).toFixed(3)} ` +
+            `E${(len * ePerMm(nominal * 0.72)).toFixed(5)} ` +
+            `F${Math.round(tooth.speedMmS * scale * 60)}`
+          expect(pedestal).toContain(move)
+        }
+      }
+    }
+    // No pedestal chord is commanded above the 30 mm/s first layer cap.
+    const maxF = Math.max(
+      ...gs.groups.flatMap((grp) =>
+        grp.lines.flatMap((l) => l.teeth.map((t) => Math.round(t.speedMmS * scale * 60))),
+      ),
+    )
+    expect(maxF).toBeLessThanOrEqual(1800)
+  })
+
+  it('emits motion limit lines byte-identical to the non-sweep test on every firmware', () => {
+    // The launch-corner override alone covers the sweep: the chords never rely on a
+    // sweep-driven limit change.
+    const limits = (gcode: string) =>
+      gcode.split('\n').filter((l) => /^(SET_VELOCITY_LIMIT|M204|M205|M566)/.test(l))
+    for (const firmware of ['Klipper', 'Marlin', 'RepRapFirmware'] as const) {
+      const p: PrinterProfile = { ...profile, firmware }
+      expect(limits(generateIsGcodeWithReport(p, filament, sweepSpec).gcode)).toEqual(
+        limits(generateIsGcodeWithReport(p, filament, spec).gcode),
+      )
+    }
+  })
+
+  it('leaves the non-sweep default G-code byte-identical to the pinned snapshot', () => {
+    const fixture = readFileSync(
+      join(__dirname, '../../fixtures/is_nonsweep_default.gcode'),
+      'utf8',
+    )
+    expect(generateIsGcodeWithReport(profile, filament, spec).gcode).toBe(fixture)
+  })
+
+  it('raises the velocity ceiling to the sweep peak when it passes the tiers', () => {
+    // At a 200 mm/s corner speed the sweep peaks at hypot(200, 18.75) = 200.88 mm/s,
+    // above the 200 mm/s tier and the 150 mm/s travel speed, so the ceiling rounds up
+    // to 201. The default sweep peaks at 101.74 mm/s and keeps the 150 mm/s ceiling,
+    // even at a 20000 mm/s^2 profile acceleration (accel_per_hz governs the swing).
+    const fast = generateIsGcodeWithReport(profile, filament, {
+      ...sweepSpec,
+      cornerSpeedMmS: 200,
+      speedsMmS: [200],
+    })
+    expect(fast.gcode).toContain('VELOCITY=201 ACCEL=4000')
+    expect(report.gcode).toContain('VELOCITY=150 ACCEL=4000')
+    const hot = generateIsGcodeWithReport(profile, filament, { ...sweepSpec, accelMmS2: 20000 })
+    expect(hot.gcode).toContain('VELOCITY=150 ACCEL=20000')
+  })
+
+  it('warns when the sweep peak flow passes the hotend limit, quiet at the default', () => {
+    // At a 200 mm/s corner speed the sweep peaks at 200.88 mm/s: 16.9 mm^3/s, above the
+    // 12 mm^3/s default limit. The default corner speed peaks at 101.74 mm/s
+    // (8.5 mm^3/s) and stays quiet.
+    const fast = generateIsGcodeWithReport(profile, filament, {
+      ...sweepSpec,
+      cornerSpeedMmS: 200,
+      speedsMmS: [200],
+    })
+    expect(fast.warnings.some((w) => w.includes('resonance sweep peaks at 201 mm/s'))).toBe(true)
+    expect(report.warnings.some((w) => w.includes('resonance sweep'))).toBe(false)
   })
 
   it('keeps the corner-to-measured contract: the last tooth ends on the corner', () => {

@@ -34,7 +34,8 @@ export interface IsTestSpec {
   accelMmS2: number
   /**
    * Cruise speed of the run-up leg, fixed across all tiers, and the size of the ringing
-   * excitation. The emitted motion limits set the firmware's corner limit to this value,
+   * excitation. With the sweep enabled it is also the constant forward speed of the
+   * sweep leg. The emitted motion limits set the firmware's corner limit to this value,
    * so the planner takes the 90 degree corner at the full corner speed with zero deceleration:
    * the pressure dump K * (v_in - v_corner) is zero by construction and the bead stays
    * continuous. The excitation is the per-axis velocity step at the corner (the run-up
@@ -46,13 +47,20 @@ export interface IsTestSpec {
   /** How far each measured segment extends into the frame band at both ends. */
   weldMm: number
   /**
-   * Resonant run-up (frequency sweep): replaces the straight run-up leg with a comb of
-   * 90 degree teeth whose corner rate sweeps `sweepFromHz` to `sweepToHz` over
-   * `sweepCycles` forcing cycles. Teeth arriving at the machine's resonance period add
-   * in phase (forced resonance), so the ring launched into the measured segment builds
-   * up to roughly the resonance's Q factor times a single corner's amplitude. Meant for
-   * small stiff printers whose single-corner ring is too faint to scan; the coupon grows
-   * by the sweep's leg length.
+   * Resonant run-up (frequency sweep): replaces the straight run-up leg with the ramped
+   * zigzag excitation of Klipper's resonance tester (resonance_tester.py, vibrate_axis).
+   * The leg advances at the constant corner speed while a bang-bang constant-magnitude
+   * lateral acceleration swings the head once per cell, the forcing frequency stepping
+   * geometrically from `sweepFromHz` to `sweepToHz` over `sweepCycles` cells. The swing
+   * acceleration follows the resonance tester's accel_per_hz scaling (75 mm/s^2 per Hz,
+   * its default), never above the profile acceleration, so the excitation stays a
+   * gentle probe instead of driving the machine at its acceleration ceiling. The
+   * forward speed never changes and the lateral velocity is continuous, so the sweep
+   * itself contains no velocity steps; cells arriving at the machine's resonance period
+   * add in phase (forced resonance), so the ring launched into the measured segment
+   * builds up to roughly the resonance's Q factor times a single corner's amplitude.
+   * Meant for small stiff printers whose single-corner ring is too faint to scan; the
+   * coupon grows by the sweep's leg length.
    */
   sweep: boolean
   /** Lowest excitation frequency of the sweep, Hz. */
@@ -60,8 +68,8 @@ export interface IsTestSpec {
   /** Highest excitation frequency of the sweep, Hz; the sweep ends here, next to the
    *  launch corner, so high resonances excite last and decay least. */
   sweepToHz: number
-  /** Number of forcing cycles across the band; even, so the teeth pair back to the leg
-   *  centreline. More cycles dwell longer near the resonance but lengthen the leg. */
+  /** Number of forcing cycles across the band. More cycles dwell longer near the
+   *  resonance but lengthen the leg. */
   sweepCycles: number
   /** Where the coupon sits on the bed: centered, or pushed to the front/back edge. */
   placement: CouponPlacement
@@ -185,13 +193,9 @@ export function validateIsSpec(spec: IsTestSpec): void {
     if (spec.sweepFromHz >= spec.sweepToHz) {
       throw new Error('The sweep start frequency must be below the end frequency')
     }
-    if (
-      spec.sweepCycles < MIN_SWEEP_CYCLES ||
-      spec.sweepCycles > MAX_SWEEP_CYCLES ||
-      spec.sweepCycles % 2 !== 0
-    ) {
+    if (spec.sweepCycles < MIN_SWEEP_CYCLES || spec.sweepCycles > MAX_SWEEP_CYCLES) {
       throw new Error(
-        `Sweep cycles must be an even number between ${MIN_SWEEP_CYCLES} and ${MAX_SWEEP_CYCLES}`,
+        `Sweep cycles must be between ${MIN_SWEEP_CYCLES} and ${MAX_SWEEP_CYCLES}`,
       )
     }
     if (spec.linePitchMm <= SWEEP_TOOTH_CLEARANCE_MM) {

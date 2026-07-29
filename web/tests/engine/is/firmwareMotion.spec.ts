@@ -12,25 +12,28 @@ function profileWith(firmware: Firmware): PrinterProfile {
 }
 
 describe('isMotionLimitCommands', () => {
-  it('uses native square corner velocity semantics on Klipper', () => {
-    expect(isMotionLimitCommands(profileWith('Klipper'), 4000, 75)).toEqual([
-      'SET_VELOCITY_LIMIT ACCEL=4000 SQUARE_CORNER_VELOCITY=75 MINIMUM_CRUISE_RATIO=0',
+  it('uses native square corner velocity semantics on Klipper, with the raised ceiling', () => {
+    // The 160.4 mm/s fastest commanded move rounds up to a whole 161 mm/s ceiling.
+    expect(isMotionLimitCommands(profileWith('Klipper'), 4000, 75, 160.4)).toEqual([
+      'SET_VELOCITY_LIMIT VELOCITY=161 ACCEL=4000 SQUARE_CORNER_VELOCITY=75 MINIMUM_CRUISE_RATIO=0',
     ])
   })
   it('emits Marlin classic jerk and the equivalent junction deviation on separate lines', () => {
     // junction_deviation_mm = 0.4 * jerk^2 / accel (documented Marlin conversion):
     // 0.4 * 75^2 / 4000 = 0.5625 mm; on its own M205 line so a classic build rejecting J
-    // keeps the X/Y jerk values.
-    expect(isMotionLimitCommands(profileWith('Marlin'), 4000, 75)).toEqual([
+    // keeps the X/Y jerk values. M203 is the velocity ceiling in mm/s.
+    expect(isMotionLimitCommands(profileWith('Marlin'), 4000, 75, 160.4)).toEqual([
+      'M203 X161 Y161',
       'M204 P4000 T4000',
       'M205 X75 Y75',
-      `M205 J${((0.4 * 75 * 75) / 4000).toFixed(3)}`,
+      'M205 J0.563',
     ])
   })
   it('emits RepRapFirmware per-axis jerk in mm/min matching the corner velocity', () => {
     // Classic jerk: a 90 degree corner at 75 mm/s is a 75 mm/s per-axis velocity change,
-    // in M566 units 4500 mm/min.
-    expect(isMotionLimitCommands(profileWith('RepRapFirmware'), 4000, 75)).toEqual([
+    // in M566 units 4500 mm/min; the M203 velocity ceiling is 161 mm/s, 9660 mm/min.
+    expect(isMotionLimitCommands(profileWith('RepRapFirmware'), 4000, 75, 160.4)).toEqual([
+      'M203 X9660 Y9660',
       'M204 P4000 T4000',
       'M566 X4500 Y4500',
     ])
