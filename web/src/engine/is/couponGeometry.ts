@@ -255,12 +255,6 @@ export interface IsLine {
    * crossings of this line lie beyond it.
    */
   protectedMm: number
-  /**
-   * Distances from the corner at which this line crosses lines printed before it this
-   * layer, sorted ascending. Crossings print at full flow (the beads weld into the grid);
-   * the distances document that every crossing lies beyond the protected span.
-   */
-  crossingsMm: number[]
 }
 
 export interface IsLineGroup {
@@ -449,7 +443,6 @@ function buildYGroup(
       tail: { x0: couponW - bandMm + spec.weldMm, y0: y, x1: couponW - bandMm + tailDepthMm(speedMmS, spec), y1: y },
       teeth,
       protectedMm: protectedSpanMm(spec, speedMmS, cornerSpeedMmS),
-      crossingsMm: [],
     }
   })
   return { axis: 'y', lines, boundingBox: boundingBox(lines) }
@@ -464,10 +457,9 @@ function buildYGroup(
  * protected span needs the most depth above the crossing zone) and, anti-staggered, the
  * smallest corner x; the corner y then DECREASES as the corner x increases, so no leg
  * crosses a same-group measured segment. When the Y group exists, every X measured line
- * crosses every Y measured line; the crossing distances (from the X line's corner) are
- * recorded so the emitter can zero the flow over the already-printed beads. The window
- * sizing guarantees each crossing lies beyond BOTH lines' protected spans plus the inner
- * margin.
+ * crosses every Y measured line; the emitter zeroes the flow over those already-printed
+ * beads (see crossings.ts). The window sizing guarantees each crossing lies beyond BOTH
+ * lines' protected spans plus the inner margin.
  */
 function buildXGroup(
   spec: IsTestSpec,
@@ -485,7 +477,6 @@ function buildXGroup(
   const firstX = yGroup
     ? bandMm + 2 * INNER_MARGIN_MM + maxPackedRampMm(spec) + effectiveMeasuredLineMm(spec)
     : bandMm + INNER_MARGIN_MM
-  const yMeasured = yGroup ? yGroup.lines.map((l) => l.measured.y0) : []
   const advance = effectiveRunUpMm(spec) - (spec.sweep ? SWEEP_STUB_MM : 0)
   const lines = offsets.map((off, i) => {
     const speedMmS = speedOf(spec, i)
@@ -503,7 +494,6 @@ function buildXGroup(
       tail: { x0: x, y0: bandMm - spec.weldMm, x1: x, y1: bandMm - tailDepthMm(speedMmS, spec) },
       teeth,
       protectedMm: protectedSpanMm(spec, speedMmS, cornerSpeedMmS),
-      crossingsMm: yMeasured.map((yk) => y - yk).sort((a, b) => a - b),
     }
   })
   return { axis: 'x', lines, boundingBox: boundingBox(lines) }

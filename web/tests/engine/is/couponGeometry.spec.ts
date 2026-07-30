@@ -249,16 +249,11 @@ describe('isCouponGeometry crossings and packing', () => {
     expect(xFirst.speedMmS).toBeLessThan(xLast.speedMmS)
     expect(xFirst.measured.y0).toBeLessThan(xLast.measured.y0)
   })
-  it('lists the crossing distances on the second-printed group only, sorted ascending', () => {
-    for (const yl of yGroup.lines) expect(yl.crossingsMm).toEqual([])
+  it('crosses every Y measured bead at a distance beyond the X protected span, from the corner', () => {
     for (const xl of xGroup.lines) {
-      expect(xl.crossingsMm).toHaveLength(yGroup.lines.length)
-      const expected = yGroup.lines
-        .map((yl) => xl.measured.y0 - yl.measured.y0)
-        .sort((a, b) => a - b)
-      xl.crossingsMm.forEach((c, i) => expect(c).toBeCloseTo(expected[i], 9))
-      for (const c of xl.crossingsMm) {
-        expect(c).toBeGreaterThanOrEqual(xl.protectedMm + INNER_MARGIN_MM - 1e-9)
+      for (const yl of yGroup.lines) {
+        const crossingMm = xl.measured.y0 - yl.measured.y0
+        expect(crossingMm).toBeGreaterThanOrEqual(xl.protectedMm + INNER_MARGIN_MM - 1e-9)
       }
     }
   })

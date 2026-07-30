@@ -31,6 +31,7 @@ import {
 } from '../gcode/emitter'
 import {
   isCouponGeometry,
+  type IsLine,
   type IsSegment,
   MIN_CORNER_SPEED_MM_S,
   sweepPeakSpeedMmS,
@@ -134,6 +135,18 @@ const WIPE_MM = 2
  * halves the proud height while a single 0.2 mm bead still defines the silhouette edge.
  */
 export const IS_MEASURED_LAYERS = 1
+
+/** The bed-coordinate beads a printed line leaves behind, for later lines' crossing checks. */
+function lineBeads(line: IsLine, ox: number, oy: number, widthMm: number): PrintedBead[] {
+  const toBead = (s: IsSegment): PrintedBead => ({
+    x0: ox + s.x0,
+    y0: oy + s.y0,
+    x1: ox + s.x1,
+    y1: oy + s.y1,
+    widthMm,
+  })
+  return [line.prime, line.runUp, ...line.teeth, line.measured, line.tail].map(toBead)
+}
 
 /**
  * Prime on the move: the deretract is spread over the first stretch of the run-up leg at
@@ -303,6 +316,11 @@ function emitIsGcode(profile: PrinterProfile, filament: FilamentProfile, spec: I
     // first-layer practice: on the bed it IS the first layer, and on a contrast base it
     // still bonds best without cooling.
     if (!pedestal) L.push('M106 S255')
+    // Beads printed by test lines so far this layer: the Y group prints first and crosses
+    // nothing, so it accumulates an empty list; the X group's measured segments then cross
+    // every Y measured bead, and the dip mechanism below (the same one the band pass uses)
+    // finds those crossings geometrically, whichever group prints them.
+    const lineBeadsThisLayer: PrintedBead[] = []
     for (const group of g.groups) {
       for (const line of group.lines) {
         // The pedestal layer only needs to stick: its lines are capped to the profile's
@@ -345,13 +363,21 @@ function emitIsGcode(profile: PrinterProfile, filament: FilamentProfile, spec: I
           extrude(e, profile, filament, width, ox + tooth.x1, oy + tooth.y1,
             tooth.speedMmS * pedestalScale)
         }
-        // Crossings over beads printed earlier this layer are taken at full flow, the way
-        // grid infill crosses itself: the free beads must weld into the stiff grid, and
-        // with pressure advance disabled a zero-E stretch drains nozzle pressure and
-        // breaks the bead instead. The geometry guarantees every crossing lies beyond the
-        // protected span, so the read window never sees the small crossing blob.
-        extrude(e, profile, filament, width, ox + line.measured.x1, oy + line.measured.y1, speed)
+        // Crossings over beads printed earlier this layer (the Y group's measured lines,
+        // for the X group) get the same flow-dip treatment as the band raster: the nozzle
+        // does not double-deposit over the already-printed bead. The geometry guarantees
+        // every crossing lies beyond the protected span, so the read window never sees the
+        // dip. Y prints first and crosses nothing, so this is a no-op dip list for it.
+        const measuredX = ox + line.measured.x1
+        const measuredY = oy + line.measured.y1
+        const dips = dipsForMove(e.x, e.y, measuredX, measuredY, lineBeadsThisLayer)
+        if (dips.length > 0) {
+          extrudeWithDips(e, profile, filament, width, measuredX, measuredY, speed, dips)
+        } else {
+          extrude(e, profile, filament, width, measuredX, measuredY, speed)
+        }
         finishLine(e, profile, filament, width, line.tail, ox, oy, speed)
+        lineBeadsThisLayer.push(...lineBeads(line, ox, oy, width))
       }
     }
     // M107 forces the fan off for the band; any fan state the user's start G-code set
