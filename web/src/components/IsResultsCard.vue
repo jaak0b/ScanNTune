@@ -1,7 +1,13 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import type { Firmware } from '../engine/gcode/profileTypes'
-import type { IsAxisResult, IsLineRefusalCategory, IsResult } from '../engine/is/resultTypes'
+import type {
+  IsAxisResult,
+  IsLineExclusion,
+  IsLineOutcome,
+  IsLineRefusalCategory,
+  IsResult,
+} from '../engine/is/resultTypes'
 import { F_MIN_HZ, F_MAX_HZ } from '../engine/is/types'
 import {
   formatKlipperShaper,
@@ -42,6 +48,30 @@ const CATEGORY_LABELS: Record<NonNullable<IsLineRefusalCategory>, string> = {
   'irregular-trace': 'Trace too irregular to read as ringing',
   'out-of-band': `Ringing outside the ${F_MIN_HZ} to ${F_MAX_HZ} Hz measurable range`,
   'not-traced': 'Line not found in the scan',
+}
+
+// Per-line diagnostic rows: each underlying fact is its own labeled column with the exact
+// value (joint-fit membership as yes/no, the exclusion as a category label, frequency and
+// amplitude as numbers with units).
+const EXCLUSION_LABELS: Record<IsLineExclusion, string> = {
+  'no-free-response': 'No free ringdown after the corner',
+  'out-of-band': `Fitted frequency at the edge of the ${F_MIN_HZ} to ${F_MAX_HZ} Hz search range`,
+  'seed-disagreement': 'Fit and spectrum disagree on the frequency',
+  'zeta-at-bound': 'Fitted damping at the edge of the physical range',
+  'frequency-outlier': 'Fitted frequency is an outlier among the lines',
+  'not-traced': 'Line not found in the scan',
+}
+
+function lineExclusionText(line: IsLineOutcome): string {
+  return line.exclusion !== null ? EXCLUSION_LABELS[line.exclusion] : ''
+}
+
+function lineFrequencyText(line: IsLineOutcome): string {
+  return line.frequencyHz !== null ? `${line.frequencyHz.toFixed(1)} Hz` : ''
+}
+
+function lineAmplitudeText(line: IsLineOutcome): string {
+  return line.amplitudeMm !== null ? `${line.amplitudeMm.toFixed(3)} mm` : ''
 }
 
 function refusalCounts(a: IsAxisResult): string[] {
@@ -127,6 +157,11 @@ const snippet = computed(() => {
               :testid="`is-damping-${axis.axis}`"
             />
             <MetricTile
+              label="Frequency standard error"
+              :value="axis.frequencySeHz !== null ? `${axis.frequencySeHz.toFixed(2)} Hz` : 'n/a'"
+              :testid="`is-frequency-se-${axis.axis}`"
+            />
+            <MetricTile
               label="Lines used"
               :value="`${axis.linesUsed} of ${axis.linesTraced}`"
               :testid="`is-lines-${axis.axis}`"
@@ -176,6 +211,34 @@ const snippet = computed(() => {
           <p v-for="(reason, i) in axis.refusals" :key="i" class="refusal">{{ reason }}</p>
           <p v-for="(row, i) in refusalCounts(axis)" :key="`c${i}`" class="refusal count-row">{{ row }}</p>
         </v-alert>
+
+        <v-table
+          v-if="axis.lines.length > 0"
+          density="compact"
+          class="line-table mt-2"
+          :data-testid="`is-line-detail-${axis.axis}`"
+        >
+          <thead>
+            <tr>
+              <th>Line</th>
+              <th>Corner speed</th>
+              <th>In joint fit</th>
+              <th>Exclusion</th>
+              <th>Frequency</th>
+              <th>Amplitude</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="line in axis.lines" :key="line.lineIndex">
+              <td>{{ line.lineIndex + 1 }}</td>
+              <td>{{ Math.round(line.cornerSpeedMmS) }} mm/s</td>
+              <td>{{ line.usedInJointFit ? 'yes' : 'no' }}</td>
+              <td>{{ lineExclusionText(line) }}</td>
+              <td>{{ lineFrequencyText(line) }}</td>
+              <td>{{ lineAmplitudeText(line) }}</td>
+            </tr>
+          </tbody>
+        </v-table>
       </div>
 
       <template v-if="snippet">
@@ -204,6 +267,11 @@ const snippet = computed(() => {
 .shaper-table {
   background: rgb(var(--v-theme-surface-bright));
   border-radius: 10px;
+}
+.line-table {
+  background: rgb(var(--v-theme-surface-bright));
+  border-radius: 10px;
+  font-size: 12.5px;
 }
 .shaper-table .recommended {
   background: rgba(var(--v-theme-primary), 0.1);

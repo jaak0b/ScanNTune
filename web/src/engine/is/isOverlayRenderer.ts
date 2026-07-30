@@ -116,7 +116,7 @@ function drawLineOutcome(
   // Read-window bracket: perpendicular ticks where the clean read starts (after the
   // acceleration ramp) and where it ends.
   const dir = measuredDirection(line)
-  const rampMm = tierRampMm(spec, line.speedMmS)
+  const rampMm = tierRampMm(spec, line.speedMmS, line.cornerSpeedMmS)
   const bracketColor = new cv.Scalar(...BRACKET_COLOR)
   for (const sMm of [rampMm, rampMm + spec.measuredLineMm]) {
     const at = mmToPx(alignment, line.measured.x0 + dir.dx * sMm, line.measured.y0 + dir.dy * sMm)

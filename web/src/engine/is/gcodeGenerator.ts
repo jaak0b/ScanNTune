@@ -29,7 +29,12 @@ import {
   retract,
   travel,
 } from '../gcode/emitter'
-import { isCouponGeometry, type IsSegment, sweepPeakSpeedMmS } from './couponGeometry'
+import {
+  isCouponGeometry,
+  type IsSegment,
+  MIN_CORNER_SPEED_MM_S,
+  sweepPeakSpeedMmS,
+} from './couponGeometry'
 import { dipsForMove, extrudeWithDips, type PrintedBead } from './crossings'
 import {
   disableShapingCommands,
@@ -225,7 +230,10 @@ function emitIsGcode(profile: PrinterProfile, filament: FilamentProfile, spec: I
               `; resonant run-up sweep ${spec.sweepFromHz} to ${spec.sweepToHz} Hz over ` +
                 `${spec.sweepCycles} cycles`,
             ]
-          : []),
+          : [
+              `; corner-speed excitation ladder ${MIN_CORNER_SPEED_MM_S} to ` +
+                `${spec.cornerSpeedMmS} mm/s across the ${spec.linesPerSpeed} lines of each tier`,
+            ]),
       ],
       // The test rings the frame on purpose: the spec's acceleration and corner speed
       // replace the profile's limits for the whole print, and the velocity ceiling is
@@ -305,7 +313,10 @@ function emitIsGcode(profile: PrinterProfile, filament: FilamentProfile, spec: I
         const speed = pedestal
           ? Math.min(line.speedMmS, profile.firstLayerSpeedMmS)
           : line.speedMmS
-        const runUpSpeed = Math.min(spec.cornerSpeedMmS, speed)
+        // Each line cruises its run-up at its own rung of the corner-speed ladder; the
+        // emitted corner limit equals the TOP rung, an upper bound, so every slower rung
+        // passes the corner unbraked on all firmwares.
+        const runUpSpeed = Math.min(line.cornerSpeedMmS, speed)
         // The sweep chords carry their own commanded speeds; the pedestal layer scales
         // them uniformly in time (same path, slower everywhere) so even the fastest
         // chord, the peak of the deepest swing, stays at or below the first layer

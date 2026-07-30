@@ -1,8 +1,12 @@
 import { Matrix, solve, inverse } from 'ml-matrix'
 import type { TracedLine } from './lineTracer'
 
-// Fits the ringing model to a traced line and pools the per-line fits into a per-axis
-// estimate, with refusal gates at every step. The stages, each an established method:
+// Fits the ringing model to each traced line, screens the lines, and estimates the axis's
+// frequency and damping by a JOINT fit across all screened lines: the resonance is one
+// machine property shared by every line, so the lines share the nonlinear parameters
+// (f, zeta) while each keeps its own linear background and ring amplitude/phase. A weak or
+// noisy line that could not carry a per-line verdict still contributes its share of the
+// pooled information. The stages, each an established method:
 //
 // 1. Detrend: a Gaussian regression filter (ISO 16610-21 profile filtering), the standard
 //    surface-metrology separation of waviness from the signal band, as high-frequency
@@ -26,8 +30,18 @@ import type { TracedLine } from './lineTracer'
 //    polished by Levenberg-Marquardt over all six parameters (Levenberg 1944, Marquardt
 //    1963; multiplicative lambda control as in Madsen, Nielsen & Tingleff, "Methods for
 //    Non-Linear Least Squares Problems").
-// 5. Uncertainty: the asymptotic covariance of the nonlinear least-squares estimate,
-//    sigma^2 (J^T J)^-1 (Seber & Wild, "Nonlinear Regression", 1989), which for Gaussian
+// 5. Joint estimation: variable projection across records with shared nonlinear parameters
+//    (Golub & Pereyra 1973): for fixed (f, zeta) the linear solve is block-diagonal (one
+//    exact least-squares solve per line), so the projected functional is the sum of per-line
+//    residual sums. (f, zeta) are searched on a grid around the joint seed, then polished by
+//    Levenberg-Marquardt on the reduced two-parameter functional, re-solving the per-line
+//    linear systems at every perturbation (the Kaufman form of variable projection).
+// 6. Acceptance: an extra-sum-of-squares F-test of the joint ring model against the nested
+//    per-line drift-only null (Seber & Wild, "Nonlinear Regression", 1989, ch. 5), so the
+//    axis verdict is a single significance test over all pooled samples instead of per-line
+//    amplitude or fit-quality gates.
+// 7. Uncertainty: the asymptotic covariance of the nonlinear least-squares estimate,
+//    sigma^2 (J^T J)^-1 on the full stacked Jacobian (Seber & Wild 1989), which for Gaussian
 //    noise attains the Cramer-Rao bound of the damped-sinusoid model (Yao & Pandit, IEEE
 //    Trans. Signal Processing 43(11), 1995).
 //
@@ -59,10 +73,23 @@ export const ZETA_MAX = 0.4
  * 3-sigma rule.
  */
 export const AMPLITUDE_DETECTION_K = 4
-/** Minimum coefficient of determination of the model fit on the detrended trace. */
+/** Coefficient-of-determination floor below which a per-line fit is labeled 'low-r2'
+ *  (a screening label and diagnostic; it does not decide the axis). */
 export const MIN_R2 = 0.5
-/** Minimum accepted line fits per axis before pooling is meaningful. */
+/** Minimum lines entering the joint fit before the axis estimate is meaningful. */
 export const MIN_ACCEPTED_LINES = 3
+/** Significance level of the axis-acceptance F-test (conventional 0.1% level). */
+export const F_TEST_ALPHA = 0.001
+/**
+ * Conservative resolvability guard on the pooled ring amplitude, in scan pixels. Sub-pixel
+ * centroid estimators carry systematic pixel-locking (peak-locking) position errors on the
+ * order of 0.05 to 0.1 px (the figures documented in the particle image velocimetry
+ * literature), and those errors are coherent across parallel traced lines, so a pooled
+ * amplitude at or below that scale cannot be told apart from a coherent sampling artifact
+ * even when it is statistically significant. This is not a model of the bias; it is the
+ * scale below which an amplitude is not accepted as a measurement.
+ */
+export const AMPLITUDE_RESOLUTION_PX = 0.05
 /**
  * Replicate agreement and speed invariance tolerance: the larger of 2 Hz and 5% of the
  * median frequency. Klipper-style input shapers keep their vibration suppression within
@@ -78,7 +105,7 @@ const AGREEMENT_MIN_HZ = 2
  * resonance lies inside the configured shaper's stopband.
  */
 const MAX_CI95_REL = 0.1
-import { MAD_TO_SIGMA, mad, median, medianStandardError } from '../math'
+import { MAD_TO_SIGMA, fCriticalValue, mad, median } from '../math'
 
 export interface RingModelParams {
   /** Background line at the fit-window start, mm. */
@@ -99,26 +126,77 @@ export interface RingModelParams {
  */
 export type LineFitRefusalCategory = 'weak-ringing' | 'irregular-trace' | 'out-of-band'
 
+/**
+ * Screening classification of one traced line, deciding joint-fit membership. 'clean',
+ * 'weak-ringing', 'low-r2', and 'fit-failed' lines ENTER the joint fit: a weak or poorly
+ * fitting line still carries the shared resonance, and the joint estimate rescues it. The
+ * remaining categories are exclusions whose traces contradict the model or the spectrum, so
+ * they never influence the axis verdict.
+ */
+export type LineScreening =
+  | 'clean'
+  | 'weak-ringing'
+  | 'low-r2'
+  | 'fit-failed'
+  | 'no-free-response'
+  | 'out-of-band'
+  | 'seed-disagreement'
+  | 'zeta-at-bound'
+
+/** Why a line was excluded from the joint fit: the excluding screening categories plus the
+ *  pool-level Hampel frequency-outlier screen. */
+export type LineJointExclusion =
+  | 'no-free-response'
+  | 'out-of-band'
+  | 'seed-disagreement'
+  | 'zeta-at-bound'
+  | 'frequency-outlier'
+
+/** One line's free-ringdown fit window: the joint fit's per-line record. */
+export interface JointFitRecord {
+  /** Seconds since the fit-window start. */
+  tS: Float64Array
+  /** Detrended lateral deviation, mm. */
+  y: Float64Array
+}
+
 export interface LineFit {
+  /** True when the per-line fit passed every per-line gate. Diagnostic only: the axis
+   *  verdict is the joint fit's F-test, not any per-line gate. */
   accepted: boolean
+  screening: LineScreening
   refusalReason: string | null
   refusalCategory: LineFitRefusalCategory | null
   params: RingModelParams | null
   r2: number
   noiseRmsMm: number
-  /** Cramer-Rao standard error of the frequency, Hz (asymptotic NLS covariance). */
+  /** Cramer-Rao standard error of the per-line frequency, Hz (diagnostic). */
   frequencySeHz: number | null
+  /** The line's fit window, consumed by the joint fit; null only when the trace has no
+   *  free-response window. */
+  window: JointFitRecord | null
 }
+
+/** Joint-fit membership of one line, aligned with `poolAxisFits`'s fits argument. */
+export type LineJointStatus =
+  | { usedInJointFit: true; amplitudeMm: number | null }
+  | { usedInJointFit: false; exclusion: LineJointExclusion }
 
 export interface AxisPool {
   accepted: boolean
   refusals: string[]
   frequencyHz: number | null
   dampingRatio: number | null
-  /** 95% confidence halfwidth of the pooled frequency, Hz. */
+  /** 95% confidence halfwidth of the jointly fitted frequency, Hz. */
   frequencyCi95Hz: number | null
+  /** Standard error of the jointly fitted frequency, Hz (asymptotic NLS covariance). */
+  frequencySeHz: number | null
+  /** Extra-sum-of-squares F statistic of the joint ring model against drift only. */
+  fStatistic: number | null
   amplitudeMm: number | null
   linesUsed: number
+  /** Joint-fit membership per input fit, aligned with the fits argument. */
+  lineJoint: LineJointStatus[]
 }
 
 /** The ringing model evaluated at time t (seconds since the fit-window start). */
@@ -428,23 +506,22 @@ export function analyzeTracedLine(line: TracedLine): LineFit {
     n - line.noiseWindowStart,
   )
 
-  const noFit = (reason: string): LineFit => ({
-    accepted: false,
-    refusalReason: reason,
-    refusalCategory: 'irregular-trace',
-    params: null,
-    r2: 0,
-    noiseRmsMm,
-    frequencySeHz: null,
-  })
-
   // Forced-transient exclusion: fit only the free ringdown after the corner-overshoot peak.
   const start = freeResponseStart(y)
   if (start === null) {
-    return noFit(
-      'The trace never settles from the corner transient into a free ringdown, so there is ' +
+    return {
+      accepted: false,
+      screening: 'no-free-response',
+      refusalReason:
+        'The trace never settles from the corner transient into a free ringdown, so there is ' +
         'no resonance to fit. The trace may be corrupted by print defects or scan artifacts.',
-    )
+      refusalCategory: 'irregular-trace',
+      params: null,
+      r2: 0,
+      noiseRmsMm,
+      frequencySeHz: null,
+      window: null,
+    }
   }
   const wN = n - start
   const t0 = tS[start]
@@ -461,6 +538,8 @@ export function analyzeTracedLine(line: TracedLine): LineFit {
   const fLo = Math.max(F_MIN_HZ, seed.fHz * (1 - SEED_BAND_REL))
   const fHi = Math.min(F_MAX_HZ, seed.fHz * (1 + SEED_BAND_REL))
 
+  const window: JointFitRecord = { tS: tw, y: yw }
+
   // Variable projection grid over (f, zeta) inside the seed's basin, then LM polish.
   let best: { v: number[]; ssr: number } | null = null
   for (let f = fLo; f <= fHi; f += PERIODOGRAM_GRID_HZ) {
@@ -470,10 +549,20 @@ export function analyzeTracedLine(line: TracedLine): LineFit {
     }
   }
   if (best === null) {
-    return noFit(
-      'The ringing model could not be fit to the traced line. The trace may be corrupted by ' +
-        'print defects or scan artifacts.',
-    )
+    // No per-line fit exists; the line still enters the joint fit, seeded by the joint seed.
+    return {
+      accepted: false,
+      screening: 'fit-failed',
+      refusalReason:
+        'The ringing model could not be fit to this line on its own; the line was measured ' +
+        'through the joint fit of the axis instead.',
+      refusalCategory: 'irregular-trace',
+      params: null,
+      r2: 0,
+      noiseRmsMm,
+      frequencySeHz: null,
+      window,
+    }
   }
   const fit = levenbergMarquardt(best.v, tw, yw)
   const params = vectorToParams(fit.v)
@@ -483,37 +572,59 @@ export function analyzeTracedLine(line: TracedLine): LineFit {
   for (let i = 0; i < wN; i++) sst += (yw[i] - mean) * (yw[i] - mean)
   const r2 = sst > 0 ? 1 - fit.ssr / sst : 0
 
-  const refuse = (reason: string, category: LineFitRefusalCategory): LineFit => ({
-    accepted: false,
+  // Cramer-Rao standard error of the frequency from the asymptotic NLS covariance
+  // sigma^2 (J^T J)^-1 at the solution (diagnostic; the axis uncertainty is the joint fit's).
+  let frequencySeHz: number | null = null
+  const dof = wN - PARAM_COUNT
+  if (dof > 0) {
+    const sigma2 = fit.ssr / dof
+    try {
+      const cov = inverse(fit.jacobian.transpose().mmul(fit.jacobian)).mul(sigma2)
+      const varF = cov.get(FREQ_INDEX, FREQ_INDEX)
+      if (varF > 0 && Number.isFinite(varF)) frequencySeHz = Math.sqrt(varF)
+    } catch {
+      // A singular information matrix leaves the CRB undefined; the joint fit carries the
+      // axis uncertainty, so the fit is kept with a null per-line standard error.
+      frequencySeHz = null
+    }
+  }
+
+  const classify = (
+    screening: LineScreening,
+    reason: string | null,
+    category: LineFitRefusalCategory | null,
+  ): LineFit => ({
+    accepted: screening === 'clean',
+    screening,
     refusalReason: reason,
     refusalCategory: category,
     params,
     r2,
     noiseRmsMm,
-    frequencySeHz: null,
+    frequencySeHz,
+    window,
   })
 
-  // Gate order matters: an amplitude below the detection threshold means there is no ring to
-  // fit, so it must be reported as such before any fit-quality verdict.
+  // Detectability first: below the detection threshold the per-line fit chased noise, so
+  // its frequency and damping carry no information to judge. The line is labeled weak and
+  // enters the joint fit, where the shared model reads whatever ring it carries.
   if (!(params.ringAmpMm >= AMPLITUDE_DETECTION_K * noiseRmsMm) || !(params.ringAmpMm > 0)) {
-    return refuse(
-      'The ringing amplitude on this line is below the detection threshold (4 times the noise floor), ' +
-        'so the line was skipped.',
+    return classify(
+      'weak-ringing',
+      'The ringing amplitude on this line is below the detection threshold (4 times the noise ' +
+        'floor), so the line was measured through the joint fit of the axis.',
       'weak-ringing',
     )
   }
-  if (r2 < MIN_R2) {
-    return refuse(
-      'The ringing model does not fit the traced line (low coefficient of determination). ' +
-        'The trace may be corrupted by print defects or scan artifacts.',
-      'irregular-trace',
-    )
-  }
+
+  // Exclusions next: a detectable fit contradicting the search band, the spectrum, or the
+  // physical damping range invalidates the whole line, so it never enters the joint fit.
   if (
     params.frequencyHz <= F_MIN_HZ + BOUND_MARGIN_HZ ||
     params.frequencyHz >= F_MAX_HZ - BOUND_MARGIN_HZ
   ) {
-    return refuse(
+    return classify(
+      'out-of-band',
       `The frequency fitted on this line sits at the edge of the ${F_MIN_HZ} to ${F_MAX_HZ} Hz ` +
         'search range, so it cannot be trusted.',
       'out-of-band',
@@ -525,144 +636,527 @@ export function analyzeTracedLine(line: TracedLine): LineFit {
     (fLo > F_MIN_HZ && params.frequencyHz <= fLo + BOUND_MARGIN_HZ) ||
     (fHi < F_MAX_HZ && params.frequencyHz >= fHi - BOUND_MARGIN_HZ)
   ) {
-    return refuse(
+    return classify(
+      'seed-disagreement',
       'The model fit and the spectrum of the trace disagree on the ringing frequency, so the ' +
         'fit cannot be trusted. The trace may be corrupted by print defects or scan artifacts.',
       'irregular-trace',
     )
   }
   if (params.dampingRatio <= ZETA_MIN || params.dampingRatio >= ZETA_MAX) {
-    return refuse(
+    return classify(
+      'zeta-at-bound',
       'The fitted damping ratio sits at the edge of the physically plausible range, so the fit cannot be trusted.',
       'irregular-trace',
     )
   }
 
-  // Cramer-Rao standard error of the frequency from the asymptotic NLS covariance
-  // sigma^2 (J^T J)^-1 at the solution.
-  let frequencySeHz: number | null = null
-  const dof = wN - PARAM_COUNT
-  if (dof > 0) {
-    const sigma2 = fit.ssr / dof
-    try {
-      const cov = inverse(fit.jacobian.transpose().mmul(fit.jacobian)).mul(sigma2)
-      const varF = cov.get(FREQ_INDEX, FREQ_INDEX)
-      if (varF > 0 && Number.isFinite(varF)) frequencySeHz = Math.sqrt(varF)
-    } catch {
-      // A singular information matrix leaves the CRB undefined; the pooled MAD-based
-      // uncertainty still applies, so the fit is kept with a null per-line standard error.
-      frequencySeHz = null
-    }
+  // A poorly fitting line is still a valid joint-fit record; the label is a diagnostic,
+  // not a verdict.
+  if (r2 < MIN_R2) {
+    return classify(
+      'low-r2',
+      'The ringing model does not fit this line well on its own (low coefficient of ' +
+        'determination), so the line was measured through the joint fit of the axis.',
+      'irregular-trace',
+    )
   }
 
-  return { accepted: true, refusalReason: null, refusalCategory: null, params, r2, noiseRmsMm, frequencySeHz }
+  return classify('clean', null, null)
+}
+
+/** Result of the joint variable-projection fit across one axis's screened lines. */
+export interface JointAxisFitResult {
+  frequencyHz: number
+  dampingRatio: number
+  /** Residual sum of squares of the joint ring model over all records. */
+  ssr: number
+  /** Residual sum of squares of the nested per-line drift-only null model. */
+  ssrNull: number
+  nTotal: number
+  /** Extra-sum-of-squares F statistic; null when the residual degrees of freedom vanish. */
+  fStatistic: number | null
+  /** Upper critical value of F at the F_TEST_ALPHA level; null with the statistic. */
+  fCritical: number | null
+  /** True when the joint ring model is significantly better than drift alone. */
+  significant: boolean
+  /** Standard error of the joint frequency from the full stacked-Jacobian covariance. */
+  frequencySeHz: number | null
+  /** Per-record fitted ring amplitude, mm, aligned with the records argument. */
+  amplitudesMm: number[]
+}
+
+// The projected joint functional: for fixed (f, zeta) the linear solve is block-diagonal,
+// one exact per-record least-squares solve, and the joint SSR is the sum. A record whose
+// basis is singular at this (f, zeta) invalidates the grid point.
+function jointProjectedSolve(
+  fHz: number,
+  zeta: number,
+  records: JointFitRecord[],
+): { ssr: number; solves: { v: number[]; ssr: number }[] } | null {
+  const solves: { v: number[]; ssr: number }[] = []
+  let total = 0
+  for (const rec of records) {
+    const s = varproSolve(fHz, zeta, rec.tS, rec.y)
+    if (s === null) return null
+    solves.push(s)
+    total += s.ssr
+  }
+  return { ssr: total, solves }
+}
+
+// Stacked residual vector of the projected joint model at (f, zeta).
+function jointStackedResiduals(
+  solves: { v: number[]; ssr: number }[],
+  records: JointFitRecord[],
+  nTotal: number,
+): Float64Array {
+  const r = new Float64Array(nTotal)
+  let at = 0
+  for (let i = 0; i < records.length; i++) {
+    const ri = residuals(solves[i].v, records[i].tS, records[i].y)
+    r.set(ri, at)
+    at += ri.length
+  }
+  return r
+}
+
+// Standard error of the joint frequency from the asymptotic NLS covariance on the FULL
+// stacked Jacobian over all 2 + 4N parameters (Seber & Wild 1989): global columns (f, zeta)
+// plus each record's linear block, accumulated into the (2 + 4N) x (2 + 4N) normal matrix.
+function jointFrequencySe(
+  solves: { v: number[]; ssr: number }[],
+  records: JointFitRecord[],
+  ssrJoint: number,
+  nTotal: number,
+): number | null {
+  const N = records.length
+  const p = 2 + 4 * N
+  const dof = nTotal - p
+  if (dof <= 0) return null
+  const JtJ = Matrix.zeros(p, p)
+  for (let i = 0; i < N; i++) {
+    const Ji = numericJacobian(solves[i].v, records[i].tS, records[i].y)
+    // Local parameter order is [c0, c1, a, b, f, zeta]; f and zeta map to the shared global
+    // columns 0 and 1, the linear block to this record's own columns.
+    const gcol = (j: number) => (j === FREQ_INDEX ? 0 : j === FREQ_INDEX + 1 ? 1 : 2 + 4 * i + j)
+    for (let a = 0; a < PARAM_COUNT; a++) {
+      for (let b = a; b < PARAM_COUNT; b++) {
+        let s = 0
+        for (let k = 0; k < Ji.rows; k++) s += Ji.get(k, a) * Ji.get(k, b)
+        const ga = gcol(a)
+        const gb = gcol(b)
+        JtJ.set(ga, gb, JtJ.get(ga, gb) + s)
+        if (ga !== gb) JtJ.set(gb, ga, JtJ.get(gb, ga) + s)
+      }
+    }
+  }
+  const sigma2 = ssrJoint / dof
+  try {
+    const cov = inverse(JtJ).mul(sigma2)
+    const varF = cov.get(0, 0)
+    return varF > 0 && Number.isFinite(varF) ? Math.sqrt(varF) : null
+  } catch {
+    // A singular joint information matrix leaves the standard error undefined; the caller
+    // treats a null standard error as an unquantifiable (refused) uncertainty.
+    return null
+  }
 }
 
 /**
- * Pools the per-line fits of one axis: replicate-agreement and speed-invariance gates, median
- * frequency and damping, and the confidence gate on the pooled frequency.
+ * Joint variable-projection fit of the ringing model across an axis's screened lines: all
+ * records share (f, zeta), each keeps its own background line and ring quadrature pair. Grid
+ * search over the seed's basin, Levenberg-Marquardt polish of the reduced two-parameter
+ * projected functional, extra-sum-of-squares F-test against the per-line drift-only null,
+ * and the stacked-Jacobian frequency standard error. Returns null when no (f, zeta) in the
+ * search band yields a solvable projected system. `seedBandRel` is the half-width of the
+ * grid band around the seed as a fraction; callers refining an already-solved optimum (the
+ * per-tier sub-fits) pass a narrow band so the grid is not repeated over the full basin.
  */
-export function poolAxisFits(fits: LineFit[], speedsMmS: number[], lineSpeeds: number[]): AxisPool {
-  const refused: LineFit[] = []
-  const accepted: { fit: LineFit; speed: number }[] = []
-  for (let i = 0; i < fits.length; i++) {
-    if (fits[i].accepted) accepted.push({ fit: fits[i], speed: lineSpeeds[i] })
-    else refused.push(fits[i])
+export function jointAxisFit(
+  records: JointFitRecord[],
+  seedFHz: number,
+  seedBandRel = SEED_BAND_REL,
+): JointAxisFitResult | null {
+  if (records.length === 0) return null
+  let nTotal = 0
+  for (const rec of records) nTotal += rec.y.length
+
+  const fLo = Math.max(F_MIN_HZ, seedFHz * (1 - seedBandRel))
+  const fHi = Math.min(F_MAX_HZ, seedFHz * (1 + seedBandRel))
+  let best: { f: number; zeta: number; ssr: number } | null = null
+  // The joint grid only has to land inside the optimum's basin (a few hertz wide); the
+  // Levenberg-Marquardt polish resolves the rest, so a coarser step than the seed grid
+  // keeps the N-record sweep affordable.
+  const jointGridHz = 2 * PERIODOGRAM_GRID_HZ
+  for (let f = fLo; f <= fHi; f += jointGridHz) {
+    for (const zeta of ZETA_GRID) {
+      const trial = jointProjectedSolve(f, zeta, records)
+      if (trial && (best === null || trial.ssr < best.ssr)) best = { f, zeta, ssr: trial.ssr }
+    }
+  }
+  if (best === null) return null
+
+  // Levenberg-Marquardt polish of (f, zeta) on the reduced projected functional: the
+  // Jacobian is a forward difference that re-solves the block linear systems at every
+  // perturbation (Kaufman's variable projection simplification), with the same
+  // multiplicative lambda control as the per-line polish.
+  const clampTheta = (t: number[]): number[] => [
+    Math.min(F_MAX_HZ, Math.max(F_MIN_HZ, t[0])),
+    Math.min(ZETA_MAX, Math.max(ZETA_MIN, t[1])),
+  ]
+  let theta = clampTheta([best.f, best.zeta])
+  let current = jointProjectedSolve(theta[0], theta[1], records)!
+  let r = jointStackedResiduals(current.solves, records, nTotal)
+  let lambda = 1e-3
+  for (let iter = 0; iter < 60; iter++) {
+    // Forward-difference Jacobian of the projected residual in (f, zeta).
+    const cols: Float64Array[] = []
+    let singular = false
+    for (let j = 0; j < 2; j++) {
+      const h = Math.max(1e-6, Math.abs(theta[j]) * 1e-5)
+      const th = theta.slice()
+      th[j] += h
+      const perturbed = jointProjectedSolve(th[0], th[1], records)
+      if (perturbed === null) {
+        singular = true
+        break
+      }
+      const rh = jointStackedResiduals(perturbed.solves, records, nTotal)
+      const col = new Float64Array(nTotal)
+      for (let k = 0; k < nTotal; k++) col[k] = (r[k] - rh[k]) / h
+      cols.push(col)
+    }
+    if (singular) break
+    let j00 = 0
+    let j01 = 0
+    let j11 = 0
+    let g0 = 0
+    let g1 = 0
+    for (let k = 0; k < nTotal; k++) {
+      j00 += cols[0][k] * cols[0][k]
+      j01 += cols[0][k] * cols[1][k]
+      j11 += cols[1][k] * cols[1][k]
+      g0 += cols[0][k] * r[k]
+      g1 += cols[1][k] * r[k]
+    }
+    const d00 = j00 * (1 + lambda) + 1e-12
+    const d11 = j11 * (1 + lambda) + 1e-12
+    const det = d00 * d11 - j01 * j01
+    if (!(Math.abs(det) > 0)) {
+      lambda *= 10
+      if (lambda > 1e12) break
+      continue
+    }
+    const step0 = (d11 * g0 - j01 * g1) / det
+    const step1 = (d00 * g1 - j01 * g0) / det
+    const trialTheta = clampTheta([theta[0] + step0, theta[1] + step1])
+    const trial = jointProjectedSolve(trialTheta[0], trialTheta[1], records)
+    if (trial !== null && trial.ssr < current.ssr) {
+      const improvement = (current.ssr - trial.ssr) / Math.max(current.ssr, 1e-300)
+      theta = trialTheta
+      current = trial
+      r = jointStackedResiduals(current.solves, records, nTotal)
+      lambda = Math.max(lambda / 10, 1e-12)
+      if (improvement < 1e-10) break
+    } else {
+      lambda *= 10
+      if (lambda > 1e12) break
+    }
   }
 
-  // The pool's refusals carry only the axis-level verdict; the per-line reasons travel with
-  // the per-line outcomes, where the UI summarizes them by category.
-  const refuse = (reason: string): AxisPool => ({
-    accepted: false,
-    refusals: [reason],
+  // Nested null model: each record keeps only its drift line (c0 + c1 t), solved by linear
+  // least squares; its residuals come straight from the least-squares detrend.
+  let ssrNull = 0
+  for (const rec of records) ssrNull += ssr(linearDetrend(rec.tS, rec.y))
+
+  // Extra-sum-of-squares F-test (Seber & Wild 1989, ch. 5): p_null = 2N, p_ring = 4N + 2.
+  const N = records.length
+  const pRing = 4 * N + 2
+  const dfNum = pRing - 2 * N
+  const dfDen = nTotal - pRing
+  let fStatistic: number | null = null
+  let fCritical: number | null = null
+  let significant = false
+  if (dfDen > 0) {
+    fCritical = fCriticalValue(dfNum, dfDen, F_TEST_ALPHA)
+    const denom = current.ssr / dfDen
+    fStatistic = denom > 0 ? (ssrNull - current.ssr) / dfNum / denom : Number.POSITIVE_INFINITY
+    significant = fStatistic > fCritical
+  }
+
+  return {
+    frequencyHz: theta[0],
+    dampingRatio: theta[1],
+    ssr: current.ssr,
+    ssrNull,
+    nTotal,
+    fStatistic,
+    fCritical,
+    significant,
+    frequencySeHz: jointFrequencySe(current.solves, records, current.ssr, nTotal),
+    amplitudesMm: current.solves.map((s) => Math.hypot(s.v[2], s.v[3])),
+  }
+}
+
+// Joint periodogram seed: the maximizer of the SUM of the per-record periodograms (each on
+// its linearly detrended record), the multi-record form of the Rife & Boorstyn estimator.
+// Used when no screened line produced a per-line fit to take a median seed from.
+function jointPeriodogramSeed(records: JointFitRecord[]): number {
+  const detrended = records.map((rec) => linearDetrend(rec.tS, rec.y))
+  let bestF = F_MIN_HZ
+  let bestP = -1
+  for (let f = F_MIN_HZ; f <= F_MAX_HZ; f += PERIODOGRAM_GRID_HZ) {
+    const w = 2 * Math.PI * f
+    let p = 0
+    for (let i = 0; i < records.length; i++) {
+      const tS = records[i].tS
+      const y = detrended[i]
+      let re = 0
+      let im = 0
+      for (let k = 0; k < y.length; k++) {
+        re += y[k] * Math.cos(w * tS[k])
+        im -= y[k] * Math.sin(w * tS[k])
+      }
+      p += re * re + im * im
+    }
+    if (p > bestP) {
+      bestP = p
+      bestF = f
+    }
+  }
+  return bestF
+}
+
+// Screening categories that exclude a line from the joint fit; every other category enters.
+const EXCLUSION_BY_SCREENING: Partial<Record<LineScreening, LineJointExclusion>> = {
+  'no-free-response': 'no-free-response',
+  'out-of-band': 'out-of-band',
+  'seed-disagreement': 'seed-disagreement',
+  'zeta-at-bound': 'zeta-at-bound',
+}
+
+/**
+ * The axis estimate: screens the per-line fits (exclusions plus a Hampel identifier on the
+ * per-line fitted frequencies), runs the joint variable-projection fit over the surviving
+ * lines, and gates the result with the F-test, the per-tier joint sub-fit invariance check,
+ * the replicate-agreement check, and the confidence gate on the joint frequency.
+ * `amplitudeFloorMm` is the scan's amplitude resolvability floor (AMPLITUDE_RESOLUTION_PX
+ * priced through the scan's px/mm); a pooled amplitude below it is refused as unresolvable.
+ */
+export function poolAxisFits(
+  fits: LineFit[],
+  speedsMmS: number[],
+  lineSpeeds: number[],
+  amplitudeFloorMm = 0,
+): AxisPool {
+  const statuses: LineJointStatus[] = fits.map((f) => {
+    const exclusion = EXCLUSION_BY_SCREENING[f.screening]
+    return exclusion !== undefined
+      ? { usedInJointFit: false, exclusion }
+      : { usedInJointFit: true, amplitudeMm: null }
+  })
+
+  // A line's per-line fitted frequency counts as a replicate figure only when the ring was
+  // detectable on that line alone: a weak or unfittable line's frequency chased noise and
+  // must not steer the seed, the outlier screen, or the replicate-agreement check.
+  const informativeFreq = (f: LineFit): number =>
+    f.params !== null && f.screening !== 'weak-ringing' && f.screening !== 'fit-failed'
+      ? f.params.frequencyHz
+      : NaN
+
+  // Hampel identifier (median/MAD, 3 robust sigmas) over the per-line fitted frequencies of
+  // the joint-fit candidates: a wildly different fitted frequency marks a corrupted trace,
+  // not a replicate, and is excluded before it can bias the joint fit. The outlier distance
+  // is floored at the replicate agreement tolerance: lines inside the shaper's agreement
+  // band are replicates by definition, never outliers. Lines without an informative
+  // per-line frequency pass through as gaps.
+  const candidateIndices = fits.map((_, i) => i).filter((i) => statuses[i].usedInJointFit)
+  const candidateFreqs = candidateIndices.map((i) => informativeFreq(fits[i]))
+  const finiteFreqs = candidateFreqs.filter((f) => Number.isFinite(f))
+  if (finiteFreqs.length >= 3) {
+    const center = median(finiteFreqs)
+    const threshold = Math.max(
+      3 * MAD_TO_SIGMA * mad(finiteFreqs),
+      Math.max(AGREEMENT_MIN_HZ, AGREEMENT_REL * center),
+    )
+    candidateIndices.forEach((i, k) => {
+      if (Number.isFinite(candidateFreqs[k]) && Math.abs(candidateFreqs[k] - center) > threshold) {
+        statuses[i] = { usedInJointFit: false, exclusion: 'frequency-outlier' }
+      }
+    })
+  }
+
+  const included = fits.map((_, i) => i).filter((i) => statuses[i].usedInJointFit)
+  const records = included.map((i) => fits[i].window!)
+
+  const base = {
     frequencyHz: null,
     dampingRatio: null,
     frequencyCi95Hz: null,
+    frequencySeHz: null,
+    fStatistic: null,
     amplitudeMm: null,
-    linesUsed: accepted.length,
+    linesUsed: included.length,
+    lineJoint: statuses,
+  }
+  // The pool's refusals carry only the axis-level verdict; the per-line reasons travel with
+  // the per-line outcomes, where the UI summarizes them by category.
+  const refuse = (reason: string, extras: Partial<AxisPool> = {}): AxisPool => ({
+    accepted: false,
+    refusals: [reason],
+    ...base,
+    ...extras,
   })
 
-  if (accepted.length < MIN_ACCEPTED_LINES) {
-    // The advice depends on why the lines were refused: a majority of amplitude-gate refusals
-    // means the traced ringing is too weak (a weak print, or lamp shadow attenuating the
-    // signal), a majority of band-edge refusals means the resonance is probably outside the
-    // searchable band, and anything else most often points at the scanner's lamp shadow
-    // crossing the measured edges.
-    const amplitudeCount = refused.filter((f) => f.refusalCategory === 'weak-ringing').length
-    const bandEdgeCount = refused.filter((f) => f.refusalCategory === 'out-of-band').length
-    let advice =
-      `When most lines of a scan are refused, the scanner's lamp shadow is often falling ` +
-      `across the measured edges; rescan with the coupon rotated a half turn on the glass.`
-    if (amplitudeCount * 2 > refused.length) {
-      advice =
-        'The ringing amplitude is below the detection threshold on most lines. Rescan with ' +
-        'the coupon rotated a half turn on the glass, since lamp shadow can weaken the traced ' +
-        'ringing; if it still reads too weak, raise the corner speed or the acceleration and reprint.'
-    } else if (bandEdgeCount * 2 > refused.length) {
-      advice = 'The true resonance likely lies outside the measurable range.'
-    }
+  if (included.length < MIN_ACCEPTED_LINES) {
+    // The advice depends on why lines were excluded: a majority of band-edge exclusions
+    // means the resonance is probably outside the searchable band, and anything else most
+    // often points at the scanner's lamp shadow crossing the measured edges.
+    const excluded = fits.filter((_, i) => !statuses[i].usedInJointFit)
+    const bandEdgeCount = excluded.filter((f) => f.screening === 'out-of-band').length
+    const advice =
+      bandEdgeCount * 2 > excluded.length
+        ? 'The true resonance likely lies outside the measurable range.'
+        : `When most lines of a scan are refused, the scanner's lamp shadow is often falling ` +
+          `across the measured edges; rescan with the coupon rotated a half turn on the glass.`
     return refuse(
-      `Only ${accepted.length} of the axis's lines produced a usable ringing fit (at least ` +
+      `Only ${included.length} of the axis's lines produced a usable ringing trace (at least ` +
         `${MIN_ACCEPTED_LINES} are needed for a trustworthy estimate). ` +
         advice,
     )
   }
 
-  const freqs = accepted.map((a) => a.fit.params!.frequencyHz)
-  const fMedian = median(freqs)
-  const tolerance = Math.max(AGREEMENT_MIN_HZ, AGREEMENT_REL * fMedian)
+  // Joint seed: the median per-line fitted frequency of the surviving lines, or the joint
+  // periodogram maximizer when no line produced a per-line fit.
+  const survivingSeeds = included
+    .map((i) => informativeFreq(fits[i]))
+    .filter((f) => Number.isFinite(f))
+  const seed = survivingSeeds.length > 0 ? median(survivingSeeds) : jointPeriodogramSeed(records)
+
+  const joint = jointAxisFit(records, seed)
+  if (joint === null) {
+    return refuse(
+      `The shared ringing model could not be fit to the axis's lines. The traces may be ` +
+        'corrupted by print defects or scan artifacts.',
+    )
+  }
+  // The per-line fitted amplitudes are diagnostics regardless of the later gates.
+  included.forEach((i, k) => {
+    statuses[i] = { usedInJointFit: true, amplitudeMm: joint.amplitudesMm[k] }
+  })
+  const extras: Partial<AxisPool> = { fStatistic: joint.fStatistic }
+
+  // Acceptance: the extra-sum-of-squares F-test against the per-line drift-only null.
+  if (!joint.significant) {
+    // No excitation advice here: whether raising the corner speed would help is decided
+    // by the ladder split of the per-line amplitudes, judged where the rungs are known.
+    return refuse(
+      'No statistically significant ringing was found on this axis: across all its lines, ' +
+        'the ringing model fits no better than plain drift. Rescan with the coupon rotated ' +
+        'a half turn on the glass, since lamp shadow can weaken the traced ringing.',
+      extras,
+    )
+  }
+
+  // Practical significance: a statistically significant shared component below the traced
+  // edges' sub-pixel resolvability floor is a sampling artifact (pixel locking), not
+  // printed ringing, and a printer whose ringing cannot be resolved needs no shaper.
+  if (median(joint.amplitudesMm) < amplitudeFloorMm) {
+    return refuse(
+      'The ringing measured across this axis is smaller than the scan can resolve, so it ' +
+        'cannot be told apart from the scanner\'s own sub-pixel artifacts. Ringing this ' +
+        'small does not need an input shaper.',
+      extras,
+    )
+  }
+
+  // A jointly fitted frequency or damping at a bound of its search range is not a resolved
+  // interior optimum: the shared structure the fit latched onto (for example a residue of
+  // the forced corner transient) is not a trustworthy resonance.
+  if (
+    joint.frequencyHz <= F_MIN_HZ + BOUND_MARGIN_HZ ||
+    joint.frequencyHz >= F_MAX_HZ - BOUND_MARGIN_HZ
+  ) {
+    return refuse(
+      `The frequency fitted across the axis's lines sits at the edge of the ${F_MIN_HZ} to ` +
+        `${F_MAX_HZ} Hz search range, so it cannot be trusted. The true resonance likely ` +
+        'lies outside the measurable range.',
+      extras,
+    )
+  }
+  if (joint.dampingRatio <= ZETA_MIN || joint.dampingRatio >= ZETA_MAX) {
+    return refuse(
+      'The damping ratio fitted across the axis\'s lines sits at the edge of the physically ' +
+        'plausible range, so the fit cannot be trusted.',
+      extras,
+    )
+  }
+
+  const tolerance = Math.max(AGREEMENT_MIN_HZ, AGREEMENT_REL * joint.frequencyHz)
 
   // Speed invariance: the ringing frequency is a machine property, independent of the print
-  // speed, so the per-tier medians must agree. A disagreement flags a wavelength misreading
-  // (for example aliasing at one tier). Checked before the replicate gate: a tier mismatch
-  // also widens the overall spread, and the tier-specific reason is the actionable one.
+  // speed, so per-tier joint sub-fits must agree. A disagreement flags a wavelength
+  // misreading (for example aliasing at one tier).
   if (speedsMmS.length > 1) {
-    const tierMedians: number[] = []
+    const tierFreqs: number[] = []
     for (const v of speedsMmS) {
-      const tier = accepted.filter((a) => a.speed === v).map((a) => a.fit.params!.frequencyHz)
-      if (tier.length > 0) tierMedians.push(median(tier))
+      const tierIndices = included.filter((i) => lineSpeeds[i] === v)
+      if (tierIndices.length === 0) continue
+      const tierRecords = tierIndices.map((i) => fits[i].window!)
+      // Each sub-fit refines with a narrow grid band (the agreement tolerance) instead of
+      // re-sweeping the full basin, seeded from the tier's own per-line median frequency so
+      // a genuinely disagreeing tier starts in its own basin; the axis-level optimum is the
+      // fallback seed for a tier with no informative per-line fit.
+      const tierSeeds = tierIndices
+        .map((i) => informativeFreq(fits[i]))
+        .filter((f) => Number.isFinite(f))
+      const tierSeed = tierSeeds.length > 0 ? median(tierSeeds) : joint.frequencyHz
+      const sub = jointAxisFit(tierRecords, tierSeed, AGREEMENT_REL)
+      if (sub !== null) tierFreqs.push(sub.frequencyHz)
     }
-    if (tierMedians.length > 1 && Math.max(...tierMedians) - Math.min(...tierMedians) > tolerance) {
+    if (tierFreqs.length > 1 && Math.max(...tierFreqs) - Math.min(...tierFreqs) > tolerance) {
       return refuse(
         'The speed tiers disagree on the ringing frequency. A true machine resonance is ' +
           'speed-independent, so the measurement cannot be trusted; the trace of one tier was ' +
           'probably misread.',
+        extras,
       )
     }
   }
 
-  // Replicate agreement: the robust spread of the per-line frequencies.
-  const robustSigma = MAD_TO_SIGMA * mad(freqs)
-  if (robustSigma > tolerance) {
+  // Replicate agreement: the robust spread of the per-line fitted frequencies. Lines without
+  // a per-line fit carry no replicate figure and are skipped here.
+  if (survivingSeeds.length > 1 && MAD_TO_SIGMA * mad(survivingSeeds) > tolerance) {
     return refuse(
       'The lines of this axis disagree on the ringing frequency (the replicate spread exceeds ' +
         'the shaper tolerance). The print or scan is too inconsistent to trust a single value.',
+      extras,
     )
   }
 
-  // Pooled uncertainty: the larger of the replicate-based standard error of the median and the
-  // Cramer-Rao-based one, each shrunk by sqrt(n) for the pooling.
-  const n = accepted.length
-  const seReplicate = medianStandardError(freqs)
-  const crbSes = accepted.map((a) => a.fit.frequencySeHz).filter((s): s is number => s !== null)
-  const seCrb = crbSes.length > 0 ? median(crbSes) / Math.sqrt(n) : 0
-  const se = Math.max(seReplicate, seCrb)
-  const ci95 = 1.96 * se
-  if (ci95 > MAX_CI95_REL * fMedian) {
+  // Confidence gate on the joint frequency's standard error.
+  const se = joint.frequencySeHz
+  const ci95 = se !== null ? 1.96 * se : null
+  if (ci95 === null || ci95 > MAX_CI95_REL * joint.frequencyHz) {
     return refuse(
       'The pooled frequency estimate is too uncertain to configure an input shaper: its 95% ' +
         'confidence interval is wider than the stopband of the shaper it would set. Reprint or ' +
         'rescan the coupon.',
+      extras,
     )
   }
 
   return {
     accepted: true,
     refusals: [],
-    frequencyHz: fMedian,
-    dampingRatio: median(accepted.map((a) => a.fit.params!.dampingRatio)),
+    frequencyHz: joint.frequencyHz,
+    dampingRatio: joint.dampingRatio,
     frequencyCi95Hz: ci95,
-    amplitudeMm: median(accepted.map((a) => a.fit.params!.ringAmpMm)),
-    linesUsed: n,
+    frequencySeHz: se,
+    fStatistic: joint.fStatistic,
+    amplitudeMm: median(joint.amplitudesMm),
+    linesUsed: included.length,
+    lineJoint: statuses,
   }
 }

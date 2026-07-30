@@ -11,8 +11,10 @@ export function disableShapingCommands(profile: PrinterProfile): string[] {
 }
 
 /**
- * Motion limits for the test, per firmware, derived from the spec's corner speed so the
- * run-up cruise passes the corner without deceleration:
+ * Motion limits for the test, per firmware, derived from the spec's corner speed (the TOP
+ * rung of the corner-speed excitation ladder) so every run-up cruise passes its corner
+ * without deceleration; the limit is an upper bound, so the ladder's slower rungs pass
+ * unbraked under the same single override on all three firmwares:
  * - Klipper: SQUARE_CORNER_VELOCITY is the native semantics; any junction entered at or
  *   below it passes unbraked, so it is set to the corner speed.
  * - Marlin classic jerk: M205 X/Y is the allowed instantaneous per-axis velocity change

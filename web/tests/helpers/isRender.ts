@@ -130,14 +130,17 @@ function buildRingedLines(spec: IsTestSpec, g: IsCouponGeometry, o: Resolved): R
         f += truth.frequencySpreadHz * (i / (group.lines.length - 1) - 0.5)
       }
       const zeta = truth.dampingRatio
-      const B = truth.ringAmpMm
-      const lobeA = truth.lobeAmpMm ?? 0.08
+      // Ladder physics: the ring amplitude scales with the corner's velocity step
+      // (delta-v over omega), so a line on a slower rung rings proportionally weaker.
+      // truth.ringAmpMm is the TOP rung's amplitude.
+      const B = truth.ringAmpMm * (line.cornerSpeedMmS / spec.cornerSpeedMmS)
+      const lobeA = (truth.lobeAmpMm ?? 0.08) * (line.cornerSpeedMmS / spec.cornerSpeedMmS)
       const lobeTau = truth.lobeTauS ?? 0.008
       const phi = truth.phaseRad ?? 0
       const omega = 2 * Math.PI * f
       const omegaD = omega * Math.sqrt(1 - zeta * zeta)
       const lat = (sMm: number) => {
-        const t = timeAtDistance(sMm, spec.cornerSpeedMmS, line.speedMmS, spec.accelMmS2)
+        const t = timeAtDistance(sMm, line.cornerSpeedMmS, line.speedMmS, spec.accelMmS2)
         return lobeA * Math.exp(-t / lobeTau) + B * Math.exp(-omega * zeta * t) * Math.cos(omegaD * t + phi)
       }
       out.push({ line, horizontal, lat, maxAmpMm: Math.abs(B) + Math.abs(lobeA), lengthMm })

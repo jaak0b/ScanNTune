@@ -8,10 +8,11 @@ import {
   INNER_MARGIN_MM,
   isCouponGeometry,
   maxPackedRampMm,
+  MIN_CORNER_SPEED_MM_S,
   SWEEP_TOOTH_CLEARANCE_MM,
 } from './couponGeometry'
 
-export { accelRampMm }
+export { accelRampMm, MIN_CORNER_SPEED_MM_S }
 
 export type IsAxis = 'x' | 'y'
 
@@ -33,15 +34,19 @@ export interface IsTestSpec {
   axes: IsAxis[]
   accelMmS2: number
   /**
-   * Cruise speed of the run-up leg, fixed across all tiers, and the size of the ringing
-   * excitation. With the sweep enabled it is also the constant forward speed of the
-   * sweep leg. The emitted motion limits set the firmware's corner limit to this value,
-   * so the planner takes the 90 degree corner at the full corner speed with zero deceleration:
-   * the pressure dump K * (v_in - v_corner) is zero by construction and the bead stays
-   * continuous. The excitation is the per-axis velocity step at the corner (the run-up
-   * axis stops, the measured axis starts, each by this speed); the residual ring
-   * amplitude is approximately delta-v over omega, so a higher corner speed rings the
-   * frame proportionally harder.
+   * TOP rung of the corner-speed excitation ladder, and the size of the strongest
+   * ringing excitation. With the sweep off, each tier's lines take their corner at
+   * geometrically spaced run-up speeds from MIN_CORNER_SPEED_MM_S up to this value, one
+   * rung per line (the step-excitation idea of Klipper's ringing tower: the print
+   * self-ranges, so some lines ring visibly regardless of frame stiffness). With the
+   * sweep enabled the ladder is replaced by the sweep leg: every line corners at exactly
+   * this speed, which is also the sweep leg's constant forward speed. The emitted motion
+   * limits set the firmware's corner limit to this value once, so the planner takes
+   * every 90 degree corner at that line's full run-up speed with zero deceleration
+   * (slower rungs pass under the limit unbraked): the pressure dump K * (v_in - v_corner)
+   * is zero by construction and the bead stays continuous. The excitation is the
+   * per-axis velocity step at the corner; the residual ring amplitude is approximately
+   * delta-v over omega, so faster rungs ring the frame proportionally harder.
    */
   cornerSpeedMmS: number
   /** How far each measured segment extends into the frame band at both ends. */
@@ -107,8 +112,6 @@ export const MIN_MEASURED_LINE_MM = 20
  * can raise it.
  */
 export const DEFAULT_CORNER_SPEED_MM_S = 100
-/** Below this corner speed the excitation is too weak to leave a readable trace. */
-export const MIN_CORNER_SPEED_MM_S = 20
 export const MIN_SWEEP_CYCLES = 4
 export const MAX_SWEEP_CYCLES = 40
 /** Below this acceleration the ringing trace is often too weak to measure. */

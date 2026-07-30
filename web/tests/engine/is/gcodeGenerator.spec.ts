@@ -11,6 +11,8 @@ import {
 import {
   isCouponGeometry,
   type IsLine,
+  MIN_CORNER_SPEED_MM_S,
+  sweepLegMm,
 } from '../../../src/engine/is/couponGeometry'
 
 import { defaultIsTestSpec } from '../../../src/engine/is/types'
@@ -26,7 +28,8 @@ const nominal = profile.nozzleDiameterMm * NOMINAL_WIDTH_FACTOR
 const g = isCouponGeometry(spec)
 const ox = (profile.bedWidthMm - g.couponWidthMm) / 2
 const oy = (profile.bedDepthMm - g.couponHeightMm) / 2
-const runUpFeed = spec.cornerSpeedMmS * 60
+// Each line's run-up cruises at its own rung of the corner-speed ladder.
+const runUpFeed = (line: IsLine) => Math.round(line.cornerSpeedMmS * 60)
 const allLines = g.groups.flatMap((grp) => grp.lines)
 
 const ePerMm = (w: number) =>
@@ -38,7 +41,7 @@ const runUpLen = (line: IsLine) =>
 /** The full-flow run-up cruise move, ending exactly on the line's ringing corner. */
 const cornerMoveStr = (line: IsLine) =>
   `G1 X${(ox + line.measured.x0).toFixed(3)} Y${(oy + line.measured.y0).toFixed(3)} ` +
-  `E${(runUpLen(line) * ePerMm(nominal)).toFixed(5)} F${runUpFeed}`
+  `E${(runUpLen(line) * ePerMm(nominal)).toFixed(5)} F${runUpFeed(line)}`
 
 const firstExtrusionIndex = (lines: string[]) => lines.findIndex((l) => /^G1 .*E-?[\d.]/.test(l))
 // The last printing move; the final retract (a bare G1 E-) sits after the restore block.
@@ -148,14 +151,46 @@ describe('generateIsGcodeWithReport (Klipper)', () => {
     expect(zs).toEqual(['0.200', '0.400', '10'])
   })
 
-  it('cruises the run-up at the 100 mm/s corner speed straight into every corner, continuous through it', () => {
+  it('names the corner-speed excitation ladder in the header', () => {
+    expect(lines[2]).toBe(
+      '; corner-speed excitation ladder 20 to 100 mm/s across the 8 lines of each tier',
+    )
+  })
+
+  it('cruises each run-up at its own ladder rung (hand-pinned geometric feeds)', () => {
+    // Hand-derived once: rungs 20 * 5^(j/7) mm/s for j = 0..7, times 60, rounded.
+    const expectedFeeds = [1200, 1510, 1901, 2392, 3010, 3788, 4768, 6000]
+    const chunk = measuredChunk(lines)
+    for (const group of g.groups) {
+      group.lines.forEach((line, j) => {
+        const idx = chunk.indexOf(cornerMoveStr(line))
+        expect(idx, `line ${j}`).toBeGreaterThanOrEqual(0)
+        expect(chunk[idx].endsWith(`F${expectedFeeds[j]}`), `line ${j}`).toBe(true)
+      })
+    }
+  })
+
+  it('keeps the single motion-limit override at the top rung, above every slower rung', () => {
+    // The corner limit is an upper bound: one override at the 100 mm/s top rung lets
+    // every slower rung pass its corner unbraked, so no per-line limit changes exist.
+    const limits = lines.filter((l) => l.startsWith('SET_VELOCITY_LIMIT'))
+    expect(limits).toHaveLength(1)
+    expect(limits[0]).toContain('SQUARE_CORNER_VELOCITY=100')
+    for (const group of g.groups) {
+      for (const line of group.lines) {
+        expect(line.cornerSpeedMmS).toBeLessThanOrEqual(spec.cornerSpeedMmS + 1e-9)
+      }
+    }
+  })
+
+  it('cruises the run-up straight into every corner, continuous through it', () => {
     const chunk = measuredChunk(lines)
     for (const line of allLines) {
       const idx = chunk.indexOf(cornerMoveStr(line))
       expect(idx, `run-up cruise of the ${line.speedMmS} mm/s line`).toBeGreaterThanOrEqual(0)
-      // The run-up extrudes at full flow at the run-up feedrate (the square corner
-      // velocity) and ends exactly on the corner; there is no separate slow approach.
-      expect(chunk[idx]).toMatch(new RegExp(`F${runUpFeed}$`))
+      // The run-up extrudes at full flow at the line's own ladder rung feedrate and ends
+      // exactly on the corner; there is no separate slow approach.
+      expect(chunk[idx]).toMatch(new RegExp(`F${runUpFeed(line)}$`))
       // Continuous positive E through the corner: the first move after the corner
       // extrudes at full flow at the tier feedrate.
       const next = chunk[idx + 1]
@@ -681,6 +716,21 @@ describe('resonant run-up sweep emission', () => {
     )
   })
 
+  it('replaces the corner-speed ladder: every run-up cruises at the single corner speed', () => {
+    expect(report.gcode).not.toContain('corner-speed excitation ladder')
+    const chunk = measuredChunk(lines)
+    for (const group of gs.groups) {
+      for (const line of group.lines) {
+        expect(line.cornerSpeedMmS).toBe(100)
+        const idx = chunk.indexOf(
+          `G1 X${(oxs + line.runUp.x1).toFixed(3)} Y${(oys + line.runUp.y1).toFixed(3)} ` +
+            `E${(runUpLen(line) * ePerMm(nominal)).toFixed(5)} F6000`,
+        )
+        expect(idx).toBeGreaterThanOrEqual(0)
+      }
+    }
+  })
+
   it('extrudes every chord at full flow with its own commanded feedrate', () => {
     const chunk = measuredChunk(lines)
     for (const group of gs.groups) {
@@ -735,6 +785,59 @@ describe('resonant run-up sweep emission', () => {
         limits(generateIsGcodeWithReport(p, filament, spec).gcode),
       )
     }
+  })
+
+  it('changes nothing outside the run-up leg: the rest of the coupon is line-identical', () => {
+    // Both variants must lay out the same coupon before the rest can be compared, which
+    // takes two spec choices. The corner speed sits at the ladder's bottom rung, so every
+    // rung of the ladder equals that one speed and the line positions stop depending on
+    // the excitation choice. The straight run-up is then set to the length the sweep leg
+    // occupies in the window, so the footprint matches as well.
+    const shared = { ...spec, cornerSpeedMmS: MIN_CORNER_SPEED_MM_S }
+    const withSweep = { ...shared, sweep: true }
+    const withLadder = { ...shared, sweep: false, runUpMm: sweepLegMm(withSweep) }
+    const gl = isCouponGeometry(withLadder, profile.squareCornerVelocityMmS)
+    const oxl = (profile.bedWidthMm - gl.couponWidthMm) / 2
+    const oyl = (profile.bedDepthMm - gl.couponHeightMm) / 2
+
+    // Boundary of a line's run-up leg, in emitted moves: it opens after the moving prime,
+    // which ends at the leg's prime point, and closes with the measured segment, which
+    // ends at the far weld point. Both endpoints come from the shared geometry, so the
+    // same boundary cuts both variants. Between them sits the straight cruise into the
+    // ringing corner, and with the sweep on the chords that replace part of it.
+    const endpoint = (x: number, y: number) => `G1 X${x.toFixed(3)} Y${y.toFixed(3)} `
+    const primeEnds = gl.groups.flatMap((grp) =>
+      grp.lines.map((l) => endpoint(oxl + l.prime.x1, oyl + l.prime.y1)),
+    )
+    const measuredEnds = gl.groups.flatMap((grp) =>
+      grp.lines.map((l) => endpoint(oxl + l.measured.x1, oyl + l.measured.y1)),
+    )
+    const stripRunUps = (gcode: string): string[] => {
+      const kept: string[] = []
+      let inRunUp = false
+      for (const line of gcode.split('\n')) {
+        if (inRunUp) {
+          if (!measuredEnds.some((m) => line.startsWith(m))) continue
+          inRunUp = false
+        } else if (primeEnds.some((p) => line.startsWith(p))) {
+          inRunUp = true
+        }
+        kept.push(line)
+      }
+      // The one preamble comment naming the excitation is the other legitimate difference.
+      return kept.filter((l) => !/excitation ladder|resonant run-up sweep/.test(l))
+    }
+
+    const sweepGcode = generateIsGcodeWithReport(profile, filament, withSweep).gcode
+    const ladderGcode = generateIsGcodeWithReport(profile, filament, withLadder).gcode
+    expect(stripRunUps(sweepGcode)).toEqual(stripRunUps(ladderGcode))
+    // Guard against a boundary that swallows more than the run-up: with the sweep off the
+    // gap holds exactly one cruise move per line and layer, so 32 moves drop out (eight
+    // lines per axis, both axes, one pedestal layer and one measured layer), plus the one
+    // preamble comment.
+    expect(ladderGcode.split('\n').length - stripRunUps(ladderGcode).length).toBe(33)
+    // The sweep fills the same gap with its chords, so it drops more than the cruise moves.
+    expect(sweepGcode.split('\n').length - stripRunUps(sweepGcode).length).toBeGreaterThan(33)
   })
 
   it('leaves the non-sweep default G-code byte-identical to the pinned snapshot', () => {
@@ -800,7 +903,7 @@ describe('filament flow settings', () => {
     const line = allLines[0]
     const scaled =
       `G1 X${(ox + line.measured.x0).toFixed(3)} Y${(oy + line.measured.y0).toFixed(3)} ` +
-      `E${(runUpLen(line) * ePerMm(nominal) * 1.2).toFixed(5)} F${runUpFeed}`
+      `E${(runUpLen(line) * ePerMm(nominal) * 1.2).toFixed(5)} F${runUpFeed(line)}`
     expect(gcode).toContain(scaled)
   })
 
@@ -837,8 +940,11 @@ describe('first layer speed', () => {
         .map((l) => l.match(/^G1 X.*E[\d.]+ F(\d+)$/))
         .filter((m): m is RegExpMatchArray => m !== null)
         .map((m) => Number(m[1]))
-    // Layer 1: every printing move at the first layer feed (pedestal lines included).
-    expect(feedsOf(chunks[0]).every((f) => f === firstLayerFeed)).toBe(true)
+    // Layer 1: the first layer speed caps every printing move; the ladder's slowest
+    // run-up rungs legitimately cruise below the cap.
+    const feeds = feedsOf(chunks[0])
+    expect(feeds.every((f) => f <= firstLayerFeed)).toBe(true)
+    expect(feeds.some((f) => f === firstLayerFeed)).toBe(true)
     // The measured layer keeps its normal speeds.
     expect(feedsOf(chunks[chunks.length - 1]).some((f) => f > firstLayerFeed)).toBe(true)
   })

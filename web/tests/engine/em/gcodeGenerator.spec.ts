@@ -110,9 +110,16 @@ describe('generateEmGcodeWithReport', () => {
     const perLayerCombRetracts = 2 * spec.blockCount // 2 rows x blockCount blocks
     const perLayerStripRetracts = 4 // one per band raster strip
     const perLayerRailRetracts = 1 // approach travel to the rail crosses the window
+    // Each band-raster scanline that a fiducial hole splits hops the open hole retracted; the
+    // three top/bottom-strip holes split 60 scanlines per layer at this geometry.
+    const perLayerRasterHoleRetracts = 60
     const layerTransitions = totalLayers - 1
     const expected =
-      totalLayers * (perLayerCombRetracts + perLayerStripRetracts + perLayerRailRetracts) +
+      totalLayers *
+        (perLayerCombRetracts +
+          perLayerStripRetracts +
+          perLayerRailRetracts +
+          perLayerRasterHoleRetracts) +
       layerTransitions +
       1
     expect(retractLines.length).toBe(expected)

@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import { defaultPrinterProfile } from '../../../src/engine/gcode/profileTypes'
-import { defaultIsTestSpec, type IsTestSpec } from '../../../src/engine/is/types'
+import { defaultIsTestSpec, fitSpecToBed, type IsTestSpec } from '../../../src/engine/is/types'
 import {
   accelRampMm,
+  ladderCornerSpeeds,
+  MIN_CORNER_SPEED_MM_S,
   BLOCK_GAP_MM,
   effectiveRunUpMm,
   FIDUCIAL_INSET_MM,
@@ -198,10 +200,13 @@ describe('isCouponGeometry crossings and packing', () => {
   const yGroup = g.groups.find((grp) => grp.axis === 'y')!
   const xGroup = g.groups.find((grp) => grp.axis === 'x')!
 
-  it('records the protected span (tier ramp plus clean read length) per line', () => {
+  it('records the protected span (per-line ramp plus clean read length) per line', () => {
     for (const group of g.groups) {
       for (const line of group.lines) {
-        expect(line.protectedMm).toBeCloseTo(protectedSpanMm(spec, line.speedMmS), 9)
+        expect(line.protectedMm).toBeCloseTo(
+          protectedSpanMm(spec, line.speedMmS, line.cornerSpeedMmS),
+          9,
+        )
       }
     }
   })
@@ -286,15 +291,15 @@ describe('isCouponGeometry footprint', () => {
     expect(g.couponWidthMm).toBeCloseTo(interior + 2 * g.frameBandMm, 9)
     expect(g.couponHeightMm).toBeCloseTo(g.couponWidthMm, 9)
     // Documented derived size of the expert defaults (single 150 mm/s tier, 8 lines,
-    // 30 mm clean read, 8 mm run-up, 4000 mm/s^2, 100 mm/s corner speed): a regression
-    // inflating the layout is caught here. The field extent enters the two-axis
-    // footprint twice (once per group), so each extra line costs two pitches (5 mm)
-    // over the former 5-line default's 89.5625 mm; the 1.5625 mm fraction is the
-    // corner-to-tier ramp (150^2 - 100^2) / (2 * 4000).
-    expect(g.couponWidthMm).toBeCloseTo(104.5625, 9)
+    // 30 mm clean read, 8 mm run-up, 4000 mm/s^2, 100 mm/s top corner speed): a
+    // regression inflating the layout is caught here. The field extent enters the
+    // two-axis footprint twice (once per group), so each extra line costs two pitches
+    // (5 mm); the 2.7625 mm fraction is the binding corner-to-tier ramp of the ladder's
+    // 20 mm/s bottom rung, (150^2 - 20^2) / (2 * 4000).
+    expect(g.couponWidthMm).toBeCloseTo(105.7625, 9)
     // The 15-line maximum adds seven more line pairs on the same formula.
     const max = isCouponGeometry({ ...spec, linesPerSpeed: 15 })
-    expect(max.couponWidthMm).toBeCloseTo(139.5625, 9)
+    expect(max.couponWidthMm).toBeCloseTo(140.7625, 9)
   })
   it('shrinks when any driving parameter shrinks (the formula carries no padding)', () => {
     const size = (s: IsTestSpec) => isCouponGeometry(s).couponWidthMm
@@ -381,6 +386,53 @@ describe('isCouponGeometry at the maximum line count', () => {
         expect(inWindow).toBeGreaterThanOrEqual(maxSpec.runUpMm - 1e-9)
       }
     }
+  })
+})
+
+describe('corner-speed excitation ladder', () => {
+  it('spaces the rungs geometrically from the 20 mm/s bottom rung to the top corner speed', () => {
+    // Hand-derived: 20 * 5^(j/7) for j = 0..7 at the 100 mm/s default top rung.
+    const expected = [20, 25.16998, 31.67639, 39.86471, 50.16969, 63.1385, 79.45974, 100]
+    const rungs = ladderCornerSpeeds(spec)
+    expect(rungs).toHaveLength(spec.linesPerSpeed)
+    rungs.forEach((r, j) => expect(r).toBeCloseTo(expected[j], 4))
+    expect(rungs[0]).toBe(MIN_CORNER_SPEED_MM_S)
+  })
+  it('tags every line with its rung, repeating the ladder per tier', () => {
+    const multi = isCouponGeometry({ ...spec, speedsMmS: [150, 300] })
+    const rungs = ladderCornerSpeeds({ ...spec, speedsMmS: [150, 300] })
+    for (const group of multi.groups) {
+      group.lines.forEach((line, i) => {
+        expect(line.cornerSpeedMmS).toBeCloseTo(rungs[i % spec.linesPerSpeed], 9)
+      })
+    }
+  })
+  it('gives every line its own ramp from its rung, longest on the bottom rung', () => {
+    for (const group of g.groups) {
+      const first = group.lines[0]
+      const last = group.lines[group.lines.length - 1]
+      // Bottom rung (20 mm/s): ramp (150^2 - 20^2) / 8000 = 2.7625 mm (hand-derived);
+      // top rung (100 mm/s): (150^2 - 100^2) / 8000 = 1.5625 mm.
+      expect(first.protectedMm).toBeCloseTo(2.7625 + spec.measuredLineMm, 9)
+      expect(last.protectedMm).toBeCloseTo(1.5625 + spec.measuredLineMm, 9)
+    }
+  })
+  it('collapses to the single spec corner speed when the sweep replaces it', () => {
+    const rungs = ladderCornerSpeeds({ ...spec, sweep: true })
+    expect(rungs).toEqual(Array.from({ length: spec.linesPerSpeed }, () => 100))
+    const gsweep = isCouponGeometry({ ...spec, sweep: true })
+    for (const group of gsweep.groups) {
+      for (const line of group.lines) expect(line.cornerSpeedMmS).toBe(spec.cornerSpeedMmS)
+    }
+  })
+  it('shrinks a ladder coupon onto a small bed through the measured-line reduction', () => {
+    const profile = { ...defaultPrinterProfile(), bedWidthMm: 100, bedDepthMm: 100 }
+    const { spec: fitted, notes } = fitSpecToBed(spec, profile)
+    expect(notes.some((n) => n.includes('shortened'))).toBe(true)
+    expect(fitted.measuredLineMm).toBeLessThan(spec.measuredLineMm)
+    const gf = isCouponGeometry(fitted)
+    expect(gf.couponWidthMm).toBeLessThanOrEqual(100)
+    expect(gf.couponHeightMm).toBeLessThanOrEqual(100)
   })
 })
 
@@ -696,7 +748,10 @@ describe('isCouponGeometry resonant run-up sweep', () => {
     expect(effectiveRunUpMm(spec)).toBeCloseTo(spec.runUpMm, 9)
     expect(effectiveRunUpMm(sweepSpec)).toBeCloseTo(sweepLegMm(sweepSpec), 9)
     expect(sweepLegMm(sweepSpec)).toBeGreaterThan(spec.runUpMm)
-    const growth = sweepLegMm(sweepSpec) - spec.runUpMm
+    // The sweep replaces the corner-speed ladder, so its packed diagonal shrinks back to
+    // the single 100 mm/s corner speed: the leg growth (sweep leg minus the 8 mm run-up)
+    // less the ladder's 1.2 mm extra ramp, (100^2 - 20^2) / (2 * 4000), hand-derived.
+    const growth = sweepLegMm(sweepSpec) - spec.runUpMm - 1.2
     expect(gs.couponWidthMm).toBeCloseTo(g.couponWidthMm + growth, 9)
     expect(gs.couponHeightMm).toBeCloseTo(g.couponHeightMm + growth, 9)
   })

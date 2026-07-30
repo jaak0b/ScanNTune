@@ -37,12 +37,45 @@ export function accelRampMm(speedMmS: number, accelMmS2: number): number {
   return (speedMmS * speedMmS) / (2 * accelMmS2)
 }
 
+/** Below this corner speed the excitation is too weak to leave a readable trace; it is
+ *  also the bottom rung of the corner-speed excitation ladder. */
+export const MIN_CORNER_SPEED_MM_S = 20
+
 /**
- * Distance a tier needs after the corner to accelerate from the corner speed (the run-up
- * cruise the bend is taken at) to its cruise speed: (v^2 - corner^2) / (2a).
+ * The corner-speed excitation ladder: with the sweep off, the lines of each tier take
+ * their ringing corner at geometrically spaced speeds from MIN_CORNER_SPEED_MM_S up to
+ * the spec's corner speed (the top rung), one rung per line, the step-excitation idea of
+ * Klipper's ringing tower: the print self-ranges, so the ringing is pronounced on some
+ * lines regardless of frame stiffness. One entry per line of a tier, indexed by the
+ * line's position within its tier; the lowest rung sits nearest the crossing zone. With
+ * the sweep enabled the ladder collapses to the single spec corner speed (the sweep leg
+ * is the excitation instead).
  */
-export function tierRampMm(spec: IsTestSpec, speedMmS: number): number {
-  return accelRampMm(speedMmS, spec.accelMmS2) - accelRampMm(spec.cornerSpeedMmS, spec.accelMmS2)
+export function ladderCornerSpeeds(spec: IsTestSpec): number[] {
+  const n = spec.linesPerSpeed
+  if (spec.sweep || n === 1) {
+    return Array.from({ length: n }, () => spec.cornerSpeedMmS)
+  }
+  const ratio = Math.pow(spec.cornerSpeedMmS / MIN_CORNER_SPEED_MM_S, 1 / (n - 1))
+  return Array.from({ length: n }, (_, j) => MIN_CORNER_SPEED_MM_S * Math.pow(ratio, j))
+}
+
+/** The corner speed of the line at overall index i (tier blocks repeat the ladder). */
+function lineCornerSpeed(spec: IsTestSpec, i: number): number {
+  return ladderCornerSpeeds(spec)[i % spec.linesPerSpeed]
+}
+
+/**
+ * Distance a line needs after the corner to accelerate from its corner speed (the run-up
+ * cruise the bend is taken at) to its cruise speed: (v^2 - corner^2) / (2a). The corner
+ * speed defaults to the spec's top rung; ladder-aware callers pass the line's own rung.
+ */
+export function tierRampMm(
+  spec: IsTestSpec,
+  speedMmS: number,
+  cornerSpeedMmS: number = spec.cornerSpeedMmS,
+): number {
+  return accelRampMm(speedMmS, spec.accelMmS2) - accelRampMm(cornerSpeedMmS, spec.accelMmS2)
 }
 
 /**
@@ -117,8 +150,12 @@ export function effectiveRunUpMm(spec: IsTestSpec): number {
  * acceleration ramp to the tier speed followed by the guaranteed clean read length. No
  * crossing, flow change, or speed change is allowed inside it.
  */
-export function protectedSpanMm(spec: IsTestSpec, speedMmS: number): number {
-  return tierRampMm(spec, speedMmS) + spec.measuredLineMm
+export function protectedSpanMm(
+  spec: IsTestSpec,
+  speedMmS: number,
+  cornerSpeedMmS: number = spec.cornerSpeedMmS,
+): number {
+  return tierRampMm(spec, speedMmS, cornerSpeedMmS) + spec.measuredLineMm
 }
 
 /**
@@ -159,6 +196,10 @@ export interface SweepToothSegment extends IsSegment {
 
 export interface IsLine {
   speedMmS: number
+  /** Speed the line's run-up cruises into the ringing corner at: this line's rung of the
+   *  corner-speed excitation ladder (the spec's corner speed on every line with the
+   *  sweep enabled). */
+  cornerSpeedMmS: number
   /** First stretch of the leg, starting one inset inside the coupon outer edge, entirely
    *  under the frame band, where the un-retract is primed on the move. */
   prime: IsSegment
@@ -254,7 +295,11 @@ const speedOf = (spec: IsTestSpec, i: number) =>
 export function maxPackedRampMm(spec: IsTestSpec): number {
   const offsets = lineOffsets(spec)
   const F = offsets[offsets.length - 1]
-  return Math.max(...offsets.map((off, i) => F - off + tierRampMm(spec, speedOf(spec, i))))
+  return Math.max(
+    ...offsets.map(
+      (off, i) => F - off + tierRampMm(spec, speedOf(spec, i), lineCornerSpeed(spec, i)),
+    ),
+  )
 }
 
 /**
@@ -364,18 +409,20 @@ function buildYGroup(
   const advance = effectiveRunUpMm(spec) - (spec.sweep ? SWEEP_STUB_MM : 0)
   const lines = offsets.map((off, i) => {
     const speedMmS = speedOf(spec, i)
+    const cornerSpeedMmS = lineCornerSpeed(spec, i)
     const y = bandMm + effectiveRunUpMm(spec) + off
     const x = bandMm + INNER_MARGIN_MM + (F - off)
     const teeth = sweepTeeth(spec, vScvMmS, { x, y }, { x: 0, y: 1 }, { x: 1, y: 0 })
     const legEndY = spec.sweep ? y - advance : y
     return {
       speedMmS,
+      cornerSpeedMmS,
       prime: { x0: x, y0: LEG_INSET_MM, x1: x, y1: LEG_INSET_MM + PRIME_MM },
       runUp: { x0: x, y0: LEG_INSET_MM + PRIME_MM, x1: x, y1: legEndY },
       measured: { x0: x, y0: y, x1: couponW - bandMm + spec.weldMm, y1: y },
       tail: { x0: couponW - bandMm + spec.weldMm, y0: y, x1: couponW - bandMm + tailDepthMm(speedMmS, spec), y1: y },
       teeth,
-      protectedMm: protectedSpanMm(spec, speedMmS),
+      protectedMm: protectedSpanMm(spec, speedMmS, cornerSpeedMmS),
       crossingsMm: [],
     }
   })
@@ -416,18 +463,20 @@ function buildXGroup(
   const advance = effectiveRunUpMm(spec) - (spec.sweep ? SWEEP_STUB_MM : 0)
   const lines = offsets.map((off, i) => {
     const speedMmS = speedOf(spec, i)
+    const cornerSpeedMmS = lineCornerSpeed(spec, i)
     const x = firstX + (F - off)
     const y = couponH - bandMm - INNER_MARGIN_MM - (F - off)
     const teeth = sweepTeeth(spec, vScvMmS, { x, y }, { x: -1, y: 0 }, { x: 0, y: -1 })
     const legEndX = spec.sweep ? x + advance : x
     return {
       speedMmS,
+      cornerSpeedMmS,
       prime: { x0: couponW - LEG_INSET_MM, y0: y, x1: couponW - LEG_INSET_MM - PRIME_MM, y1: y },
       runUp: { x0: couponW - LEG_INSET_MM - PRIME_MM, y0: y, x1: legEndX, y1: y },
       measured: { x0: x, y0: y, x1: x, y1: bandMm - spec.weldMm },
       tail: { x0: x, y0: bandMm - spec.weldMm, x1: x, y1: bandMm - tailDepthMm(speedMmS, spec) },
       teeth,
-      protectedMm: protectedSpanMm(spec, speedMmS),
+      protectedMm: protectedSpanMm(spec, speedMmS, cornerSpeedMmS),
       crossingsMm: yMeasured.map((yk) => y - yk).sort((a, b) => a - b),
     }
   })
