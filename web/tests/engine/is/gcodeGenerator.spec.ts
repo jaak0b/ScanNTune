@@ -236,63 +236,31 @@ describe('generateIsGcodeWithReport (Klipper)', () => {
     }
   })
 
-  it('leaves the first-printed (Y) group at full flow: it crosses nothing', () => {
+  it('extrudes at full flow through every crossing so the beads weld into the grid', () => {
     const chunk = measuredChunk(lines)
     const fullE = ePerMm(nominal)
-    const yGroup = g.groups.find((grp) => grp.axis === 'y')!
-    for (const line of yGroup.lines) {
-      const idx = chunk.indexOf(cornerMoveStr(line))
-      const segs = walkLine(chunk, idx, ox + line.measured.x0, oy + line.measured.y0)
-      // The only zero-E segment on a measured line is the standard end-of-line coast.
-      const zeros = segs.slice(0, -1).filter((s) => s.e === null)
-      expect(zeros).toHaveLength(1)
-      expect(zeros[0].startDist + zeros[0].len).toBeCloseTo(
-        Math.hypot(line.tail.x1 - line.measured.x0, line.tail.y1 - line.measured.y0),
-        1,
-      )
-      for (const s of segs.slice(0, -1)) {
-        if (s.e === null) continue
-        expect((s.e ?? 0) / (s.len * fullE)).toBeCloseTo(1, 2)
+    for (const group of g.groups) {
+      for (const line of group.lines) {
+        const idx = chunk.indexOf(cornerMoveStr(line))
+        const segs = walkLine(chunk, idx, ox + line.measured.x0, oy + line.measured.y0)
+        // The only zero-E segment on a measured line is the standard end-of-line coast;
+        // crossings introduce no flow dip and no extra subsegment splits.
+        const zeros = segs.slice(0, -1).filter((s) => s.e === null)
+        expect(zeros).toHaveLength(1)
+        expect(zeros[0].startDist + zeros[0].len).toBeCloseTo(
+          Math.hypot(line.tail.x1 - line.measured.x0, line.tail.y1 - line.measured.y0),
+          1,
+        )
+        for (const s of segs.slice(0, -1)) {
+          if (s.e === null) continue
+          expect((s.e ?? 0) / (s.len * fullE)).toBeCloseTo(1, 2)
+        }
       }
     }
-  })
-
-  it('dips the X group flow to zero exactly over each crossed Y bead, full flow elsewhere', () => {
-    const chunk = measuredChunk(lines)
-    const fullE = ePerMm(nominal)
-    const yGroup = g.groups.find((grp) => grp.axis === 'y')!
-    const xGroup = g.groups.find((grp) => grp.axis === 'x')!
-    for (const line of xGroup.lines) {
-      const idx = chunk.indexOf(cornerMoveStr(line))
-      const segs = walkLine(chunk, idx, ox + line.measured.x0, oy + line.measured.y0)
-      // One zero-flow segment per crossed Y bead, plus the standard end-of-line coast.
-      const zeros = segs.slice(0, -1).filter((s) => s.e === null)
-      expect(zeros).toHaveLength(yGroup.lines.length + 1)
-      const coast = zeros[zeros.length - 1]
-      expect(coast.startDist + coast.len).toBeCloseTo(
-        Math.hypot(line.tail.x1 - line.measured.x0, line.tail.y1 - line.measured.y0),
-        1,
-      )
-      // Each of the other zero segments is centered on a crossing distance from the
-      // corner (the perpendicular crossing occupies exactly the crossed bead's width).
-      const crossingDists = yGroup.lines
-        .map((yl) => line.measured.y0 - yl.measured.y0)
-        .sort((a, b) => a - b)
-      const dipZeros = zeros.slice(0, -1)
-      expect(dipZeros).toHaveLength(crossingDists.length)
-      dipZeros.forEach((z, i) => {
-        expect(z.startDist + z.len / 2).toBeCloseTo(crossingDists[i], 1)
-        expect(z.len).toBeCloseTo(nominal, 1)
-      })
-      // Flow away from the dips (and their ramps) stays at full flow.
-      for (const s of segs.slice(0, -1)) {
-        if (s.e === null) continue
-        const flow = (s.e ?? 0) / (s.len * fullE)
-        const nearCrossing = crossingDists.some(
-          (c) => Math.abs(s.startDist + s.len / 2 - c) < 1.5 * nominal,
-        )
-        if (!nearCrossing) expect(flow).toBeCloseTo(1, 2)
-      }
+    // The second-printed group actually carries crossings, all past the protected span.
+    expect(g.groups[1].lines.every((l) => l.crossingsMm.length > 0)).toBe(true)
+    for (const line of g.groups[1].lines) {
+      for (const c of line.crossingsMm) expect(c).toBeGreaterThan(line.protectedMm)
     }
   })
 
@@ -871,16 +839,13 @@ describe('resonant run-up sweep emission', () => {
     const sweepGcode = generateIsGcodeWithReport(profile, filament, withSweep).gcode
     const ladderGcode = generateIsGcodeWithReport(profile, filament, withLadder).gcode
     expect(stripRunUps(sweepGcode)).toEqual(stripRunUps(ladderGcode))
-    // Guard against a boundary that swallows more than the run-up leg through the measured
-    // segment: with the sweep off the gap holds one cruise move per line and layer plus the
-    // X group's crossing-dip subsegments (identical in both variants, since the crossing
-    // geometry is shared), plus the one preamble comment.
-    const ladderRemoved = ladderGcode.split('\n').length - stripRunUps(ladderGcode).length
-    expect(ladderRemoved).toBeGreaterThan(33)
-    // The sweep fills the same gap with its chords, so it drops more than the ladder does.
-    expect(sweepGcode.split('\n').length - stripRunUps(sweepGcode).length).toBeGreaterThan(
-      ladderRemoved,
-    )
+    // Guard against a boundary that swallows more than the run-up: with the sweep off the
+    // gap holds exactly one cruise move per line and layer, so 32 moves drop out (eight
+    // lines per axis, both axes, one pedestal layer and one measured layer), plus the one
+    // preamble comment.
+    expect(ladderGcode.split('\n').length - stripRunUps(ladderGcode).length).toBe(33)
+    // The sweep fills the same gap with its chords, so it drops more than the cruise moves.
+    expect(sweepGcode.split('\n').length - stripRunUps(sweepGcode).length).toBeGreaterThan(33)
   })
 
   it('leaves the non-sweep default G-code byte-identical to the pinned snapshot', () => {
