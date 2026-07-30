@@ -6,6 +6,7 @@ import {
   ladderCornerSpeeds,
   MIN_CORNER_SPEED_MM_S,
   BLOCK_GAP_MM,
+  effectiveMeasuredLineMm,
   effectiveRunUpMm,
   FIDUCIAL_INSET_MM,
   FIDUCIAL_SIZE_MM,
@@ -19,6 +20,7 @@ import {
   MIN_FRAME_BAND_MM,
   PRIME_MM,
   protectedSpanMm,
+  RING_WAVELENGTHS_READ,
   SWEEP_STUB_MM,
   sweepCells,
   type SweepToothSegment,
@@ -715,7 +717,12 @@ describe('isCouponGeometry resonant run-up sweep', () => {
     // Hand-derived once: 5 mm stub plus 100 mm/s times the sum of the sixteen forcing
     // periods of the geometric 35 to 150 Hz band.
     expect(sweepLegMm(sweepSpec)).toBeCloseTo(29.35738350235176, 9)
-    expect(gs.couponWidthMm).toBeCloseTo(125.91988350235175, 9)
+    // The read-length constraint (RING_WAVELENGTHS_READ wavelengths of the 35 Hz band
+    // edge at the 150 mm/s tier speed, 21.428571... mm) is tighter than the spec's 30 mm
+    // default, so the sweep coupon reads the shorter length: the non-sweep 125.91988...
+    // mm literal above minus the 8.571428... mm the read length gives up.
+    expect(effectiveMeasuredLineMm(sweepSpec)).toBeCloseTo(21.428571428571427, 9)
+    expect(gs.couponWidthMm).toBeCloseTo(117.34845493092318, 9)
     expect(gs.couponHeightMm).toBeCloseTo(gs.couponWidthMm, 9)
   })
 
@@ -750,9 +757,25 @@ describe('isCouponGeometry resonant run-up sweep', () => {
     expect(sweepLegMm(sweepSpec)).toBeGreaterThan(spec.runUpMm)
     // The sweep replaces the corner-speed ladder, so its packed diagonal shrinks back to
     // the single 100 mm/s corner speed: the leg growth (sweep leg minus the 8 mm run-up)
-    // less the ladder's 1.2 mm extra ramp, (100^2 - 20^2) / (2 * 4000), hand-derived.
-    const growth = sweepLegMm(sweepSpec) - spec.runUpMm - 1.2
+    // less the ladder's 1.2 mm extra ramp, (100^2 - 20^2) / (2 * 4000), hand-derived, less
+    // the read-length shrink the sweep's declared band edge imposes on the clean read.
+    const readLenDeltaMm = spec.measuredLineMm - effectiveMeasuredLineMm(sweepSpec)
+    const growth = sweepLegMm(sweepSpec) - spec.runUpMm - 1.2 - readLenDeltaMm
     expect(gs.couponWidthMm).toBeCloseTo(g.couponWidthMm + growth, 9)
     expect(gs.couponHeightMm).toBeCloseTo(g.couponHeightMm + growth, 9)
+  })
+
+  it('caps the read length at RING_WAVELENGTHS_READ wavelengths of the declared band edge', () => {
+    // Never larger than the user's configured value.
+    expect(effectiveMeasuredLineMm(sweepSpec)).toBeLessThanOrEqual(sweepSpec.measuredLineMm)
+    expect(effectiveMeasuredLineMm(sweepSpec)).toBeCloseTo(
+      (RING_WAVELENGTHS_READ * Math.max(...sweepSpec.speedsMmS)) / sweepSpec.sweepFromHz,
+      9,
+    )
+    // A user-set shorter value still wins over the band-edge constraint.
+    const short: IsTestSpec = { ...sweepSpec, measuredLineMm: 15 }
+    expect(effectiveMeasuredLineMm(short)).toBeCloseTo(15, 9)
+    // Off-sweep behavior is unchanged.
+    expect(effectiveMeasuredLineMm(spec)).toBe(spec.measuredLineMm)
   })
 })

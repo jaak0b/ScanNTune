@@ -1,7 +1,7 @@
 import type { Mat, OpenCv } from '../opencv'
 import type { IsTestSpec } from './types'
 import type { IsLine, IsLineGroup } from './couponGeometry'
-import { tierRampMm } from './couponGeometry'
+import { effectiveMeasuredLineMm, tierRampMm } from './couponGeometry'
 import type { IsAlignment } from './isFiducialAligner'
 import { mmToPx } from './isFiducialAligner'
 import { median } from '../math'
@@ -160,7 +160,7 @@ export function tracedSpanPx(
   line: IsLine,
 ): { start: { x: number; y: number }; end: { x: number; y: number } } {
   const dir = measuredDirection(line)
-  const endMm = tierRampMm(spec, line.speedMmS, line.cornerSpeedMmS) + spec.measuredLineMm
+  const endMm = tierRampMm(spec, line.speedMmS, line.cornerSpeedMmS) + effectiveMeasuredLineMm(spec)
   const at = (sMm: number) =>
     mmToPx(alignment, line.measured.x0 + dir.dx * sMm, line.measured.y0 + dir.dy * sMm)
   return { start: at(TRACE_START_MM), end: at(endMm) }
@@ -193,7 +193,7 @@ function traceLine(
   if (!(affinePxPerMm > 0)) return null
 
   const rampMm = tierRampMm(spec, line.speedMmS, line.cornerSpeedMmS)
-  const traceEndMm = rampMm + spec.measuredLineMm
+  const traceEndMm = rampMm + effectiveMeasuredLineMm(spec)
   const corner = mmToPx(alignment, line.measured.x0, line.measured.y0)
 
   const stepAlongMm = ALONG_STEP_PX / affinePxPerMm

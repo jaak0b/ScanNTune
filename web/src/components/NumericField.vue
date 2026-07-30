@@ -12,6 +12,8 @@ const props = defineProps<{
   precision?: number
   placeholder?: string
   hint?: string
+  /** Shows a small muted info icon next to the field; the text opens in a tooltip on hover or click/tap. */
+  tooltip?: string
   disabled?: boolean
   /** Forwarded as `data-testid` onto the underlying `<input>`, for tests to target directly. */
   testid?: string
@@ -44,5 +46,22 @@ onMounted(() => {
     control-variant="stacked"
     density="comfortable"
     @update:model-value="$emit('update:modelValue', $event)"
-  />
+  >
+    <template v-if="tooltip" #prepend-inner>
+      <span class="tooltip-anchor">
+        <v-icon icon="mdi-information-outline" size="small" color="on-surface-variant" style="opacity: 0.6" />
+        <v-tooltip activator="parent" open-on-hover open-on-click location="top" max-width="280">
+          {{ tooltip }}
+        </v-tooltip>
+      </span>
+    </template>
+  </v-number-input>
 </template>
+
+<style scoped>
+.tooltip-anchor {
+  display: inline-flex;
+  align-items: center;
+  cursor: help;
+}
+</style>

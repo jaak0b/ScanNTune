@@ -130,8 +130,10 @@ export function defaultIsTestSpec(profile: PrinterProfile): IsTestSpec {
     // field extent enters the two-axis footprint once per group) and leave headroom over
     // the three-line analyzer floor when lines are damaged or unreadable.
     linesPerSpeed: 8,
-    // Five ringing wavelengths of the lowest resonance of interest at the tier speed:
-    // 5 * tierSpeed / 25 Hz, so 30 mm at the 150 mm/s default tier.
+    // RING_WAVELENGTHS_READ (couponGeometry.ts) wavelengths of the lowest resonance of
+    // interest at the tier speed: 5 * tierSpeed / 25 Hz, so 30 mm at the 150 mm/s default
+    // tier. With the sweep enabled, effectiveMeasuredLineMm evaluates this same
+    // constraint at the sweep's declared band edge instead of the fixed 25 Hz.
     measuredLineMm: 30,
     // Hosts the ramp to the 100 mm/s default corner speed (about 1.25 mm at 4000 mm/s^2)
     // with cruise to spare; the through-band leg stretch is extra.

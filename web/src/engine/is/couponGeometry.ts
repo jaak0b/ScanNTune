@@ -146,6 +146,32 @@ export function effectiveRunUpMm(spec: IsTestSpec): number {
 }
 
 /**
+ * Ringing wavelengths the clean read length must guarantee: enough oscillation cycles
+ * that the ring's fit (frequency and damping) is well constrained even at the weakest
+ * frequency of interest. The default measured line length (30 mm) is this same
+ * constraint at the non-sweep case's frequency of interest: 5 * 150 mm/s / 25 Hz.
+ */
+export const RING_WAVELENGTHS_READ = 5
+
+/**
+ * The clean read length actually laid out: with the sweep off, the spec's configured
+ * value unchanged. With the sweep on, the coupon declares it measures frequencies from
+ * `sweepFromHz` upward, so the read-length constraint (RING_WAVELENGTHS_READ wavelengths
+ * of the lowest frequency of interest at the fastest tier speed) is evaluated at that
+ * declared band edge instead of the fixed 25 Hz used for the non-sweep default; the
+ * result only ever shortens the coupon, never lengthens it past the user's configured
+ * value.
+ */
+export function effectiveMeasuredLineMm(spec: IsTestSpec): number {
+  if (!spec.sweep) return spec.measuredLineMm
+  const maxTierSpeedMmS = Math.max(...spec.speedsMmS)
+  return Math.min(
+    spec.measuredLineMm,
+    (RING_WAVELENGTHS_READ * maxTierSpeedMmS) / spec.sweepFromHz,
+  )
+}
+
+/**
  * A line's protected span, measured from its corner along the measured segment: the
  * acceleration ramp to the tier speed followed by the guaranteed clean read length. No
  * crossing, flow change, or speed change is allowed inside it.
@@ -155,7 +181,7 @@ export function protectedSpanMm(
   speedMmS: number,
   cornerSpeedMmS: number = spec.cornerSpeedMmS,
 ): number {
-  return tierRampMm(spec, speedMmS, cornerSpeedMmS) + spec.measuredLineMm
+  return tierRampMm(spec, speedMmS, cornerSpeedMmS) + effectiveMeasuredLineMm(spec)
 }
 
 /**
@@ -457,7 +483,7 @@ function buildXGroup(
   // (stagger + protected spans) and one inner margin keeping the crossings' flow ramps
   // clear of the read windows.
   const firstX = yGroup
-    ? bandMm + 2 * INNER_MARGIN_MM + maxPackedRampMm(spec) + spec.measuredLineMm
+    ? bandMm + 2 * INNER_MARGIN_MM + maxPackedRampMm(spec) + effectiveMeasuredLineMm(spec)
     : bandMm + INNER_MARGIN_MM
   const yMeasured = yGroup ? yGroup.lines.map((l) => l.measured.y0) : []
   const advance = effectiveRunUpMm(spec) - (spec.sweep ? SWEEP_STUB_MM : 0)
@@ -509,7 +535,7 @@ export function isCouponGeometry(
 ): IsCouponGeometry {
   const hasX = spec.axes.includes('x')
   const hasY = spec.axes.includes('y')
-  const packed = maxPackedRampMm(spec) + spec.measuredLineMm
+  const packed = maxPackedRampMm(spec) + effectiveMeasuredLineMm(spec)
   const F = fieldExtentMm(spec)
   const runUp = effectiveRunUpMm(spec)
   const crossTerm = INNER_MARGIN_MM + F + runUp

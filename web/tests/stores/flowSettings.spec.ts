@@ -90,4 +90,46 @@ describe('per-flow settings stores', () => {
     usePrinterProfiles().select(id)
     expect(useIsSettings().settings).toEqual(IS)
   })
+
+  it('has no stored input shaper settings for a fresh profile, so the page falls back to empty speeds', () => {
+    addProfile()
+    expect(useIsSettings().settings).toBeNull()
+  })
+
+  it('round-trips entered input shaper speeds through localStorage for the selected profile', () => {
+    const id = addProfile()
+    useIsSettings().save(IS)
+    setActivePinia(createPinia())
+    usePrinterProfiles().select(id)
+    const reloaded = useIsSettings().settings
+    expect(reloaded?.lineSpeedMmS).toBe(150)
+    expect(reloaded?.cornerSpeedMmS).toBe(20)
+  })
+
+  it('backfills an older stored entry that already carries numeric speeds', () => {
+    const id = addProfile()
+    localStorage.setItem('scanntune.settings.is', JSON.stringify({ [id]: IS }))
+    setActivePinia(createPinia())
+    usePrinterProfiles().select(id)
+    expect(useIsSettings().settings).toEqual(IS)
+  })
+
+  it('reset removes the stored entry, so the speeds are gone rather than reverting to a number', () => {
+    addProfile()
+    const settings = useIsSettings()
+    settings.save(IS)
+    expect(settings.hasStored).toBe(true)
+    settings.reset()
+    expect(settings.hasStored).toBe(false)
+    expect(settings.settings).toBeNull()
+  })
+
+  it('persists a saved entry whose speeds are still empty (null)', () => {
+    const id = addProfile()
+    const emptySpeeds: IsSettings = { ...IS, lineSpeedMmS: null, cornerSpeedMmS: null }
+    useIsSettings().save(emptySpeeds)
+    setActivePinia(createPinia())
+    usePrinterProfiles().select(id)
+    expect(useIsSettings().settings).toEqual(emptySpeeds)
+  })
 })

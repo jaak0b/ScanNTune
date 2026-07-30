@@ -9,6 +9,7 @@ import {
   PEDESTAL_LAYERS,
 } from '../../../src/engine/gcode/emitter'
 import {
+  effectiveMeasuredLineMm,
   isCouponGeometry,
   type IsLine,
   MIN_CORNER_SPEED_MM_S,
@@ -795,7 +796,14 @@ describe('resonant run-up sweep emission', () => {
     // occupies in the window, so the footprint matches as well.
     const shared = { ...spec, cornerSpeedMmS: MIN_CORNER_SPEED_MM_S }
     const withSweep = { ...shared, sweep: true }
-    const withLadder = { ...shared, sweep: false, runUpMm: sweepLegMm(withSweep) }
+    const withLadder = {
+      ...shared,
+      sweep: false,
+      runUpMm: sweepLegMm(withSweep),
+      // The sweep's declared band edge caps the clean read length; match it here too so
+      // the two variants lay out the identical coupon outside the run-up leg.
+      measuredLineMm: effectiveMeasuredLineMm(withSweep),
+    }
     const gl = isCouponGeometry(withLadder, profile.squareCornerVelocityMmS)
     const oxl = (profile.bedWidthMm - gl.couponWidthMm) / 2
     const oyl = (profile.bedDepthMm - gl.couponHeightMm) / 2
