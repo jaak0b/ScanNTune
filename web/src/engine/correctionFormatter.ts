@@ -302,14 +302,13 @@ export function axisSizeCorrection(
     }
 
     default: {
-      // Shrinkage: a single XY figure (slicers apply one value), from the X and Y axes only.
-      const xy = scales.filter((s) => s.axis === 'X' || s.axis === 'Y')
-      if (xy.length === 0)
+      // Shrinkage: one figure per measured axis (X, Y, and Z when a standing plate measured it).
+      if (scales.length === 0)
         return { code: 'no XY scale measured', hint: 'Scan the XY (or XZ and YZ) plate for shrinkage.' }
-      const avg = xy.reduce((sum, s) => sum + frac(s), 0) / xy.length
+      const parts = scales.map((s) => `${s.axis} ${f2((1.0 + frac(s)) * 100.0)} %`)
       return {
-        code: `XY shrinkage: ${f2((1.0 + avg) * 100.0)} %`,
-        hint: `OrcaSlicer / SuperSlicer: Filament -> Advanced -> Shrinkage compensation (XY).${zNote}`,
+        code: parts.join('   '),
+        hint: 'OrcaSlicer / SuperSlicer: Filament -> Advanced -> Shrinkage compensation.',
       }
     }
   }
