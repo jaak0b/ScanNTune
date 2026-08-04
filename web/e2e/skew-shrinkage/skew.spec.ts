@@ -198,7 +198,7 @@ const twoScanCases: TwoScanCase[] = [
     skewXY: { value: 0.489, tolerance: 0.03 },
     moreScans:
       'XY plate: Scan this plate 2 more times to get a confidence range, which shows how tightly the value is pinned down.',
-    sizeCode: 'XY shrinkage: 100.13 %',
+    sizeCode: 'XY 100.13 %',
     firmware: {
       Klipper: {
         reset: 'SET_SKEW CLEAR=1',
@@ -225,7 +225,7 @@ const twoScanCases: TwoScanCase[] = [
     skewXY: { value: 0.486, tolerance: 0.03 },
     moreScans:
       'XY plate: Scan this plate 2 more times to get a confidence range, which shows how tightly the value is pinned down.',
-    sizeCode: 'XY shrinkage: 100.23 %',
+    sizeCode: 'XY 100.23 %',
     firmware: {
       Klipper: {
         reset: 'SET_SKEW CLEAR=1',
@@ -311,7 +311,7 @@ const fourScanCases: FourScanCase[] = [
     rangeScaleX: 'Likely between +0.128 % and +0.162 % (95% from 4 scans).',
     rangeScaleY: 'Likely between +0.095 % and +0.129 % (95% from 4 scans).',
     rangeSkew: 'Likely between +0.467° and +0.517° (95% from 4 scans).',
-    sizeCode: 'XY shrinkage: 100.13 %',
+    sizeCode: 'XY 100.13 %',
   },
   {
     name: '150 dpi, 4 scans',

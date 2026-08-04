@@ -374,18 +374,34 @@ const skewRanges = computed(() => {
   }
   return byPlane
 })
-// A plate scanned fewer than MIN_SCANS_FOR_RANGE times has no range yet; say how many scans away it is.
-const moreScansHints = computed(() =>
-  planes.value
-    .filter((p) => p.scanSet.uncertainty === null && p.scanSet.rotationLooksValid)
-    .map((p) => {
-      const missing = Math.max(1, MIN_SCANS_FOR_RANGE - p.scanSet.scans.length)
-      return {
-        plane: p.plane,
-        text: `Scan this plate ${missing} more ${missing === 1 ? 'time' : 'times'} to get a confidence range, which shows how tightly the value is pinned down.`,
-      }
-    }),
-)
+// Joins plate names for a sentence: "XY", "XY and XZ", or "XY, XZ, and YZ".
+function joinPlaneNames(names: readonly string[]): string {
+  if (names.length <= 1) return names.join('')
+  if (names.length === 2) return `${names[0]} and ${names[1]}`
+  return `${names.slice(0, -1).join(', ')}, and ${names[names.length - 1]}`
+}
+
+// A plate scanned fewer than MIN_SCANS_FOR_RANGE times has no range yet; say how many scans away it
+// is. Plates needing the same number of scans share one sentence instead of repeating it per plate.
+const moreScansHints = computed(() => {
+  const byMissing = new Map<number, string[]>()
+  for (const p of planes.value) {
+    if (p.scanSet.uncertainty !== null || !p.scanSet.rotationLooksValid) continue
+    const missing = Math.max(1, MIN_SCANS_FOR_RANGE - p.scanSet.scans.length)
+    const group = byMissing.get(missing)
+    if (group) group.push(p.plane)
+    else byMissing.set(missing, [p.plane])
+  }
+  return Array.from(byMissing.entries()).map(([missing, planeNames]) => {
+    const plateWord = planeNames.length === 1 ? 'plate' : 'plates'
+    const pronoun = planeNames.length === 1 ? 'this plate' : 'each of these plates'
+    return {
+      key: planeNames.join('-'),
+      planeNames,
+      text: `${joinPlaneNames(planeNames)} ${plateWord}: Scan ${pronoun} ${missing} more ${missing === 1 ? 'time' : 'times'} to get a confidence range, which shows how tightly the value is pinned down.`,
+    }
+  })
+})
 
 // Planes whose every figure is zero within one standard error: nothing on that plane needs correcting.
 const wellCalibratedPlanes = computed(() =>
@@ -983,11 +999,11 @@ function getCoupon(file: string): void {
       <div v-if="moreScansHints.length || wellCalibratedPlanes.length" class="mb-4">
         <p
           v-for="h in moreScansHints"
-          :key="h.plane"
+          :key="h.key"
           class="tip mt-0"
-          :data-testid="`more-scans-${h.plane}`"
+          :data-testid="`more-scans-${h.key}`"
         >
-          {{ h.plane }} plate: {{ h.text }}
+          {{ h.text }}
         </p>
         <p
           v-for="plane in wellCalibratedPlanes"

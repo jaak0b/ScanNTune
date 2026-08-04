@@ -110,19 +110,19 @@ describe('per-axis size formatter', () => {
     expect(c.hint).toContain('Z is layer-height driven')
   })
 
-  it('Shrinkage gives a per-axis line including Z, with no extra note', () => {
+  it('Shrinkage gives one combined XY line plus a separate Z line, with no extra note', () => {
     const c = axisSizeCorrection(SHRINKAGE, scales, {})
-    expect(c.code).toContain('X 99.00 %')
-    expect(c.code).toContain('Y 98.00 %')
+    expect(c.code).toContain('XY 98.50 %')
     expect(c.code).toContain('Z 100.50 %')
+    expect(c.code).not.toContain('X 99.00 %')
+    expect(c.code).not.toContain('Y 98.00 %')
     expect(c.hint).not.toContain('layer-height')
   })
 
   it('Shrinkage omits Z entirely when no Z scale was measured', () => {
     const xyOnly = scales.filter((s) => s.axis !== 'Z')
     const c = axisSizeCorrection(SHRINKAGE, xyOnly, {})
-    expect(c.code).toContain('X 99.00 %')
-    expect(c.code).toContain('Y 98.00 %')
+    expect(c.code).toContain('XY 98.50 %')
     expect(c.code).not.toContain('Z ')
   })
 })
