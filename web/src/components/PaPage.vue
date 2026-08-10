@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, ref, shallowRef } from 'vue'
 import { usePrinterProfiles } from '../stores/usePrinterProfiles'
 import { usePaSettings } from '../stores/usePaSettings'
+import { BETA_NOTICE_LEAD, BETA_NOTICE_BODY } from './betaNotice'
 import { useFlowSettingsForm } from '../composables/useFlowSettingsForm'
 import { runGuardedAnalysis } from '../composables/useScanAnalysis'
 import { readBytes } from '../util/preview'
@@ -324,6 +325,9 @@ const stCorrection = computed(() => {
 
 <template>
   <v-container class="page">
+    <v-alert type="warning" variant="tonal" density="compact" class="mb-4 soft-alert" data-testid="pa-beta-warning">
+      <strong>{{ BETA_NOTICE_LEAD }}</strong> {{ BETA_NOTICE_BODY }}
+    </v-alert>
     <header class="mb-4">
       <h1 class="text-h5 font-weight-bold">Pressure advance calibration</h1>
       <p class="text-body-2 text-medium-emphasis mt-1">

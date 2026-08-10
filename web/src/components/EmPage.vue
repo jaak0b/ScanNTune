@@ -2,6 +2,7 @@
 import { computed, ref, shallowRef } from 'vue'
 import { useApp } from '../stores/useApp'
 import { usePrinterProfiles } from '../stores/usePrinterProfiles'
+import { BETA_NOTICE_LEAD, BETA_NOTICE_BODY } from './betaNotice'
 import { useEmSettings } from '../stores/useEmSettings'
 import { useCalibrationGate } from '../composables/useCalibrationGate'
 import { useFlowSettingsForm } from '../composables/useFlowSettingsForm'
@@ -364,6 +365,9 @@ const scanCards = computed<ScanCard[]>(() => {
 
 <template>
   <v-container class="page">
+    <v-alert type="warning" variant="tonal" density="compact" class="mb-4 soft-alert" data-testid="em-beta-warning">
+      <strong>{{ BETA_NOTICE_LEAD }}</strong> {{ BETA_NOTICE_BODY }}
+    </v-alert>
     <header class="mb-4">
       <h1 class="text-h5 font-weight-bold">Flow calibration</h1>
       <p class="text-body-2 text-medium-emphasis mt-1">

@@ -38,12 +38,15 @@ const version = __APP_VERSION__
           @click="app.goPa()"
         >
           Pressure advance
+          <v-chip size="x-small" variant="tonal" color="warning" class="beta-chip">BETA</v-chip>
         </v-btn>
         <v-btn variant="text" size="small" :active="app.screen === 'em'" data-testid="nav-em" @click="app.goEm()">
           Flow
+          <v-chip size="x-small" variant="tonal" color="warning" class="beta-chip">BETA</v-chip>
         </v-btn>
         <v-btn variant="text" size="small" :active="app.screen === 'is'" data-testid="nav-is" @click="app.goIs()">
           Input shaper
+          <v-chip size="x-small" variant="tonal" color="warning" class="beta-chip">BETA</v-chip>
         </v-btn>
       </nav>
       <v-spacer />
@@ -101,6 +104,15 @@ const version = __APP_VERSION__
 }
 .topnav .v-btn {
   flex-shrink: 0;
+}
+.beta-chip {
+  margin-left: 6px;
+  padding: 0 6px;
+  height: 18px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  pointer-events: none;
 }
 @media (max-width: 700px) {
   .brand-version {
