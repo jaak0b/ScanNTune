@@ -183,7 +183,7 @@ interface TwoScanCase {
   scaleY: Band
   skewXY: Band
   moreScans: string
-  sizeCode: string
+  shrinkageCode: string
   firmware: Record<Firmware, FirmwareCommand>
 }
 
@@ -198,7 +198,7 @@ const twoScanCases: TwoScanCase[] = [
     skewXY: { value: 0.489, tolerance: 0.03 },
     moreScans:
       'XY plate: Scan this plate 2 more times to get a confidence range, which shows how tightly the value is pinned down.',
-    sizeCode: 'XY 100.13 %',
+    shrinkageCode: 'XY 100.13 %',
     firmware: {
       Klipper: {
         reset: 'SET_SKEW CLEAR=1',
@@ -225,7 +225,7 @@ const twoScanCases: TwoScanCase[] = [
     skewXY: { value: 0.486, tolerance: 0.03 },
     moreScans:
       'XY plate: Scan this plate 2 more times to get a confidence range, which shows how tightly the value is pinned down.',
-    sizeCode: 'XY 100.23 %',
+    shrinkageCode: 'XY 100.23 %',
     firmware: {
       Klipper: {
         reset: 'SET_SKEW CLEAR=1',
@@ -264,9 +264,9 @@ for (const c of twoScanCases) {
       await expectExactText(page.getByTestId('skew-code'), c.firmware[fw].skewCode)
     }
 
-    // Step 13: Fix size tab, Format left at default (Shrinkage %), asserted once.
-    await page.getByTestId('fix-tab-size').click()
-    await expect(page.getByTestId('size-code')).toHaveText(c.sizeCode)
+    // Step 13: Fix shrinkage tab, Format left at default (Shrinkage %), asserted once.
+    await page.getByTestId('fix-tab-shrinkage').click()
+    await expect(page.getByTestId('shrinkage-code')).toHaveText(c.shrinkageCode)
   })
 }
 
@@ -290,8 +290,8 @@ interface FourScanCase {
   rangeScaleX: string
   rangeScaleY: string
   rangeSkew: string
-  /** null where skew.flow.md's table for this case has no size-code row (150 dpi, 4 scans). */
-  sizeCode: string | null
+  /** null where skew.flow.md's table for this case has no shrinkage-code row (150 dpi, 4 scans). */
+  shrinkageCode: string | null
 }
 
 const fourScanCases: FourScanCase[] = [
@@ -311,7 +311,7 @@ const fourScanCases: FourScanCase[] = [
     rangeScaleX: 'Likely between +0.128 % and +0.162 % (95% from 4 scans).',
     rangeScaleY: 'Likely between +0.095 % and +0.129 % (95% from 4 scans).',
     rangeSkew: 'Likely between +0.467° and +0.517° (95% from 4 scans).',
-    sizeCode: 'XY 100.13 %',
+    shrinkageCode: 'XY 100.13 %',
   },
   {
     name: '150 dpi, 4 scans',
@@ -329,7 +329,7 @@ const fourScanCases: FourScanCase[] = [
     rangeScaleX: 'Likely between +0.226 % and +0.257 % (95% from 4 scans).',
     rangeScaleY: 'Likely between +0.192 % and +0.223 % (95% from 4 scans).',
     rangeSkew: 'Likely between +0.468° and +0.517° (95% from 4 scans).',
-    sizeCode: null,
+    shrinkageCode: null,
   },
 ]
 
@@ -346,9 +346,9 @@ for (const c of fourScanCases) {
     await expect(page.getByTestId('range-scaleY-XY')).toHaveText(c.rangeScaleY)
     await expect(page.getByTestId('range-skew-XY')).toHaveText(c.rangeSkew)
 
-    if (c.sizeCode) {
-      await page.getByTestId('fix-tab-size').click()
-      await expect(page.getByTestId('size-code')).toHaveText(c.sizeCode)
+    if (c.shrinkageCode) {
+      await page.getByTestId('fix-tab-shrinkage').click()
+      await expect(page.getByTestId('shrinkage-code')).toHaveText(c.shrinkageCode)
     }
   })
 }

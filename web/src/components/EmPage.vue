@@ -744,7 +744,7 @@ const scanCards = computed<ScanCard[]>(() => {
             prepend-icon="mdi-alert-outline"
             data-testid="em-pitch-warning"
           >
-            printer scale is off; run the skew and size calibration
+            printer scale is off; run the skew and shrinkage calibration
           </v-chip>
         </div>
         <v-alert

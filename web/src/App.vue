@@ -28,7 +28,7 @@ const version = __APP_VERSION__
           data-testid="nav-skew"
           @click="app.goSkew()"
         >
-          Skew / size
+          Skew / shrinkage
         </v-btn>
         <v-btn
           variant="text"

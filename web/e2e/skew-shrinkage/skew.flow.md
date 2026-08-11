@@ -99,11 +99,11 @@ degrees for skew) are stated once in "Assertions per case" and apply to both row
     result. For each firmware, read the step 2 reset command and the "Fix skew" tab's `skew-code`
     (`data-testid="skew-code"`) and compare against "Firmware commands" below. The step 2 reset
     command has no testid today; add one (for example `reset-skew-code`) before writing the test.
-13. Click the "Fix size" tab (no testid today on the tab buttons themselves; they are
-    `button.fix-tab` elements with the visible text `Fix skew` / `Fix size` — add testids, for
-    example `fix-tab-skew` / `fix-tab-size`, before writing the test) and read `size-code`
-    (`data-testid="size-code"`) once, with the Format selector left at its default, `Shrinkage %`.
-    `size-code` does not depend on which firmware was selected in step 12; see `PROVENANCE.md`'s
+13. Click the "Fix shrinkage" tab (no testid today on the tab buttons themselves; they are
+    `button.fix-tab` elements with the visible text `Fix skew` / `Fix shrinkage` — add testids, for
+    example `fix-tab-skew` / `fix-tab-shrinkage`, before writing the test) and read `shrinkage-code`
+    (`data-testid="shrinkage-code"`) once, with the Format selector left at its default, `Shrinkage %`.
+    `shrinkage-code` does not depend on which firmware was selected in step 12; see `PROVENANCE.md`'s
     "Firmware vs. Format are independent controls" for the empirical confirmation. Assert it once
     per case, not once per firmware.
 
@@ -132,7 +132,7 @@ Klipper's includes a caption line and Marlin/RRF's do not):
 | Marlin | `M852 I0 J0 K0\nM500` | `M852 I-0.008528\nM500` |
 | RepRapFirmware | `M556 S100 X0 Y0 Z0` | `M556 S100 X0.853` |
 
-`size-code`: exact text `XY shrinkage: 100.13 %`.
+`shrinkage-code`: exact text `XY shrinkage: 100.13 %`.
 
 ### Case: 150 dpi
 
@@ -152,7 +152,7 @@ Firmware commands:
 | Marlin | `M852 I0 J0 K0\nM500` | `M852 I-0.008475\nM500` |
 | RepRapFirmware | `M556 S100 X0 Y0 Z0` | `M556 S100 X0.848` |
 
-`size-code`: exact text `XY shrinkage: 100.23 %`.
+`shrinkage-code`: exact text `XY shrinkage: 100.23 %`.
 
 ## Optional case: four scans, one plate, confidence range (300 dpi and 150 dpi)
 
@@ -177,7 +177,7 @@ Additional assertions for this case (four fixtures uploaded together):
 | `range-scaleX-XY` | exact text `Likely between +0.128 % and +0.162 % (95% from 4 scans).` |
 | `range-scaleY-XY` | exact text `Likely between +0.095 % and +0.129 % (95% from 4 scans).` |
 | `range-skew-XY` | exact text `Likely between +0.467° and +0.517° (95% from 4 scans).` |
-| `size-code` | exact text `XY shrinkage: 100.13 %` |
+| `shrinkage-code` | exact text `XY shrinkage: 100.13 %` |
 
 ### 150 dpi, 4 scans
 

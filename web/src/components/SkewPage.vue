@@ -436,7 +436,7 @@ const skewZeroNote = computed(() =>
     skews.value.length,
   ),
 )
-const sizeZeroNote = computed(() =>
+const shrinkageZeroNote = computed(() =>
   zeroRangeNote(
     [...scaleRanges.value].filter(([, e]) => isZeroWithinOneSE(e.range)).map(([axis]) => `${axis} scale`),
     scales.value.length,
@@ -452,17 +452,17 @@ watch(
   },
 )
 
-const sizeFlavour = ref<string>(sizeFlavours[0])
+const shrinkageFlavour = ref<string>(sizeFlavours[0])
 const currents = reactive<Record<'X' | 'Y' | 'Z', number | null>>({ X: null, Y: null, Z: null })
-const activeFixTab = ref<'skew' | 'size'>('skew')
+const activeFixTab = ref<'skew' | 'shrinkage'>('skew')
 const resultsSection = ref<HTMLElement | null>(null)
 
-const currentLabel = computed(() => currentValueLabel(sizeFlavour.value))
+const currentLabel = computed(() => currentValueLabel(shrinkageFlavour.value))
 const showCurrent = computed(() => currentLabel.value !== null)
 const currentAxes = computed(() => scales.value.map((s) => s.axis))
 
 // A steps/mm value is meaningless as a rotation distance, so clear entered currents on format change.
-watch(sizeFlavour, () => {
+watch(shrinkageFlavour, () => {
   currents.X = currents.Y = currents.Z = null
 })
 
@@ -471,8 +471,8 @@ const skewFix = computed(() =>
     ? skewCorrectionMulti(firmware.value, skews.value, app.payload.coupon)
     : null,
 )
-const sizeFix = computed(() =>
-  result.value ? axisSizeCorrection(sizeFlavour.value, scales.value, currents) : null,
+const shrinkageFix = computed(() =>
+  result.value ? axisSizeCorrection(shrinkageFlavour.value, scales.value, currents) : null,
 )
 
 function startOver(): void {
@@ -1032,11 +1032,11 @@ function getCoupon(file: string): void {
         <button
           type="button"
           class="fix-tab"
-          data-testid="fix-tab-size"
-          :class="{ active: activeFixTab === 'size' }"
-          @click="activeFixTab = 'size'"
+          data-testid="fix-tab-shrinkage"
+          :class="{ active: activeFixTab === 'shrinkage' }"
+          @click="activeFixTab = 'shrinkage'"
         >
-          Fix size
+          Fix shrinkage
         </button>
       </div>
 
@@ -1061,7 +1061,7 @@ function getCoupon(file: string): void {
 
       <div v-else class="fix-panel">
         <v-select
-          v-model="sizeFlavour"
+          v-model="shrinkageFlavour"
           :items="sizeFlavours"
           label="Format"
           density="comfortable"
@@ -1079,11 +1079,11 @@ function getCoupon(file: string): void {
             :precision="3"
           />
         </div>
-        <p v-if="sizeZeroNote" class="tip mt-0 mb-2" data-testid="zero-note-sizefix">
-          {{ sizeZeroNote }}
+        <p v-if="shrinkageZeroNote" class="tip mt-0 mb-2" data-testid="zero-note-shrinkagefix">
+          {{ shrinkageZeroNote }}
         </p>
-        <CodeBlock v-if="sizeFix" :code="sizeFix.code" data-testid="size-code" />
-        <p v-if="sizeFix?.hint" class="tip mt-0">{{ sizeFix.hint }}</p>
+        <CodeBlock v-if="shrinkageFix" :code="shrinkageFix.code" data-testid="shrinkage-code" />
+        <p v-if="shrinkageFix?.hint" class="tip mt-0">{{ shrinkageFix.hint }}</p>
       </div>
 
       <p class="tip mt-3" data-testid="verify-fix-tip">
