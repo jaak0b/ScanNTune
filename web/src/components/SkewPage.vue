@@ -35,6 +35,7 @@ import {
   skewCorrectionMulti,
   axisSizeCorrection,
   currentValueLabel,
+  SHRINKAGE,
 } from '../engine/correctionFormatter'
 import { signedPercent, signedDegrees } from '../util/format'
 import NumericField from './NumericField.vue'
@@ -453,17 +454,27 @@ watch(
 )
 
 const shrinkageFlavour = ref<string>(sizeFlavours[0])
-const currents = reactive<Record<'X' | 'Y' | 'Z', number | null>>({ X: null, Y: null, Z: null })
+const currents = reactive<Record<'X' | 'Y' | 'Z' | 'XY', number | null>>({
+  X: null,
+  Y: null,
+  Z: null,
+  XY: null,
+})
 const activeFixTab = ref<'skew' | 'shrinkage'>('skew')
 const resultsSection = ref<HTMLElement | null>(null)
 
 const currentLabel = computed(() => currentValueLabel(shrinkageFlavour.value))
 const showCurrent = computed(() => currentLabel.value !== null)
 const currentAxes = computed(() => scales.value.map((s) => s.axis))
+const showShrinkageCurrents = computed(
+  () => shrinkageFlavour.value === SHRINKAGE && scales.value.length > 0,
+)
+const hasZScale = computed(() => scales.value.some((s) => s.axis === 'Z'))
 
-// A steps/mm value is meaningless as a rotation distance, so clear entered currents on format change.
+// A steps/mm value is meaningless as a rotation distance, and a shrinkage compensation is
+// meaningless as either, so clear every entered current (including XY) on format change.
 watch(shrinkageFlavour, () => {
-  currents.X = currents.Y = currents.Z = null
+  currents.X = currents.Y = currents.Z = currents.XY = null
 })
 
 const skewFix = computed(() =>
@@ -1019,71 +1030,80 @@ function getCoupon(file: string): void {
         </p>
       </div>
 
-      <div class="fix-tabs">
-        <button
-          type="button"
-          class="fix-tab"
-          data-testid="fix-tab-skew"
-          :class="{ active: activeFixTab === 'skew' }"
-          @click="activeFixTab = 'skew'"
-        >
-          Fix skew
-        </button>
-        <button
-          type="button"
-          class="fix-tab"
-          data-testid="fix-tab-shrinkage"
-          :class="{ active: activeFixTab === 'shrinkage' }"
-          @click="activeFixTab = 'shrinkage'"
-        >
-          Fix shrinkage
-        </button>
-      </div>
+      <div class="fix-block">
+        <v-tabs v-model="activeFixTab" color="primary" density="comfortable" class="fix-tabs">
+          <v-tab value="skew" data-testid="fix-tab-skew">Fix skew</v-tab>
+          <v-tab value="shrinkage" data-testid="fix-tab-shrinkage">Fix shrinkage</v-tab>
+        </v-tabs>
 
-      <div v-if="activeFixTab === 'skew'" class="fix-panel">
-        <p v-if="skewZeroNote" class="tip mt-0 mb-2" data-testid="zero-note-skewfix">
-          {{ skewZeroNote }}
-        </p>
-        <CodeBlock
-          v-if="skewFix"
-          :code="skewFix.code"
-          :caption="skewFix.primaryCaption"
-          data-testid="skew-code"
-        />
-        <CodeBlock
-          v-if="skewFix?.secondaryCode"
-          :code="skewFix.secondaryCode"
-          :caption="skewFix.secondaryCaption"
-          data-testid="skew-code-secondary"
-        />
-        <p v-if="skewFix?.hint" class="tip mt-0">{{ skewFix.hint }}</p>
-      </div>
-
-      <div v-else class="fix-panel">
-        <v-select
-          v-model="shrinkageFlavour"
-          :items="sizeFlavours"
-          label="Format"
-          density="comfortable"
-          hide-details
-          class="fix-select mb-3"
-        />
-        <div v-if="showCurrent" class="fields mb-3">
-          <NumericField
-            v-for="axis in currentAxes"
-            :key="axis"
-            v-model="currents[axis]"
-            :label="`${axis} ${currentLabel}`"
-            :step="0.1"
-            :min="0"
-            :precision="3"
+        <div v-if="activeFixTab === 'skew'" class="fix-panel">
+          <p v-if="skewZeroNote" class="tip mt-0 mb-2" data-testid="zero-note-skewfix">
+            {{ skewZeroNote }}
+          </p>
+          <CodeBlock
+            v-if="skewFix"
+            :code="skewFix.code"
+            :caption="skewFix.primaryCaption"
+            data-testid="skew-code"
           />
+          <CodeBlock
+            v-if="skewFix?.secondaryCode"
+            :code="skewFix.secondaryCode"
+            :caption="skewFix.secondaryCaption"
+            data-testid="skew-code-secondary"
+          />
+          <p v-if="skewFix?.hint" class="tip mt-0">{{ skewFix.hint }}</p>
         </div>
-        <p v-if="shrinkageZeroNote" class="tip mt-0 mb-2" data-testid="zero-note-shrinkagefix">
-          {{ shrinkageZeroNote }}
-        </p>
-        <CodeBlock v-if="shrinkageFix" :code="shrinkageFix.code" data-testid="shrinkage-code" />
-        <p v-if="shrinkageFix?.hint" class="tip mt-0">{{ shrinkageFix.hint }}</p>
+
+        <div v-else class="fix-panel">
+          <v-select
+            v-model="shrinkageFlavour"
+            :items="sizeFlavours"
+            label="Format"
+            density="comfortable"
+            hide-details
+            class="fix-select mb-3"
+          />
+          <div v-if="showShrinkageCurrents" class="fields mb-3">
+            <NumericField
+              v-model="currents.XY"
+              label="Current shrinkage compensation, XY (%)"
+              :step="0.1"
+              :min="0"
+              :precision="2"
+              testid="shrinkage-current-xy"
+            />
+            <NumericField
+              v-if="hasZScale"
+              v-model="currents.Z"
+              label="Current shrinkage compensation, Z (%)"
+              :step="0.1"
+              :min="0"
+              :precision="2"
+              testid="shrinkage-current-z"
+            />
+          </div>
+          <p v-if="showShrinkageCurrents" class="tip mt-0 mb-3">
+            Enter the shrinkage compensation that was active in the slicer when this plate printed.
+            Leaving these empty assumes no compensation was applied, which is the same as 100 %.
+          </p>
+          <div v-if="showCurrent" class="fields mb-3">
+            <NumericField
+              v-for="axis in currentAxes"
+              :key="axis"
+              v-model="currents[axis]"
+              :label="`${axis} ${currentLabel}`"
+              :step="0.1"
+              :min="0"
+              :precision="3"
+            />
+          </div>
+          <p v-if="shrinkageZeroNote" class="tip mt-0 mb-2" data-testid="zero-note-shrinkagefix">
+            {{ shrinkageZeroNote }}
+          </p>
+          <CodeBlock v-if="shrinkageFix" :code="shrinkageFix.code" data-testid="shrinkage-code" />
+          <p v-if="shrinkageFix?.hint" class="tip mt-0">{{ shrinkageFix.hint }}</p>
+        </div>
       </div>
 
       <p class="tip mt-3" data-testid="verify-fix-tip">
@@ -1415,25 +1435,30 @@ function getCoupon(file: string): void {
   grid-template-columns: repeat(auto-fit, minmax(90px, 1fr));
   gap: 8px;
 }
-.fix-tabs {
-  display: flex;
-  gap: 14px;
-  border-bottom: 1px solid rgba(var(--v-theme-on-surface), 0.09);
+.fix-block {
+  border: 1px solid rgba(var(--v-theme-on-surface), 0.14);
+  border-radius: 10px;
+  overflow: hidden;
   margin-bottom: 14px;
+  background: rgba(var(--v-theme-on-surface), 0.02);
 }
-.fix-tab {
-  background: transparent;
-  border: none;
-  border-bottom: 2px solid transparent;
-  color: rgba(var(--v-theme-on-surface), 0.6);
-  font-size: 13.5px;
-  font-weight: 500;
-  padding: 8px 2px;
-  cursor: pointer;
+.fix-tabs {
+  border-bottom: 1px solid rgba(var(--v-theme-on-surface), 0.14);
+  background: rgba(var(--v-theme-on-surface), 0.03);
 }
-.fix-tab.active {
-  color: rgb(var(--v-theme-on-surface));
-  border-bottom-color: rgb(var(--v-theme-primary));
+.fix-tabs :deep(.v-tab) {
+  flex: 1 1 0;
+  font-weight: 600;
+  text-transform: none;
+  letter-spacing: normal;
+  opacity: 1;
+  color: rgba(var(--v-theme-on-surface), 0.87);
+}
+.fix-tabs :deep(.v-tab.v-tab--selected) {
+  color: rgb(var(--v-theme-primary));
+}
+.fix-panel {
+  padding: 16px;
 }
 .fix-select {
   max-width: 220px;

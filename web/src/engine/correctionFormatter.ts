@@ -256,7 +256,7 @@ export function sizeCorrection(
 export function axisSizeCorrection(
   flavour: string,
   scales: readonly AxisScale[],
-  currents: Partial<Record<'X' | 'Y' | 'Z', number | null>>,
+  currents: Partial<Record<'X' | 'Y' | 'Z' | 'XY', number | null>>,
 ): Correction {
   const bad = scales.some((s) => !Number.isFinite(s.scalePercent) || Math.abs(s.scalePercent) >= 10.0)
   if (bad)
@@ -303,18 +303,24 @@ export function axisSizeCorrection(
 
     default: {
       // Shrinkage: a single XY figure (slicers apply one value), from the X and Y axes only,
-      // plus a separate Z figure when a standing plate measured it.
+      // plus a separate Z figure when a standing plate measured it. The current value active in
+      // the slicer when the coupon printed is already baked into the printed geometry, so the
+      // correction compounds onto it (K' = K_cur * (1 + frac)) rather than starting from 100.
       const xy = scales.filter((s) => s.axis === 'X' || s.axis === 'Y')
       if (xy.length === 0)
         return { code: 'no XY scale measured', hint: 'Scan the XY (or XZ and YZ) plate for shrinkage.' }
       const avg = xy.reduce((sum, s) => sum + frac(s), 0) / xy.length
-      const parts = [`XY ${f2((1.0 + avg) * 100.0)} %`]
+      const k = (v: number | null | undefined): number => (Number.isFinite(v) && v! > 0 ? v! : 100)
+      const kXY = k(currents.XY)
+      const kZ = k(currents.Z)
+      const parts = [`XY ${f2(kXY * (1.0 + avg))} %`]
       const z = scales.find((s) => s.axis === 'Z')
-      if (z) parts.push(`Z ${f2((1.0 + frac(z)) * 100.0)} %`)
-      return {
-        code: parts.join('   '),
-        hint: 'OrcaSlicer / SuperSlicer: Filament -> Advanced -> Shrinkage compensation.',
-      }
+      if (z) parts.push(`Z ${f2(kZ * (1.0 + frac(z)))} %`)
+      const compounded = kXY !== 100 || (z != null && kZ !== 100)
+      const hint = compounded
+        ? 'OrcaSlicer / SuperSlicer: Filament -> Advanced -> Shrinkage compensation. The value shown already includes the compensation that was active when the plate printed, so replace the old figure rather than adding to it.'
+        : 'OrcaSlicer / SuperSlicer: Filament -> Advanced -> Shrinkage compensation.'
+      return { code: parts.join('   '), hint }
     }
   }
 }

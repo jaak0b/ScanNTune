@@ -8,6 +8,8 @@ import {
   REPRAP,
   SCALE,
   SHRINKAGE,
+  STEPS_PER_MM,
+  ROTATION_DISTANCE,
 } from '../../src/engine/correctionFormatter'
 import { defaultCouponSpec } from '../../src/engine/types'
 import { alignedResult } from '../helpers/results'
@@ -124,5 +126,45 @@ describe('per-axis size formatter', () => {
     const c = axisSizeCorrection(SHRINKAGE, xyOnly, {})
     expect(c.code).toContain('XY 98.50 %')
     expect(c.code).not.toContain('Z ')
+  })
+
+  it('Shrinkage treats a current compensation of 100 the same as the default uncompensated case', () => {
+    const c = axisSizeCorrection(SHRINKAGE, scales, { XY: 100, Z: 100 })
+    expect(c.code).toContain('XY 98.50 %')
+    expect(c.code).toContain('Z 100.50 %')
+    expect(c.hint).not.toContain('already includes')
+  })
+
+  it('Shrinkage compounds a non-default current compensation onto the measured deviation', () => {
+    const c = axisSizeCorrection(SHRINKAGE, scales, { XY: 98, Z: 101 })
+    expect(c.code).toContain('XY 96.53 %')
+    expect(c.code).toContain('Z 101.50 %')
+    expect(c.hint).toContain('already includes the compensation that was active when the plate printed')
+  })
+
+  it('Shrinkage compounds XY only when no Z scale was measured', () => {
+    const xyOnly = scales.filter((s) => s.axis !== 'Z')
+    const c = axisSizeCorrection(SHRINKAGE, xyOnly, { XY: 98 })
+    expect(c.code).toContain('XY 96.53 %')
+    expect(c.code).not.toContain('Z ')
+  })
+
+  it('Shrinkage falls back to 100 for an invalid current compensation (zero)', () => {
+    const c = axisSizeCorrection(SHRINKAGE, scales, { XY: 0 })
+    expect(c.code).toContain('XY 98.50 %')
+  })
+
+  it('Shrinkage falls back to 100 for an invalid current compensation (NaN)', () => {
+    const c = axisSizeCorrection(SHRINKAGE, scales, { XY: NaN })
+    expect(c.code).toContain('XY 98.50 %')
+  })
+
+  it('An XY current has no effect on flavours other than Shrinkage', () => {
+    const withXY = { XY: 98 }
+    expect(axisSizeCorrection(STEPS_PER_MM, scales, withXY)).toEqual(axisSizeCorrection(STEPS_PER_MM, scales, {}))
+    expect(axisSizeCorrection(ROTATION_DISTANCE, scales, withXY)).toEqual(
+      axisSizeCorrection(ROTATION_DISTANCE, scales, {}),
+    )
+    expect(axisSizeCorrection(SCALE, scales, withXY)).toEqual(axisSizeCorrection(SCALE, scales, {}))
   })
 })
