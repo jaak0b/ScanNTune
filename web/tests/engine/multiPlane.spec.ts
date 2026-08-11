@@ -149,13 +149,26 @@ describe('per-axis size formatter', () => {
     expect(c.code).not.toContain('Z ')
   })
 
-  it('Shrinkage falls back to 100 for an invalid current compensation (zero)', () => {
-    const c = axisSizeCorrection(SHRINKAGE, scales, { XY: 0 })
-    expect(c.code).toContain('XY 98.50 %')
+  it('Shrinkage accepts the boundary values of the plausibility band (80 and 125)', () => {
+    const low = axisSizeCorrection(SHRINKAGE, scales, { XY: 80, Z: 80 })
+    expect(low.code).toContain('XY')
+    expect(low.code).not.toContain('check the entered compensation')
+    const high = axisSizeCorrection(SHRINKAGE, scales, { XY: 125, Z: 125 })
+    expect(high.code).toContain('XY')
+    expect(high.code).not.toContain('check the entered compensation')
   })
 
-  it('Shrinkage falls back to 100 for an invalid current compensation (NaN)', () => {
-    const c = axisSizeCorrection(SHRINKAGE, scales, { XY: NaN })
+  it.each([0, 79.9, 125.1, 0.98, 9800, NaN])(
+    'Shrinkage refuses a present current compensation outside the plausibility band (%s)',
+    (v) => {
+      const c = axisSizeCorrection(SHRINKAGE, scales, { XY: v })
+      expect(c.code).toBe('check the entered compensation')
+      expect(c.hint).toContain('percent')
+    },
+  )
+
+  it('Shrinkage treats an empty/null current compensation as 100', () => {
+    const c = axisSizeCorrection(SHRINKAGE, scales, { XY: null })
     expect(c.code).toContain('XY 98.50 %')
   })
 

@@ -132,7 +132,7 @@ Klipper's includes a caption line and Marlin/RRF's do not):
 | Marlin | `M852 I0 J0 K0\nM500` | `M852 I-0.008528\nM500` |
 | RepRapFirmware | `M556 S100 X0 Y0 Z0` | `M556 S100 X0.853` |
 
-`shrinkage-code`: exact text `XY shrinkage: 100.13 %`.
+`shrinkage-code`: exact text `XY 100.13 %`.
 
 ### Case: 150 dpi
 
@@ -152,7 +152,7 @@ Firmware commands:
 | Marlin | `M852 I0 J0 K0\nM500` | `M852 I-0.008475\nM500` |
 | RepRapFirmware | `M556 S100 X0 Y0 Z0` | `M556 S100 X0.848` |
 
-`shrinkage-code`: exact text `XY shrinkage: 100.23 %`.
+`shrinkage-code`: exact text `XY 100.23 %`.
 
 ## Optional case: four scans, one plate, confidence range (300 dpi and 150 dpi)
 
@@ -177,7 +177,7 @@ Additional assertions for this case (four fixtures uploaded together):
 | `range-scaleX-XY` | exact text `Likely between +0.128 % and +0.162 % (95% from 4 scans).` |
 | `range-scaleY-XY` | exact text `Likely between +0.095 % and +0.129 % (95% from 4 scans).` |
 | `range-skew-XY` | exact text `Likely between +0.467° and +0.517° (95% from 4 scans).` |
-| `shrinkage-code` | exact text `XY shrinkage: 100.13 %` |
+| `shrinkage-code` | exact text `XY 100.13 %` |
 
 ### 150 dpi, 4 scans
 

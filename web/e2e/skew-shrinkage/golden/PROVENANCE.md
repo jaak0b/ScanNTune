@@ -50,11 +50,14 @@ with it. The new scans read `scan-flip` `None` on every fixture.
   static per-firmware boilerplate with no scan-dependent figures; they inherit the same tier as
   their firmware family above (Klipper reset is exercised as part of the owner's real hardware
   workflow; Marlin/RRF resets are owner-reviewed text only).
-- **The shrinkage fix (`shrinkage-code`, "XY shrinkage: N %")** is driven by the "Format" selector, which is
+- **The shrinkage fix (`shrinkage-code`, "XY N %")** is driven by the "Format" selector, which is
   independent of the Firmware selector (see "Firmware vs. Format are independent controls" below).
   Its default format, Shrinkage %, is a slicer-facing figure with no firmware-specific sign
   convention, so it carries the same tier as the scale figures it is computed from: hardware-validated
-  for this Klipper-associated capture.
+  for this Klipper-associated capture. A separate Z figure appears alongside the XY figure when a
+  standing plate (XZ or YZ) measured Z. Every value recorded below was captured with no current
+  shrinkage compensation entered (the current-compensation fields left empty), so each figure is the
+  uncompounded measured deviation.
 
 ## Firmware vs. Format are independent controls (important correction to the original test brief)
 
@@ -67,7 +70,7 @@ The XY/skew page has two separate selectors that are easy to conflate:
 - **Format** (inside the "Fix shrinkage" tab, `Shrinkage %` / `Steps/mm` / `Rotation distance` / `Scale %`):
   drives `shrinkage-code`. It is completely independent of the Firmware selector: switching Firmware between
   Klipper/Marlin/RepRapFirmware while Format stays on `Shrinkage %` leaves `shrinkage-code` unchanged. This
-  was confirmed empirically: `shrinkage-code` read the identical string (`XY shrinkage: 100.16 %` for the
+  was confirmed empirically: `shrinkage-code` read the identical string (`XY 100.16 %` for the
   300 dpi case) under all three Firmware selections.
 
 Every capture below used the default Format, `Shrinkage %` (the only one of the four formats that
@@ -187,7 +190,7 @@ caption for this correction, so their `skew-code` text is only the command lines
 displayed string exactly, newlines included; there is no partial/regex assertion in this suite.
 
 `shrinkage-code` (Format: `Shrinkage %`, same value under all three firmware selections):
-**`XY shrinkage: 100.13 %`**
+**`XY 100.13 %`**
 
 ### Case: 150 dpi, quarter-turn pair (`xy_0d_150dpi_black_white.jpg` + `xy_90d_150dpi_black_white.jpg`)
 
@@ -210,7 +213,7 @@ Per-scan: `ring-count` `23 of 23` (both), `scan-angle` `359.5°` and `90.1°`, `
 | Marlin | `M852 I0 J0 K0`<br>`M500` | `M852 I-0.008475`<br>`M500` |
 | RepRapFirmware | `M556 S100 X0 Y0 Z0` | `M556 S100 X0.848` |
 
-`shrinkage-code` (Format: `Shrinkage %`): **`XY shrinkage: 100.23 %`**
+`shrinkage-code` (Format: `Shrinkage %`): **`XY 100.23 %`**
 
 ## Rotation-robustness finding (not computed, read directly off the app for each pairing)
 
@@ -223,9 +226,9 @@ computed by hand, each row is a separate, independently-captured app run.
 
 | scan set | `scale-X` | `scale-Y` | `skew-XY` | `shrinkage-code` |
 |---|---|---|---|---|
-| 0d + 90d | `+0.144 %` | `+0.117 %` | `+0.489°` | `XY shrinkage: 100.13 %` |
-| 180d + 270d | `+0.146 %` | `+0.107 %` | `+0.495°` | `XY shrinkage: 100.13 %` |
-| all 4 (0/90/180/270) | `+0.145 %` | `+0.112 %` | `+0.492°` | `XY shrinkage: 100.13 %` |
+| 0d + 90d | `+0.144 %` | `+0.117 %` | `+0.489°` | `XY 100.13 %` |
+| 180d + 270d | `+0.146 %` | `+0.107 %` | `+0.495°` | `XY 100.13 %` |
+| all 4 (0/90/180/270) | `+0.145 %` | `+0.112 %` | `+0.492°` | `XY 100.13 %` |
 | all 4, `range-scaleX-XY` | | | | `Likely between +0.128 % and +0.162 % (95% from 4 scans).` |
 | all 4, `range-scaleY-XY` | | | | `Likely between +0.095 % and +0.129 % (95% from 4 scans).` |
 | all 4, `range-skew-XY` | | | | `Likely between +0.467° and +0.517° (95% from 4 scans).` |
@@ -371,7 +374,7 @@ render), because neither scan reached the `Measured` state.
    scans flagged, plural gate message) are pre-analyze hard blocks with no result panel. Regression
    check confirmed: the valid 300 dpi pair still produces the identical frozen values (`scale-X`
    `+0.144 %`, `scale-Y` `+0.117 %`, `skew-XY` `+0.489°`, Klipper `SET_SKEW XY=99.575,100.427,70.713`,
-   `shrinkage-code` `XY shrinkage: 100.13 %`), so the guard did not move the measurement.
+   `shrinkage-code` `XY 100.13 %`), so the guard did not move the measurement.
 3. **No testid exists yet** on the step 2 reset-command `CodeBlock`, nor on the Klipper skew fix's
    secondary `CodeBlock` (the `SKEW_PROFILE LOAD=ScanNTune` start-gcode line). Both were located and
    read in this capture session via `document.querySelectorAll('pre.code')` / plain DOM traversal,

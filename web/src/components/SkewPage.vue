@@ -445,11 +445,13 @@ const shrinkageZeroNote = computed(() =>
 )
 
 // Changing the scan set after an analysis invalidates its results: clear the payload so the user
-// can add or remove scans and analyze again.
+// can add or remove scans and analyze again. The entered current compensation values belong to the
+// analyzed print too, so they must not survive onto the next one.
 watch(
   () => store.scans.map((s) => s.id).join(','),
   () => {
     if (app.payload !== null) app.clearResults()
+    currents.X = currents.Y = currents.Z = currents.XY = null
   },
 )
 
@@ -491,6 +493,7 @@ function startOver(): void {
   store.clear()
   isError.value = false
   statusText.value = ''
+  currents.X = currents.Y = currents.Z = currents.XY = null
 }
 
 const plates: ReadonlyArray<{ key: string; label: string; file: string }> = [

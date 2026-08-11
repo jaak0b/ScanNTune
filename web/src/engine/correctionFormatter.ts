@@ -184,70 +184,6 @@ export function skewCorrectionMulti(
   }
 }
 
-export function sizeCorrection(
-  flavour: string,
-  xScalePercent: number,
-  yScalePercent: number,
-  currentX: number | null,
-  currentY: number | null,
-): Correction {
-  // A real printer's dimensional error is well under 2%; a reading beyond a few percent means a
-  // wrong DPI (a 2x mismatch reads +/-50-100%) or a broken detection. Refusing to synthesize
-  // firmware commands from it matters: at +100% the steps/mm branch would emit M92 X0.000.
-  if (
-    !Number.isFinite(xScalePercent) ||
-    !Number.isFinite(yScalePercent) ||
-    Math.abs(xScalePercent) >= 10.0 ||
-    Math.abs(yScalePercent) >= 10.0
-  )
-    return {
-      code: 'scale out of range, check the scan and DPI',
-      hint: "A real printer errs well under 2%; this suggests the scan DPI doesn't match the calibration, or a detection problem.",
-    }
-
-  const xf = xScalePercent / 100.0
-  const yf = yScalePercent / 100.0
-  const avg = (xf + yf) / 2.0
-
-  // The exact correction is the nominal/measured ratio: new = current / (1 + error). The first-order
-  // form current * (1 - error) leaves an error^2 residual, so the ratio is used throughout.
-  switch (flavour) {
-    case STEPS_PER_MM:
-      if (currentX != null && currentY != null)
-        return {
-          code: `M92 X${f3(currentX / (1.0 + xf))} Y${f3(currentY / (1.0 + yf))}\nM500`,
-          hint: 'Send via console; M500 saves (Marlin). On Klipper use the Rotation distance flavour.',
-        }
-      return {
-        code: 'enter current steps/mm above',
-        hint: 'New = current / (1 + error), per axis.',
-      }
-
-    case ROTATION_DISTANCE:
-      if (currentX != null && currentY != null)
-        return {
-          code: `X ${f4((1.0 + xf) * currentX)}   Y ${f4((1.0 + yf) * currentY)}`,
-          hint: 'Set rotation_distance in printer.cfg (Klipper).',
-        }
-      return {
-        code: 'enter current rotation distance above',
-        hint: 'New = current * (1 + error), per axis.',
-      }
-
-    case SCALE:
-      return {
-        code: `X ${f2(100.0 / (1.0 + xf))} %   Y ${f2(100.0 / (1.0 + yf))} %`,
-        hint: 'Scale the model per-axis in your slicer (X and Y can differ).',
-      }
-
-    default: // Shrinkage
-      return {
-        code: `XY shrinkage: ${f2((1.0 + avg) * 100.0)} %`,
-        hint: 'OrcaSlicer / SuperSlicer: Filament -> Advanced -> Shrinkage compensation (XY). Single value; use Steps/mm for per-axis.',
-      }
-  }
-}
-
 /**
  * Size correction across the reconciled physical axes (X/Y, plus Z when a standing plate measured
  * it). Z is reported but flagged: a printer's Z error is layer-height driven, not extrusion
@@ -310,11 +246,20 @@ export function axisSizeCorrection(
       if (xy.length === 0)
         return { code: 'no XY scale measured', hint: 'Scan the XY (or XZ and YZ) plate for shrinkage.' }
       const avg = xy.reduce((sum, s) => sum + frac(s), 0) / xy.length
-      const k = (v: number | null | undefined): number => (Number.isFinite(v) && v! > 0 ? v! : 100)
+      // Empty/null means no compensation is active (100). A present value must fall inside a sane
+      // band for a shrinkage compensation percentage; anything else (a factor like 0.98, a typo like
+      // 9800) is refused rather than silently substituted, mirroring the measured-scale guard above.
+      const k = (v: number | null | undefined): number => (v == null ? 100 : Number.isFinite(v) ? v! : NaN)
+      const inBand = (v: number): boolean => Number.isFinite(v) && v >= 80.0 && v <= 125.0
       const kXY = k(currents.XY)
       const kZ = k(currents.Z)
-      const parts = [`XY ${f2(kXY * (1.0 + avg))} %`]
       const z = scales.find((s) => s.axis === 'Z')
+      if (!inBand(kXY) || (z != null && !inBand(kZ)))
+        return {
+          code: 'check the entered compensation',
+          hint: "The current shrinkage compensation field takes the slicer's shrinkage compensation in percent, normally close to 100.",
+        }
+      const parts = [`XY ${f2(kXY * (1.0 + avg))} %`]
       if (z) parts.push(`Z ${f2(kZ * (1.0 + frac(z)))} %`)
       const compounded = kXY !== 100 || (z != null && kZ !== 100)
       const hint = compounded
