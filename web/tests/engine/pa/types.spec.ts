@@ -8,6 +8,7 @@ import {
   edgeShiftRange,
   fitsA4,
   maxLineCountForHeight,
+  paVolumetricFlowMm3S,
 } from '../../../src/engine/pa/types'
 
 describe('pa types', () => {
@@ -143,6 +144,20 @@ describe('pa types', () => {
       const maxHeight = 297
       const expected = Math.floor((maxHeight - 2 * spec.marginMm) / spec.linePitchMm) + 1
       expect(maxLineCountForHeight(spec, maxHeight)).toBe(expected)
+    })
+  })
+
+  describe('paVolumetricFlowMm3S', () => {
+    it('computes the fast segment flow as width times layer height times fast speed', () => {
+      const spec = { ...defaultPaTestSpec(), lineWidthMm: 0.5, fastSpeedMmS: 100 }
+      // 0.5 mm width * 0.2 mm layer height * 100 mm/s = 10 mm^3/s
+      expect(paVolumetricFlowMm3S(spec, 0.2)).toBeCloseTo(10, 10)
+    })
+
+    it('scales linearly with fast speed', () => {
+      const spec = { ...defaultPaTestSpec(), lineWidthMm: 0.45, fastSpeedMmS: 60 }
+      const doubled = { ...spec, fastSpeedMmS: 120 }
+      expect(paVolumetricFlowMm3S(doubled, 0.2)).toBeCloseTo(2 * paVolumetricFlowMm3S(spec, 0.2), 10)
     })
   })
 })

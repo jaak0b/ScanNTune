@@ -1,9 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import { defaultPrinterProfile } from '../../../src/engine/gcode/profileTypes'
-import { defaultIsTestSpec, type IsTestSpec } from '../../../src/engine/is/types'
+import { defaultIsTestSpec, fitSpecToBed, type IsTestSpec } from '../../../src/engine/is/types'
 import {
   accelRampMm,
+  ladderCornerSpeeds,
+  MIN_CORNER_SPEED_MM_S,
   BLOCK_GAP_MM,
+  effectiveMeasuredLineMm,
   effectiveRunUpMm,
   FIDUCIAL_INSET_MM,
   FIDUCIAL_SIZE_MM,
@@ -17,9 +20,10 @@ import {
   MIN_FRAME_BAND_MM,
   PRIME_MM,
   protectedSpanMm,
+  RING_WAVELENGTHS_READ,
   SWEEP_STUB_MM,
-  SWEEP_TOOTH_CLEARANCE_MM,
   sweepCells,
+  type SweepToothSegment,
   sweepLegMm,
   TAIL_EDGE_CLEARANCE_MM,
   TAIL_MARGIN_MM,
@@ -198,10 +202,13 @@ describe('isCouponGeometry crossings and packing', () => {
   const yGroup = g.groups.find((grp) => grp.axis === 'y')!
   const xGroup = g.groups.find((grp) => grp.axis === 'x')!
 
-  it('records the protected span (tier ramp plus clean read length) per line', () => {
+  it('records the protected span (per-line ramp plus clean read length) per line', () => {
     for (const group of g.groups) {
       for (const line of group.lines) {
-        expect(line.protectedMm).toBeCloseTo(protectedSpanMm(spec, line.speedMmS), 9)
+        expect(line.protectedMm).toBeCloseTo(
+          protectedSpanMm(spec, line.speedMmS, line.cornerSpeedMmS),
+          9,
+        )
       }
     }
   })
@@ -286,15 +293,15 @@ describe('isCouponGeometry footprint', () => {
     expect(g.couponWidthMm).toBeCloseTo(interior + 2 * g.frameBandMm, 9)
     expect(g.couponHeightMm).toBeCloseTo(g.couponWidthMm, 9)
     // Documented derived size of the expert defaults (single 150 mm/s tier, 8 lines,
-    // 30 mm clean read, 8 mm run-up, 4000 mm/s^2, 100 mm/s corner speed): a regression
-    // inflating the layout is caught here. The field extent enters the two-axis
-    // footprint twice (once per group), so each extra line costs two pitches (5 mm)
-    // over the former 5-line default's 89.5625 mm; the 1.5625 mm fraction is the
-    // corner-to-tier ramp (150^2 - 100^2) / (2 * 4000).
-    expect(g.couponWidthMm).toBeCloseTo(104.5625, 9)
+    // 30 mm clean read, 8 mm run-up, 4000 mm/s^2, 100 mm/s top corner speed): a
+    // regression inflating the layout is caught here. The field extent enters the
+    // two-axis footprint twice (once per group), so each extra line costs two pitches
+    // (5 mm); the 2.7625 mm fraction is the binding corner-to-tier ramp of the ladder's
+    // 20 mm/s bottom rung, (150^2 - 20^2) / (2 * 4000).
+    expect(g.couponWidthMm).toBeCloseTo(105.7625, 9)
     // The 15-line maximum adds seven more line pairs on the same formula.
     const max = isCouponGeometry({ ...spec, linesPerSpeed: 15 })
-    expect(max.couponWidthMm).toBeCloseTo(139.5625, 9)
+    expect(max.couponWidthMm).toBeCloseTo(140.7625, 9)
   })
   it('shrinks when any driving parameter shrinks (the formula carries no padding)', () => {
     const size = (s: IsTestSpec) => isCouponGeometry(s).couponWidthMm
@@ -384,6 +391,53 @@ describe('isCouponGeometry at the maximum line count', () => {
   })
 })
 
+describe('corner-speed excitation ladder', () => {
+  it('spaces the rungs geometrically from the 20 mm/s bottom rung to the top corner speed', () => {
+    // Hand-derived: 20 * 5^(j/7) for j = 0..7 at the 100 mm/s default top rung.
+    const expected = [20, 25.16998, 31.67639, 39.86471, 50.16969, 63.1385, 79.45974, 100]
+    const rungs = ladderCornerSpeeds(spec)
+    expect(rungs).toHaveLength(spec.linesPerSpeed)
+    rungs.forEach((r, j) => expect(r).toBeCloseTo(expected[j], 4))
+    expect(rungs[0]).toBe(MIN_CORNER_SPEED_MM_S)
+  })
+  it('tags every line with its rung, repeating the ladder per tier', () => {
+    const multi = isCouponGeometry({ ...spec, speedsMmS: [150, 300] })
+    const rungs = ladderCornerSpeeds({ ...spec, speedsMmS: [150, 300] })
+    for (const group of multi.groups) {
+      group.lines.forEach((line, i) => {
+        expect(line.cornerSpeedMmS).toBeCloseTo(rungs[i % spec.linesPerSpeed], 9)
+      })
+    }
+  })
+  it('gives every line its own ramp from its rung, longest on the bottom rung', () => {
+    for (const group of g.groups) {
+      const first = group.lines[0]
+      const last = group.lines[group.lines.length - 1]
+      // Bottom rung (20 mm/s): ramp (150^2 - 20^2) / 8000 = 2.7625 mm (hand-derived);
+      // top rung (100 mm/s): (150^2 - 100^2) / 8000 = 1.5625 mm.
+      expect(first.protectedMm).toBeCloseTo(2.7625 + spec.measuredLineMm, 9)
+      expect(last.protectedMm).toBeCloseTo(1.5625 + spec.measuredLineMm, 9)
+    }
+  })
+  it('collapses to the single spec corner speed when the sweep replaces it', () => {
+    const rungs = ladderCornerSpeeds({ ...spec, sweep: true })
+    expect(rungs).toEqual(Array.from({ length: spec.linesPerSpeed }, () => 100))
+    const gsweep = isCouponGeometry({ ...spec, sweep: true })
+    for (const group of gsweep.groups) {
+      for (const line of group.lines) expect(line.cornerSpeedMmS).toBe(spec.cornerSpeedMmS)
+    }
+  })
+  it('shrinks a ladder coupon onto a small bed through the measured-line reduction', () => {
+    const profile = { ...defaultPrinterProfile(), bedWidthMm: 100, bedDepthMm: 100 }
+    const { spec: fitted, notes } = fitSpecToBed(spec, profile)
+    expect(notes.some((n) => n.includes('shortened'))).toBe(true)
+    expect(fitted.measuredLineMm).toBeLessThan(spec.measuredLineMm)
+    const gf = isCouponGeometry(fitted)
+    expect(gf.couponWidthMm).toBeLessThanOrEqual(100)
+    expect(gf.couponHeightMm).toBeLessThanOrEqual(100)
+  })
+})
+
 describe('isCouponGeometry frame band sizing', () => {
   it('keeps the minimum band when every tail fits inside it', () => {
     expect(g.frameBandMm).toBeCloseTo(MIN_FRAME_BAND_MM, 9)
@@ -415,6 +469,34 @@ describe('isCouponGeometry resonant run-up sweep', () => {
   const sweepSpec: IsTestSpec = { ...spec, sweep: true }
   const gs = isCouponGeometry(sweepSpec)
 
+  /** Time slice of one chord: its length over its commanded speed. */
+  const chordDtS = (t: SweepToothSegment) => segLen(t) / t.speedMmS
+  /** Per-axis chord velocity in coupon coordinates. */
+  const chordVel = (t: SweepToothSegment) => ({
+    vx: (t.x1 - t.x0) / chordDtS(t),
+    vy: (t.y1 - t.y0) / chordDtS(t),
+  })
+  /** Signed swing depth of a vertex, positive away from the measured direction. */
+  const away = (line: IsLine, axis: 'x' | 'y', x: number, y: number) =>
+    axis === 'y' ? line.runUp.x0 - x : y - line.runUp.y0
+  /**
+   * Split a line's chords into cells: a cell ends where the polyline returns to the
+   * leg centreline, which the geometry pins to an exact zero lateral offset.
+   */
+  function cellsOf(line: IsLine, axis: 'x' | 'y'): SweepToothSegment[][] {
+    const cells: SweepToothSegment[][] = []
+    let current: SweepToothSegment[] = []
+    for (const t of line.teeth) {
+      current.push(t)
+      if (away(line, axis, t.x1, t.y1) === 0) {
+        cells.push(current)
+        current = []
+      }
+    }
+    expect(current).toHaveLength(0)
+    return cells
+  }
+
   it('leaves the geometry teeth-free and unchanged when the sweep is off', () => {
     for (const group of g.groups) {
       for (const line of group.lines) expect(line.teeth).toEqual([])
@@ -428,54 +510,75 @@ describe('isCouponGeometry resonant run-up sweep', () => {
   it('sweeps the forcing frequency geometrically from sweepFromHz to sweepToHz', () => {
     const cells = sweepCells(sweepSpec)
     expect(cells).toHaveLength(sweepSpec.sweepCycles)
-    const v = sweepSpec.cornerSpeedMmS
-    const freqs = cells.map((c) => v / (c.forwardMm + Math.abs(c.lateralMm)))
-    expect(freqs[0]).toBeCloseTo(sweepSpec.sweepFromHz, 6)
-    expect(freqs[freqs.length - 1]).toBeCloseTo(sweepSpec.sweepToHz, 6)
-    for (let k = 2; k < freqs.length; k++) {
-      expect(freqs[k] / freqs[k - 1]).toBeCloseTo(freqs[1] / freqs[0], 6)
-    }
-  })
-
-  it('caps the lateral tooth depth so the tip clears the neighbouring leg', () => {
-    for (const c of sweepCells(sweepSpec)) {
-      expect(Math.abs(c.lateralMm)).toBeLessThanOrEqual(
-        sweepSpec.linePitchMm - SWEEP_TOOTH_CLEARANCE_MM + 1e-9,
+    expect(cells[0].freqHz).toBeCloseTo(35, 9)
+    expect(cells[cells.length - 1].freqHz).toBeCloseTo(150, 9)
+    for (let k = 2; k < cells.length; k++) {
+      expect(cells[k].freqHz / cells[k - 1].freqHz).toBeCloseTo(
+        cells[1].freqHz / cells[0].freqHz,
+        9,
       )
-      expect(Math.abs(c.lateralMm)).toBeGreaterThan(0)
-      expect(c.forwardMm).toBeGreaterThan(0)
     }
   })
 
-  it('chains run-up, teeth, and measured segment as one connected axis-aligned path', () => {
+  it('scales the cell acceleration by accel_per_hz, bounded by spec accel and clearance', () => {
+    // Default band: 75 mm/s^2 per Hz gives 2625 at 35 Hz; from about 53 Hz up the
+    // 4000 mm/s^2 spec acceleration is the lower bound and governs, so the last (150 Hz)
+    // cell runs at 4000, not 11250.
+    const cells = sweepCells(sweepSpec)
+    expect(cells[0].accelMmS2).toBeCloseTo(2625, 9)
+    expect(cells[cells.length - 1].accelMmS2).toBeCloseTo(4000, 9)
+    // Clearance cap: at a 1.2 mm pitch the corridor is 0.2 mm, so a 20 Hz cell caps at
+    // 16 * 400 * 0.2 = 1280 mm/s^2, below both 20000 and 75 * 20 = 1500; the 150 Hz
+    // cell of the same spec runs at the accel_per_hz 11250.
+    const capped = sweepCells({
+      ...sweepSpec,
+      accelMmS2: 20000,
+      sweepFromHz: 20,
+      linePitchMm: 1.2,
+    })
+    expect(capped[0].accelMmS2).toBeCloseTo(1280, 9)
+    expect(capped[capped.length - 1].accelMmS2).toBeCloseTo(11250, 9)
+  })
+
+  it('takes exactly one forcing period per cell, longest (lowest) cell first', () => {
     for (const group of gs.groups) {
       for (const line of group.lines) {
-        expect(line.teeth.length).toBe(2 * sweepSpec.sweepCycles)
-        let prev = { x: line.runUp.x1, y: line.runUp.y1 }
-        for (const t of line.teeth) {
-          expect(t.x0).toBeCloseTo(prev.x, 9)
-          expect(t.y0).toBeCloseTo(prev.y, 9)
-          // Axis-aligned: exactly one coordinate changes per segment.
-          expect((t.x0 === t.x1) !== (t.y0 === t.y1)).toBe(true)
-          prev = { x: t.x1, y: t.y1 }
+        const periods = cellsOf(line, group.axis).map((c) =>
+          c.reduce((s, t) => s + chordDtS(t), 0),
+        )
+        expect(periods).toHaveLength(16)
+        expect(periods[0]).toBeCloseTo(0.02857142857142857, 9) // 1/35 s
+        expect(periods[periods.length - 1]).toBeCloseTo(0.006666666666666667, 9) // 1/150 s
+        for (let k = 1; k < periods.length; k++) {
+          // Low frequency first: the periods shrink toward the launch corner.
+          expect(periods[k]).toBeLessThan(periods[k - 1])
         }
-        expect(prev.x).toBeCloseTo(line.measured.x0, 9)
-        expect(prev.y).toBeCloseTo(line.measured.y0, 9)
-        // The final side step runs colinear into the measured segment, so the built-up
-        // ring launches without an extra corner.
-        const last = line.teeth[line.teeth.length - 1]
-        if (group.axis === 'y') {
-          expect(last.y1).toBeCloseTo(last.y0, 9)
-          expect(last.x1).toBeGreaterThan(last.x0)
-        } else {
-          expect(last.x1).toBeCloseTo(last.x0, 9)
-          expect(last.y1).toBeLessThan(last.y0)
+        for (let k = 2; k < periods.length; k++) {
+          expect(periods[k] / periods[k - 1]).toBeCloseTo(periods[1] / periods[0], 9)
         }
       }
     }
   })
 
-  it('keeps a straight stub between the window edge and the first tooth', () => {
+  it('chains run-up, chords, and measured segment as one connected path to the corner', () => {
+    for (const group of gs.groups) {
+      for (const line of group.lines) {
+        let prev = { x: line.runUp.x1, y: line.runUp.y1 }
+        for (const t of line.teeth) {
+          expect(t.x0).toBeCloseTo(prev.x, 9)
+          expect(t.y0).toBeCloseTo(prev.y, 9)
+          prev = { x: t.x1, y: t.y1 }
+        }
+        // The last vertex is the corner, reached on the centreline.
+        expect(prev.x).toBeCloseTo(line.measured.x0, 9)
+        expect(prev.y).toBeCloseTo(line.measured.y0, 9)
+        const first = line.teeth[0]
+        expect(away(line, group.axis, first.x0, first.y0)).toBeCloseTo(0, 9)
+      }
+    }
+  })
+
+  it('keeps a straight stub between the window edge and the first chord', () => {
     for (const group of gs.groups) {
       for (const line of group.lines) {
         const first = line.teeth[0]
@@ -486,38 +589,193 @@ describe('isCouponGeometry resonant run-up sweep', () => {
     }
   })
 
-  it('keeps every tooth inside the open window and clear of neighbouring legs', () => {
-    for (const group of gs.groups) {
-      for (let i = 0; i < group.lines.length; i++) {
-        const line = group.lines[i]
-        for (const t of line.teeth) {
-          for (const [x, y] of [
-            [t.x0, t.y0],
-            [t.x1, t.y1],
-          ]) {
-            expect(x).toBeGreaterThan(gs.windowBox.x0)
-            expect(x).toBeLessThan(gs.windowBox.x1)
-            expect(y).toBeGreaterThan(gs.windowBox.y0)
-            expect(y).toBeLessThan(gs.windowBox.y1)
+  // Representative planner setups: the moderate default, a stiff fast machine, and a
+  // stiff machine swept from a low start frequency at a tight pitch where the
+  // clearance cap engages. `cap` is each corridor: pitch minus the 1 mm clearance.
+  const setups: { name: string; s: IsTestSpec; scv: number; cap: number }[] = [
+    { name: 'accel 4000, scv 5', s: sweepSpec, scv: 5, cap: 1.5 },
+    { name: 'accel 20000, scv 12', s: { ...sweepSpec, accelMmS2: 20000 }, scv: 12, cap: 1.5 },
+    {
+      name: 'accel 20000 from 20 Hz at 1.2 mm pitch (clearance-capped), scv 12',
+      s: { ...sweepSpec, accelMmS2: 20000, sweepFromHz: 20, linePitchMm: 1.2 },
+      scv: 12,
+      cap: 0.2,
+    },
+  ]
+
+  it('never steps adjacent chord velocities by more than the square corner velocity', () => {
+    for (const { name, s, scv } of setups) {
+      const gg = isCouponGeometry(s, scv)
+      for (const group of gg.groups) {
+        for (const line of group.lines) {
+          // The run-up cruise enters the first chord at 100 mm/s along the leg.
+          let prev = group.axis === 'y' ? { vx: 0, vy: 100 } : { vx: -100, vy: 0 }
+          for (const t of line.teeth) {
+            const v = chordVel(t)
+            expect(Math.abs(v.vx - prev.vx), name).toBeLessThanOrEqual(scv + 1e-9)
+            expect(Math.abs(v.vy - prev.vy), name).toBeLessThanOrEqual(scv + 1e-9)
+            prev = v
           }
-          // Out steps stay within one capped depth of the leg centreline, on the side
-          // away from the measured direction.
-          const lat =
-            group.axis === 'y' ? line.runUp.x0 - Math.min(t.x0, t.x1) : Math.max(t.y0, t.y1) - line.runUp.y0
-          expect(lat).toBeLessThanOrEqual(
-            sweepSpec.linePitchMm - SWEEP_TOOTH_CLEARANCE_MM + 1e-9,
-          )
         }
       }
     }
+  })
+
+  it('never implies a lateral acceleration above the spec acceleration', () => {
+    for (const { name, s, scv } of setups) {
+      const gg = isCouponGeometry(s, scv)
+      for (const group of gg.groups) {
+        for (const line of group.lines) {
+          for (let i = 1; i < line.teeth.length; i++) {
+            const a = chordVel(line.teeth[i - 1])
+            const b = chordVel(line.teeth[i])
+            const dt = (chordDtS(line.teeth[i - 1]) + chordDtS(line.teeth[i])) / 2
+            const accel = Math.max(Math.abs(b.vx - a.vx), Math.abs(b.vy - a.vy)) / dt
+            // The 1e-6 absorbs the float noise of velocities recovered from mm-scale
+            // coordinates over sub-millisecond slices.
+            expect(accel, name).toBeLessThanOrEqual(s.accelMmS2 + 1e-6)
+          }
+        }
+      }
+    }
+  })
+
+  it('keeps every swing inside the clearance corridor, away from the measured side', () => {
+    for (const { name, s, scv, cap } of setups) {
+      const gg = isCouponGeometry(s, scv)
+      for (const group of gg.groups) {
+        for (const line of group.lines) {
+          for (const t of line.teeth) {
+            const depth = away(line, group.axis, t.x1, t.y1)
+            // Never toward the measured direction, never past the setup's corridor.
+            expect(depth, name).toBeGreaterThanOrEqual(-1e-9)
+            expect(depth, name).toBeLessThanOrEqual(cap + 1e-9)
+            expect(t.x1, name).toBeGreaterThan(gg.windowBox.x0)
+            expect(t.x1, name).toBeLessThan(gg.windowBox.x1)
+            expect(t.y1, name).toBeGreaterThan(gg.windowBox.y0)
+            expect(t.y1, name).toBeLessThan(gg.windowBox.y1)
+          }
+        }
+      }
+    }
+  })
+
+  it('exits onto the corner nearly colinear with the leg at the corner speed', () => {
+    // Hand-derived exit figures: the last chord leaves the 150 Hz cell one slice from
+    // rest, so its lateral-to-forward ratio and feed are set by that slice alone. At
+    // 150 Hz the cell acceleration is min(spec accel, 75 * 150 = 11250): 4000 with
+    // scv 5 gives F 6001 (100.0139 mm/s, ratio 0.0167); 11250 with scv 12 gives F 6007
+    // (100.1098 mm/s, ratio 0.0469) for both 20000 mm/s^2 setups (the clearance cap
+    // does not bind at 150 Hz).
+    const expected = [
+      { feed: 6001, maxRatio: 0.017 },
+      { feed: 6007, maxRatio: 0.047 },
+      { feed: 6007, maxRatio: 0.047 },
+    ]
+    setups.forEach(({ name, s, scv }, i) => {
+      const gg = isCouponGeometry(s, scv)
+      for (const group of gg.groups) {
+        for (const line of group.lines) {
+          const last = line.teeth[line.teeth.length - 1]
+          expect(Math.round(last.speedMmS * 60), name).toBe(expected[i].feed)
+          const fwd =
+            group.axis === 'y' ? Math.abs(last.y1 - last.y0) : Math.abs(last.x1 - last.x0)
+          const lat =
+            group.axis === 'y' ? Math.abs(last.x1 - last.x0) : Math.abs(last.y1 - last.y0)
+          expect(lat / fwd, name).toBeLessThanOrEqual(expected[i].maxRatio)
+        }
+      }
+    })
+  })
+
+  it('peaks each swing at accel / (16 f^2), landing the extreme on a vertex', () => {
+    const peak = (line: IsLine, axis: 'x' | 'y', cell: SweepToothSegment[]) =>
+      Math.max(...cell.map((t) => away(line, axis, t.x1, t.y1)))
+    for (const group of gs.groups) {
+      for (const line of group.lines) {
+        // First (35 Hz) cell under accel_per_hz: 75 * 35 / (16 * 35^2) = 75 / (16 * 35)
+        // = 0.1339285... mm.
+        const cells = cellsOf(line, group.axis)
+        expect(peak(line, group.axis, cells[0])).toBeCloseTo(0.13392857142857142, 9)
+      }
+    }
+    // A clearance-capped cell fills the corridor exactly: 20 Hz at a 1.2 mm pitch runs
+    // at the capped 1280 mm/s^2, whose amplitude is the full 0.2 mm corridor.
+    const capped = isCouponGeometry(
+      { ...sweepSpec, accelMmS2: 20000, sweepFromHz: 20, linePitchMm: 1.2 },
+      12,
+    )
+    for (const group of capped.groups) {
+      for (const line of group.lines) {
+        const cells = cellsOf(line, group.axis)
+        expect(peak(line, group.axis, cells[0])).toBeCloseTo(0.2, 9)
+      }
+    }
+  })
+
+  it('sizes the leg by the closed form and keeps the coupon square', () => {
+    // Hand-derived once: 5 mm stub plus 100 mm/s times the sum of the sixteen forcing
+    // periods of the geometric 35 to 150 Hz band.
+    expect(sweepLegMm(sweepSpec)).toBeCloseTo(29.35738350235176, 9)
+    // The read-length constraint (RING_WAVELENGTHS_READ wavelengths of the 35 Hz band
+    // edge at the 150 mm/s tier speed, 21.428571... mm) is tighter than the spec's 30 mm
+    // default, so the sweep coupon reads the shorter length: the non-sweep 125.91988...
+    // mm literal above minus the 8.571428... mm the read length gives up.
+    expect(effectiveMeasuredLineMm(sweepSpec)).toBeCloseTo(21.428571428571427, 9)
+    expect(gs.couponWidthMm).toBeCloseTo(117.34845493092318, 9)
+    expect(gs.couponHeightMm).toBeCloseTo(gs.couponWidthMm, 9)
+  })
+
+  it('keeps the sweep leg acceleration-independent; only capped-cell amplitudes react', () => {
+    // The leg length depends only on the corner speed and the frequency band, so the
+    // 20000 mm/s^2 leg matches the 4000 mm/s^2 literal exactly. Below about 53 Hz the
+    // accel_per_hz scaling governs both specs identically; above it the 4000 mm/s^2
+    // bound flattens the default's cells, so the last (150 Hz) cell swings
+    // 4000 / (16 * 150^2) = 0.0111 mm at the default and 11250 / (16 * 150^2)
+    // = 0.03125 mm at 20000.
+    const hiSpec: IsTestSpec = { ...sweepSpec, accelMmS2: 20000 }
+    expect(sweepLegMm(hiSpec)).toBeCloseTo(29.35738350235176, 9)
+    const hi = isCouponGeometry(hiSpec)
+    const lastCellPeak = (l: IsLine, axis: 'x' | 'y') => {
+      const cells = cellsOf(l, axis)
+      return Math.max(...cells[cells.length - 1].map((t) => away(l, axis, t.x1, t.y1)))
+    }
+    hi.groups.forEach((grp, gi) => {
+      grp.lines.forEach((line, li) => {
+        expect(lastCellPeak(line, grp.axis)).toBeCloseTo(0.03125, 9)
+        expect(lastCellPeak(gs.groups[gi].lines[li], grp.axis)).toBeCloseTo(
+          0.011111111111111112,
+          9,
+        )
+      })
+    })
   })
 
   it('grows the coupon by the sweep leg and reports it via effectiveRunUpMm', () => {
     expect(effectiveRunUpMm(spec)).toBeCloseTo(spec.runUpMm, 9)
     expect(effectiveRunUpMm(sweepSpec)).toBeCloseTo(sweepLegMm(sweepSpec), 9)
     expect(sweepLegMm(sweepSpec)).toBeGreaterThan(spec.runUpMm)
-    const growth = sweepLegMm(sweepSpec) - spec.runUpMm
+    // The sweep replaces the corner-speed ladder, so its packed diagonal shrinks back to
+    // the single 100 mm/s corner speed: the leg growth (sweep leg minus the 8 mm run-up)
+    // less the ladder's 1.2 mm extra ramp, (100^2 - 20^2) / (2 * 4000), hand-derived, less
+    // the read-length shrink the sweep's declared band edge imposes on the clean read.
+    const readLenDeltaMm = spec.measuredLineMm - effectiveMeasuredLineMm(sweepSpec)
+    const growth = sweepLegMm(sweepSpec) - spec.runUpMm - 1.2 - readLenDeltaMm
     expect(gs.couponWidthMm).toBeCloseTo(g.couponWidthMm + growth, 9)
     expect(gs.couponHeightMm).toBeCloseTo(g.couponHeightMm + growth, 9)
+  })
+
+  it('caps the read length at RING_WAVELENGTHS_READ wavelengths of the declared band edge', () => {
+    // Never larger than the user's configured value.
+    expect(effectiveMeasuredLineMm(sweepSpec)).toBeLessThanOrEqual(sweepSpec.measuredLineMm)
+    expect(effectiveMeasuredLineMm(sweepSpec)).toBeCloseTo(
+      (RING_WAVELENGTHS_READ * Math.max(...sweepSpec.speedsMmS)) / sweepSpec.sweepFromHz,
+      9,
+    )
+    // A user-set shorter value still wins over the band-edge constraint.
+    const short: IsTestSpec = { ...sweepSpec, measuredLineMm: 15 }
+    expect(effectiveMeasuredLineMm(short)).toBeCloseTo(15, 9)
+    // Off-sweep behavior is unchanged.
+    expect(effectiveMeasuredLineMm(spec)).toBe(spec.measuredLineMm)
   })
 })

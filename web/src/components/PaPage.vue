@@ -20,8 +20,10 @@ import {
   extruderPresetRanges,
   fitsA4,
   maxLineCountForHeight,
+  paVolumetricFlowMm3S,
 } from '../engine/pa/types'
 import type { PaProgress, PaTestSpec } from '../engine/pa/types'
+import { flowWarningLimitMm3S } from '../engine/gcode/emitter'
 import NumericField from './NumericField.vue'
 import OverlayCanvas from './OverlayCanvas.vue'
 import CodeBlock from './CodeBlock.vue'
@@ -93,6 +95,12 @@ const exceedsA4 = computed(() => {
 const maxLinesForA4 = computed(() => maxLineCountForHeight(spec.value, A4_LONG_MM))
 const speedContrastLow = computed(() => spec.value.fastSpeedMmS < 3 * spec.value.slowSpeedMmS)
 const tooManyLines = computed(() => spec.value.lineCount > 24)
+const highFlow = computed(() => {
+  const p = store.selected
+  const f = store.selectedFilament
+  if (!p || !f) return false
+  return paVolumetricFlowMm3S(spec.value, p.layerHeightMm) > flowWarningLimitMm3S(f)
+})
 
 const generateError = ref('')
 const unknownVariables = ref<string[]>([])
@@ -472,6 +480,15 @@ const stCorrection = computed(() => {
         class="mt-3 soft-alert"
         data-testid="pa-a4-warning"
         :text="`The coupon is larger than A4. Most flatbed scanners cannot scan it in one pass. Reduce the line count to ${maxLinesForA4} or fewer unless your scanner is larger.`"
+      />
+      <v-alert
+        v-if="highFlow"
+        type="warning"
+        variant="tonal"
+        density="compact"
+        class="mt-3 soft-alert"
+        data-testid="pa-flow-warning"
+        text="At this fast speed, the fast segments under-extrude and the measured pressure advance is wrong. Lower the fast speed or raise the filament's max volumetric flow."
       />
       <v-alert
         v-if="generateError"

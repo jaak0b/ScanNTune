@@ -1,12 +1,18 @@
 import type { IsAxis } from './types'
 import type { ShaperOption } from './shaperRecommender'
-import type { LineFitRefusalCategory } from './ringAnalyzer'
+import type { LineFitRefusalCategory, LineJointExclusion } from './ringAnalyzer'
 
 /**
  * Why a line contributed no measurement, as a category the UI can count and label:
  * the fit-level categories plus 'not-traced' for a line the tracer never followed.
  */
 export type IsLineRefusalCategory = LineFitRefusalCategory | 'not-traced'
+
+/**
+ * Why a line was excluded from the axis's joint fit: the fit-level exclusions plus
+ * 'not-traced' for a line the tracer never followed.
+ */
+export type IsLineExclusion = LineJointExclusion | 'not-traced'
 
 /** A point in scan-image pixels. Plain data so it survives the worker boundary. */
 export interface IsPointPx {
@@ -26,15 +32,28 @@ export interface IsLineOutcome {
   lineIndex: number
   axis: IsAxis
   speedMmS: number
+  /** The line's rung of the corner-speed excitation ladder, mm/s (the spec's corner
+   *  speed on every line when the sweep is enabled). */
+  cornerSpeedMmS: number
   /** True when the tracer could follow the line's bead in the scan. */
   traced: boolean
-  /** True when the line's ringing fit passed every per-line gate. */
+  /** True when the line entered the joint fit of a measured axis. */
   accepted: boolean
+  /** True when the line's record entered the axis's joint ringing fit. */
+  usedInJointFit: boolean
+  /** Why the line was excluded from the joint fit; null for a line that entered it, and
+   *  for a line never attempted because its axis was not assigned a scan. */
+  exclusion: IsLineExclusion | null
   /** User-worded reason the line was not used; null for an accepted line. */
   refusalReason: string | null
   /** Refusal category for counting and labeling; null for an accepted line, and for a
    *  line never attempted because its axis was not assigned a scan. */
   refusalCategory: IsLineRefusalCategory | null
+  /** The line's own fitted ringing frequency, Hz (diagnostic); null without a per-line fit. */
+  frequencyHz: number | null
+  /** The line's fitted ring amplitude, mm, from the joint fit when available, else from the
+   *  per-line fit; null without either. */
+  amplitudeMm: number | null
   startPx: IsPointPx | null
   endPx: IsPointPx | null
 }
@@ -51,6 +70,10 @@ export interface IsAxisResult {
   dampingRatio: number | null
   /** 95% confidence halfwidth of the frequency, Hz. */
   frequencyCi95Hz: number | null
+  /** Standard error of the jointly fitted frequency, Hz. */
+  frequencySeHz: number | null
+  /** Extra-sum-of-squares F statistic of the joint ring fit against drift only. */
+  fStatistic: number | null
   /** Median initial ring amplitude of the accepted lines, mm (diagnostic). */
   amplitudeMm: number | null
   linesUsed: number

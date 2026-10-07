@@ -11,8 +11,10 @@ export function disableShapingCommands(profile: PrinterProfile): string[] {
 }
 
 /**
- * Motion limits for the test, per firmware, derived from the spec's corner speed so the
- * run-up cruise passes the corner without deceleration:
+ * Motion limits for the test, per firmware, derived from the spec's corner speed (the TOP
+ * rung of the corner-speed excitation ladder) so every run-up cruise passes its corner
+ * without deceleration; the limit is an upper bound, so the ladder's slower rungs pass
+ * unbraked under the same single override on all three firmwares:
  * - Klipper: SQUARE_CORNER_VELOCITY is the native semantics; any junction entered at or
  *   below it passes unbraked, so it is set to the corner speed.
  * - Marlin classic jerk: M205 X/Y is the allowed instantaneous per-axis velocity change
@@ -23,25 +25,39 @@ export function disableShapingCommands(profile: PrinterProfile): string[] {
  *   own M205 line so a classic build rejecting J does not take the jerk values with it.
  * - RepRapFirmware: M566 is classic per-axis jerk in mm/min; the same 90 degree
  *   coincidence applies, so the value is the corner speed times 60.
+ * The maximum velocity is raised to the fastest commanded move of the print (rounded up
+ * to a whole mm/s), so a configured maximum below a tier speed or a sweep chord can
+ * never clamp a commanded feedrate: Klipper VELOCITY, Marlin M203 in mm/s, and
+ * RepRapFirmware M203 in mm/min.
  */
 export function isMotionLimitCommands(
   profile: PrinterProfile,
   accelMmS2: number,
   cornerSpeedMmS: number,
+  maxSpeedMmS: number,
 ): string[] {
   const scv = cornerSpeedMmS
+  const vMax = Math.ceil(maxSpeedMmS)
   if (profile.firmware === 'Marlin') {
     const junctionDeviationMm = (0.4 * scv * scv) / accelMmS2
     return [
+      `M203 X${vMax} Y${vMax}`,
       `M204 P${accelMmS2} T${accelMmS2}`,
       `M205 X${scv} Y${scv}`,
       `M205 J${junctionDeviationMm.toFixed(3)}`,
     ]
   }
   if (profile.firmware === 'RepRapFirmware') {
-    return [`M204 P${accelMmS2} T${accelMmS2}`, `M566 X${scv * 60} Y${scv * 60}`]
+    return [
+      `M203 X${vMax * 60} Y${vMax * 60}`,
+      `M204 P${accelMmS2} T${accelMmS2}`,
+      `M566 X${scv * 60} Y${scv * 60}`,
+    ]
   }
-  return [`SET_VELOCITY_LIMIT ACCEL=${accelMmS2} SQUARE_CORNER_VELOCITY=${scv} MINIMUM_CRUISE_RATIO=0`]
+  return [
+    `SET_VELOCITY_LIMIT VELOCITY=${vMax} ACCEL=${accelMmS2} SQUARE_CORNER_VELOCITY=${scv} ` +
+      'MINIMUM_CRUISE_RATIO=0',
+  ]
 }
 
 /**

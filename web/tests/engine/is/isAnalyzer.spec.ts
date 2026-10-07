@@ -4,7 +4,9 @@ import { getCv } from '../../helpers/cv'
 import { renderIsScan } from '../../helpers/isRender'
 import type { IsRenderOptions } from '../../helpers/isRender'
 import { rgbaToBgrMat } from '../../../src/engine/imageData'
-import { analyzeIsCoupon } from '../../../src/engine/is/isAnalyzer'
+import { analyzeIsCoupon, ladderAdvice } from '../../../src/engine/is/isAnalyzer'
+import { ladderCornerSpeeds } from '../../../src/engine/is/couponGeometry'
+import type { IsLineOutcome } from '../../../src/engine/is/resultTypes'
 import type { IsResult, IsAxisResult } from '../../../src/engine/is/resultTypes'
 import { defaultIsTestSpec } from '../../../src/engine/is/types'
 import type { IsTestSpec } from '../../../src/engine/is/types'
@@ -118,13 +120,82 @@ describe('analyzeIsCoupon render recovery', () => {
       expect(Math.abs(y.frequencyHz! - 118)).toBeLessThanOrEqual(2.4)
       expect(Math.abs(y.dampingRatio! - 0.12)).toBeLessThanOrEqual(0.03)
     },
+    // The sweep coupon is the largest render, and the joint fit adds its grid sweep over
+    // every record, so this case gets more headroom than the other render tests.
+    420000,
+  )
+
+  it(
+    'measures both axes in the field regime: faint 0.05 mm class ringing under scan noise',
+    async () => {
+      // The regime real stiff printers produce: ring amplitudes a few hundredths of a
+      // millimetre, individually near the per-line detection threshold, recovered by the
+      // joint fit across the lines.
+      const truth = {
+        x: { frequencyHz: 58, dampingRatio: 0.06, ringAmpMm: 0.05 },
+        y: { frequencyHz: 47, dampingRatio: 0.08, ringAmpMm: 0.06 },
+      }
+      const r = await analyzePair(
+        baseSpec,
+        { truth, quarterTurns: 0, flipped: true, noiseSigma: 2 },
+        { truth, quarterTurns: 1, flipped: true, noiseSigma: 2 },
+      )
+      expect(r.aligned).toBe(true)
+      const y = axisOf(r, 'y')
+      expect(y.refusals).toEqual([])
+      expect(y.accepted).toBe(true)
+      expect(Math.abs(y.frequencyHz! - 47)).toBeLessThanOrEqual(1.5)
+      expect(y.frequencySeHz).not.toBeNull()
+      expect(y.lines.filter((l) => l.usedInJointFit).length).toBeGreaterThanOrEqual(3)
+      const x = axisOf(r, 'x')
+      expect(x.refusals).toEqual([])
+      expect(x.accepted).toBe(true)
+      expect(Math.abs(x.frequencyHz! - 58)).toBeLessThanOrEqual(1.5)
+    },
     240000,
   )
 
   it(
-    'refuses a coupon that shows almost no ringing, with the amplitude reason (not a number)',
+    'measures an axis whose lower ladder rungs ring near the noise floor (self-ranging)',
     async () => {
-      const truth = { y: { frequencyHz: 75, dampingRatio: 0.05, ringAmpMm: 0.002, lobeAmpMm: 0 } }
+      // The corner-speed ladder scales the rendered ring amplitude with each line's rung
+      // (delta-v over omega), so the slowest rungs carry only a fifth of the top rung's
+      // amplitude; the joint fit must still measure the axis from the pooled lines.
+      const truth = { y: { frequencyHz: 62, dampingRatio: 0.07, ringAmpMm: 0.1 } }
+      const r = await analyzePair(
+        ySpec,
+        { truth, quarterTurns: 0, flipped: true, noiseSigma: 3 },
+        { truth, quarterTurns: 1, flipped: true, noiseSigma: 3 },
+      )
+      expect(r.aligned).toBe(true)
+      const y = axisOf(r, 'y')
+      expect(y.refusals).toEqual([])
+      expect(y.accepted).toBe(true)
+      expect(Math.abs(y.frequencyHz! - 62)).toBeLessThanOrEqual(1.5)
+      // Per-rung status: every line carries its rung, bottom 20 mm/s to top 100 mm/s,
+      // and the fitted amplitudes grow with the rung (top at least twice the bottom).
+      expect(y.lines[0].cornerSpeedMmS).toBeCloseTo(20, 6)
+      expect(y.lines[y.lines.length - 1].cornerSpeedMmS).toBeCloseTo(100, 6)
+      const rungs = ladderCornerSpeeds(ySpec)
+      y.lines.forEach((l, i) => expect(l.cornerSpeedMmS).toBeCloseTo(rungs[i], 6))
+      const bottom = y.lines[0]
+      const top = y.lines[y.lines.length - 1]
+      expect(bottom.usedInJointFit || bottom.exclusion !== null).toBe(true)
+      expect(top.usedInJointFit).toBe(true)
+      expect(top.amplitudeMm!).toBeGreaterThan(2 * (bottom.amplitudeMm ?? 0))
+    },
+    240000,
+  )
+
+  it(
+    'refuses a coupon that shows no ringing, through the joint-fit significance test',
+    async () => {
+      // The joint fit pools the coherent sub-pixel signal of every line, so any rendered
+      // ring amplitude above the resolvability floor is legitimately measurable in a
+      // synthetic scan (the old per-line amplitude gate refused 0.002 mm; the joint fit
+      // reads it). The refusal contract is therefore pinned at the true null: no ring at
+      // all, only noise and the renderer's own sub-pixel artifacts.
+      const truth = { y: { frequencyHz: 75, dampingRatio: 0.05, ringAmpMm: 0, lobeAmpMm: 0 } }
       const r = await analyzePair(
         ySpec,
         { truth, quarterTurns: 0, flipped: true, noiseSigma: 3 },
@@ -134,7 +205,14 @@ describe('analyzeIsCoupon render recovery', () => {
       const y = axisOf(r, 'y')
       expect(y.accepted).toBe(false)
       expect(y.frequencyHz).toBeNull()
-      expect(y.refusals.some((m) => m.includes('below the detection threshold'))).toBe(true)
+      // The refusal comes from the joint verdict: either no statistically significant
+      // shared ringing, or a significant component below the scan's resolvability floor
+      // (a sub-pixel sampling artifact); both mean there is no printable ringing.
+      expect(
+        y.refusals.some(
+          (m) => m.includes('statistically significant') || m.includes('smaller than the scan can resolve'),
+        ),
+      ).toBe(true)
 
       // Every line is reported individually: none accepted, each with its own reason and
       // category and an image-space position the overlay can point at. The dominant category
@@ -393,6 +471,35 @@ describe('analyzeIsCoupon render recovery', () => {
     },
     240000,
   )
+
+  it('advises raising the corner speed only when the resolvable lines split along the ladder', () => {
+    const outcome = (cornerSpeedMmS: number, amplitudeMm: number | null): IsLineOutcome => ({
+      lineIndex: 0,
+      axis: 'y',
+      speedMmS: 150,
+      cornerSpeedMmS,
+      traced: true,
+      accepted: false,
+      usedInJointFit: true,
+      exclusion: null,
+      refusalReason: null,
+      refusalCategory: null,
+      frequencyHz: null,
+      amplitudeMm,
+      startPx: null,
+      endPx: null,
+    })
+    const floor = 0.002
+    // Clean split: every resolvable amplitude sits on a faster rung than every
+    // unresolvable one, so the advice fires.
+    const split = [outcome(20, 0.001), outcome(45, 0.0015), outcome(70, 0.003), outcome(100, 0.006)]
+    expect(ladderAdvice(ySpec, split, floor)).toContain('Raise the corner speed')
+    // No split (a slow rung resolved): no advice.
+    const mixed = [outcome(20, 0.003), outcome(45, 0.001), outcome(70, 0.003), outcome(100, 0.006)]
+    expect(ladderAdvice(ySpec, mixed, floor)).toBeNull()
+    // The sweep replaces the ladder: never advised there.
+    expect(ladderAdvice({ ...ySpec, sweep: true }, split, floor)).toBeNull()
+  })
 
   it('reports a failed alignment with a reason on a blank image', async () => {
     const cv = await getCv()

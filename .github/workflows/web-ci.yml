@@ -18,7 +18,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          lfs: true # the unit polarity tests read the real scan fixtures under web/e2e/fixtures
+          lfs: false # the unit polarity tests read the real scan fixtures under web/e2e/fixtures; the objects are restored from the cache below instead of a fresh LFS download
+      - name: Build the LFS object cache key
+        run: git lfs ls-files -l | cut -d' ' -f1 | sort > .lfs-assets-id
+        working-directory: ${{ github.workspace }}
+      - name: Restore the LFS object cache
+        uses: actions/cache@v4
+        with:
+          path: .git/lfs
+          key: lfs-${{ runner.os }}-${{ hashFiles('.lfs-assets-id') }}
+          restore-keys: lfs-${{ runner.os }}-
+      - name: Fetch the LFS objects
+        run: git lfs pull
+        working-directory: ${{ github.workspace }}
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -34,7 +46,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          lfs: true # the real scan fixtures under web/e2e/fixtures are stored in Git LFS
+          lfs: false # the real scan fixtures under web/e2e/fixtures are stored in Git LFS; the objects are restored from the cache below instead of a fresh LFS download
+      - name: Build the LFS object cache key
+        run: git lfs ls-files -l | cut -d' ' -f1 | sort > .lfs-assets-id
+        working-directory: ${{ github.workspace }}
+      - name: Restore the LFS object cache
+        uses: actions/cache@v4
+        with:
+          path: .git/lfs
+          key: lfs-${{ runner.os }}-${{ hashFiles('.lfs-assets-id') }}
+          restore-keys: lfs-${{ runner.os }}-
+      - name: Fetch the LFS objects
+        run: git lfs pull
+        working-directory: ${{ github.workspace }}
       - uses: actions/setup-node@v4
         with:
           node-version: 22

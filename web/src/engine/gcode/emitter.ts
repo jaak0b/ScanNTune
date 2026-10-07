@@ -256,10 +256,19 @@ export function rasterBase(
     // Serpentine: odd scanlines print back toward the previous scanline's end.
     const ordered: [number, number][] =
       scanIndex % 2 === 1 ? [...ranges].reverse().map(([a, b]) => [b, a]) : ranges
+    // A scanline splits into more than one sub-range only where a fiducial hole clipped it
+    // (the rectangle bounds always yield one contiguous interval). The first sub-range's hop
+    // is the serpentine connector to the previous row; every later hop jumps across the hole
+    // that split the row, so it retracts and un-retracts around the travel like the strip hops
+    // do, or the pressurized nozzle strings a film across the open hole.
+    let emittedInRow = false
     for (const [a, b] of ordered) {
       if (Math.abs(b - a) < lineWidthMm) continue
+      if (emittedInRow) retract(e, p, 1)
       travel(e, p, bx + a * ux, by + a * uy)
+      if (emittedInRow) retract(e, p, -1)
       doExtrude(e, p, f, lineWidthMm, bx + b * ux, by + b * uy, speed)
+      emittedInRow = true
     }
     scanIndex++
   }

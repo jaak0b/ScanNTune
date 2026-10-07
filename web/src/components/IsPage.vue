@@ -62,8 +62,11 @@ const {
 } = useFlowSettingsForm(
   isSettings,
   () => ({
-    lineSpeedMmS: specDefaults.value.speedsMmS[0],
-    cornerSpeedMmS: specDefaults.value.cornerSpeedMmS,
+    // The line and corner speeds are deliberately left empty, unlike the other spec fields:
+    // the generated test overrides the printer's motion limits, so the user must enter values
+    // that are safe for their machine rather than silently inheriting a computed default.
+    lineSpeedMmS: null,
+    cornerSpeedMmS: null,
     linesPerSpeed: specDefaults.value.linesPerSpeed,
     measuredLineMm: specDefaults.value.measuredLineMm,
     linePitchMm: specDefaults.value.linePitchMm,
@@ -115,11 +118,23 @@ const scanPlanNote = computed(() =>
   scanPlanNoteText(scanPlace.value, partColors.value, scanPlanTexts),
 )
 
-const spec = computed<IsTestSpec>(() => {
+// The line and corner speeds must both be entered and satisfy the generator's own bound
+// (the corner speed floor, and the line speed being no slower than the corner speed) before a
+// spec can be assembled at all; there is no silent fallback to a computed default.
+const speedsValid = computed(
+  () =>
+    tierSpeed.value !== null &&
+    cornerSpeed.value !== null &&
+    cornerSpeed.value >= MIN_CORNER_SPEED_MM_S &&
+    tierSpeed.value >= cornerSpeed.value,
+)
+
+const spec = computed<IsTestSpec | null>(() => {
+  if (!speedsValid.value || tierSpeed.value === null || cornerSpeed.value === null) return null
   return {
     ...specDefaults.value,
-    speedsMmS: [tierSpeed.value ?? specDefaults.value.speedsMmS[0]],
-    cornerSpeedMmS: cornerSpeed.value ?? specDefaults.value.cornerSpeedMmS,
+    speedsMmS: [tierSpeed.value],
+    cornerSpeedMmS: cornerSpeed.value,
     linesPerSpeed: linesPerSpeed.value ?? specDefaults.value.linesPerSpeed,
     measuredLineMm: measuredLine.value ?? specDefaults.value.measuredLineMm,
     linePitchMm: linePitch.value ?? specDefaults.value.linePitchMm,
@@ -136,17 +151,19 @@ const spec = computed<IsTestSpec>(() => {
 // The spec as the generator will actually print it: validated, then shrunk to the
 // configured bed with a user-worded note per reduction. Validation and fitting failures
 // both surface as the error text.
-const fitted = computed<{ spec: IsTestSpec; notes: string[] } | { error: string }>(() => {
+const fitted = computed<{ spec: IsTestSpec; notes: string[] } | { error: string } | null>(() => {
+  const s = spec.value
+  if (!s) return null
   try {
-    validateIsSpec(spec.value)
-    return fitSpecToBed(spec.value, store.selected ?? defaultPrinterProfile())
+    validateIsSpec(s)
+    return fitSpecToBed(s, store.selected ?? defaultPrinterProfile())
   } catch (e) {
     return { error: e instanceof Error ? e.message : String(e) }
   }
 })
-const fitError = computed(() => ('error' in fitted.value ? fitted.value.error : ''))
-const fittedSpec = computed(() => ('spec' in fitted.value ? fitted.value.spec : null))
-const fitNotes = computed(() => ('notes' in fitted.value ? fitted.value.notes : []))
+const fitError = computed(() => (fitted.value && 'error' in fitted.value ? fitted.value.error : ''))
+const fittedSpec = computed(() => (fitted.value && 'spec' in fitted.value ? fitted.value.spec : null))
+const fitNotes = computed(() => (fitted.value && 'notes' in fitted.value ? fitted.value.notes : []))
 
 const tiersText = computed(() =>
   fittedSpec.value ? `speeds ${fittedSpec.value.speedsMmS.join(' / ')} mm/s` : '',
@@ -190,7 +207,9 @@ const highFlowText = computed(() => {
 const generateError = ref('')
 const unknownVariables = ref<string[]>([])
 const templateWarnings = ref<string[]>([])
-const canGenerate = computed(() => store.selected !== null && store.selectedFilament !== null)
+const canGenerate = computed(
+  () => store.selected !== null && store.selectedFilament !== null && speedsValid.value,
+)
 const unknownVariablesWarning = computed(() => unresolvedVariablesWarning(unknownVariables.value))
 
 function sanitizeName(name: string): string {
@@ -203,13 +222,14 @@ const filename = computed(() =>
 function generate(): void {
   const profile = store.selected
   const filament = store.selectedFilament
-  if (!profile || !filament) return
+  const usedSpec = spec.value
+  if (!profile || !filament || !speedsValid.value || !usedSpec) return
   generateError.value = ''
   unknownVariables.value = []
   templateWarnings.value = []
   let gcode: string
   try {
-    const report = generateIsGcodeWithReport(profile, filament, spec.value)
+    const report = generateIsGcodeWithReport(profile, filament, usedSpec)
     gcode = report.gcode
     unknownVariables.value = report.unknownVariables
     templateWarnings.value = report.warnings
@@ -355,6 +375,7 @@ const canAnalyze = computed(
   () =>
     scanFiles.value.length === 2 &&
     isCalibrated.value &&
+    speedsValid.value &&
     fittedSpec.value !== null &&
     !analyzing.value,
 )
@@ -459,6 +480,11 @@ async function analyze(): Promise<void> {
             data-testid="is-corner-speed"
           />
         </div>
+        <p class="tip mb-0" data-testid="is-speeds-tip">
+          Enter both speeds before generating the test. The corner speed must be at least
+          {{ MIN_CORNER_SPEED_MM_S }} mm/s, and the line speed must be at least as fast as the
+          corner speed.
+        </p>
         <p class="tip mb-0">
           <strong>Lower the corner speed if the print skips layers.</strong>
         </p>
@@ -512,7 +538,7 @@ async function analyze(): Promise<void> {
           <NumericField
             v-model="sweepCycles"
             label="Sweep cycles"
-            :step="2"
+            :step="1"
             :min="4"
             data-testid="is-sweep-cycles"
             hint="More cycles strengthen the buildup but lengthen the coupon."
@@ -594,7 +620,12 @@ async function analyze(): Promise<void> {
         >
           {{ footprintText }}
         </v-chip>
-        <span v-if="!canGenerate" class="tip mt-0">Choose a printer profile first.</span>
+        <span v-if="!canGenerate && (!store.selected || !store.selectedFilament)" class="tip mt-0">
+          Choose a printer profile first.
+        </span>
+        <span v-else-if="!canGenerate" class="tip mt-0">
+          Enter both speeds in step 3 first.
+        </span>
       </div>
       <div class="alert-stack mt-3">
         <v-alert

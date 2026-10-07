@@ -161,6 +161,12 @@ export function maxLineCountForHeight(spec: PaTestSpec, maxHeightMm: number): nu
   return Math.floor((maxHeightMm - 2 * spec.marginMm) / spec.linePitchMm) + 1
 }
 
+/** Volumetric flow of the fast segment, the segment whose extrusion the PA measurement
+ *  depends on: exceeding the melt limit there under-extrudes it and corrupts the result. */
+export function paVolumetricFlowMm3S(spec: PaTestSpec, layerHeightMm: number): number {
+  return spec.fastSpeedMmS * spec.lineWidthMm * layerHeightMm
+}
+
 export function couponGeometry(spec: PaTestSpec): CouponGeometry {
   const lineLen = 2 * spec.slowSegmentMm + spec.fastSegmentMm
   const baseWidthMm = lineLen + 2 * spec.marginMm

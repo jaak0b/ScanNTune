@@ -8,10 +8,11 @@ import {
   INNER_MARGIN_MM,
   isCouponGeometry,
   maxPackedRampMm,
+  MIN_CORNER_SPEED_MM_S,
   SWEEP_TOOTH_CLEARANCE_MM,
 } from './couponGeometry'
 
-export { accelRampMm }
+export { accelRampMm, MIN_CORNER_SPEED_MM_S }
 
 export type IsAxis = 'x' | 'y'
 
@@ -33,26 +34,38 @@ export interface IsTestSpec {
   axes: IsAxis[]
   accelMmS2: number
   /**
-   * Cruise speed of the run-up leg, fixed across all tiers, and the size of the ringing
-   * excitation. The emitted motion limits set the firmware's corner limit to this value,
-   * so the planner takes the 90 degree corner at the full corner speed with zero deceleration:
-   * the pressure dump K * (v_in - v_corner) is zero by construction and the bead stays
-   * continuous. The excitation is the per-axis velocity step at the corner (the run-up
-   * axis stops, the measured axis starts, each by this speed); the residual ring
-   * amplitude is approximately delta-v over omega, so a higher corner speed rings the
-   * frame proportionally harder.
+   * TOP rung of the corner-speed excitation ladder, and the size of the strongest
+   * ringing excitation. With the sweep off, each tier's lines take their corner at
+   * geometrically spaced run-up speeds from MIN_CORNER_SPEED_MM_S up to this value, one
+   * rung per line (the step-excitation idea of Klipper's ringing tower: the print
+   * self-ranges, so some lines ring visibly regardless of frame stiffness). With the
+   * sweep enabled the ladder is replaced by the sweep leg: every line corners at exactly
+   * this speed, which is also the sweep leg's constant forward speed. The emitted motion
+   * limits set the firmware's corner limit to this value once, so the planner takes
+   * every 90 degree corner at that line's full run-up speed with zero deceleration
+   * (slower rungs pass under the limit unbraked): the pressure dump K * (v_in - v_corner)
+   * is zero by construction and the bead stays continuous. The excitation is the
+   * per-axis velocity step at the corner; the residual ring amplitude is approximately
+   * delta-v over omega, so faster rungs ring the frame proportionally harder.
    */
   cornerSpeedMmS: number
   /** How far each measured segment extends into the frame band at both ends. */
   weldMm: number
   /**
-   * Resonant run-up (frequency sweep): replaces the straight run-up leg with a comb of
-   * 90 degree teeth whose corner rate sweeps `sweepFromHz` to `sweepToHz` over
-   * `sweepCycles` forcing cycles. Teeth arriving at the machine's resonance period add
-   * in phase (forced resonance), so the ring launched into the measured segment builds
-   * up to roughly the resonance's Q factor times a single corner's amplitude. Meant for
-   * small stiff printers whose single-corner ring is too faint to scan; the coupon grows
-   * by the sweep's leg length.
+   * Resonant run-up (frequency sweep): replaces the straight run-up leg with the ramped
+   * zigzag excitation of Klipper's resonance tester (resonance_tester.py, vibrate_axis).
+   * The leg advances at the constant corner speed while a bang-bang constant-magnitude
+   * lateral acceleration swings the head once per cell, the forcing frequency stepping
+   * geometrically from `sweepFromHz` to `sweepToHz` over `sweepCycles` cells. The swing
+   * acceleration follows the resonance tester's accel_per_hz scaling (75 mm/s^2 per Hz,
+   * its default), never above the profile acceleration, so the excitation stays a
+   * gentle probe instead of driving the machine at its acceleration ceiling. The
+   * forward speed never changes and the lateral velocity is continuous, so the sweep
+   * itself contains no velocity steps; cells arriving at the machine's resonance period
+   * add in phase (forced resonance), so the ring launched into the measured segment
+   * builds up to roughly the resonance's Q factor times a single corner's amplitude.
+   * Meant for small stiff printers whose single-corner ring is too faint to scan; the
+   * coupon grows by the sweep's leg length.
    */
   sweep: boolean
   /** Lowest excitation frequency of the sweep, Hz. */
@@ -60,8 +73,8 @@ export interface IsTestSpec {
   /** Highest excitation frequency of the sweep, Hz; the sweep ends here, next to the
    *  launch corner, so high resonances excite last and decay least. */
   sweepToHz: number
-  /** Number of forcing cycles across the band; even, so the teeth pair back to the leg
-   *  centreline. More cycles dwell longer near the resonance but lengthen the leg. */
+  /** Number of forcing cycles across the band. More cycles dwell longer near the
+   *  resonance but lengthen the leg. */
   sweepCycles: number
   /** Where the coupon sits on the bed: centered, or pushed to the front/back edge. */
   placement: CouponPlacement
@@ -99,8 +112,6 @@ export const MIN_MEASURED_LINE_MM = 20
  * can raise it.
  */
 export const DEFAULT_CORNER_SPEED_MM_S = 100
-/** Below this corner speed the excitation is too weak to leave a readable trace. */
-export const MIN_CORNER_SPEED_MM_S = 20
 export const MIN_SWEEP_CYCLES = 4
 export const MAX_SWEEP_CYCLES = 40
 /** Below this acceleration the ringing trace is often too weak to measure. */
@@ -119,8 +130,10 @@ export function defaultIsTestSpec(profile: PrinterProfile): IsTestSpec {
     // field extent enters the two-axis footprint once per group) and leave headroom over
     // the three-line analyzer floor when lines are damaged or unreadable.
     linesPerSpeed: 8,
-    // Five ringing wavelengths of the lowest resonance of interest at the tier speed:
-    // 5 * tierSpeed / 25 Hz, so 30 mm at the 150 mm/s default tier.
+    // RING_WAVELENGTHS_READ (couponGeometry.ts) wavelengths of the lowest resonance of
+    // interest at the tier speed: 5 * tierSpeed / 25 Hz, so 30 mm at the 150 mm/s default
+    // tier. With the sweep enabled, effectiveMeasuredLineMm evaluates this same
+    // constraint at the sweep's declared band edge instead of the fixed 25 Hz.
     measuredLineMm: 30,
     // Hosts the ramp to the 100 mm/s default corner speed (about 1.25 mm at 4000 mm/s^2)
     // with cruise to spare; the through-band leg stretch is extra.
@@ -185,13 +198,9 @@ export function validateIsSpec(spec: IsTestSpec): void {
     if (spec.sweepFromHz >= spec.sweepToHz) {
       throw new Error('The sweep start frequency must be below the end frequency')
     }
-    if (
-      spec.sweepCycles < MIN_SWEEP_CYCLES ||
-      spec.sweepCycles > MAX_SWEEP_CYCLES ||
-      spec.sweepCycles % 2 !== 0
-    ) {
+    if (spec.sweepCycles < MIN_SWEEP_CYCLES || spec.sweepCycles > MAX_SWEEP_CYCLES) {
       throw new Error(
-        `Sweep cycles must be an even number between ${MIN_SWEEP_CYCLES} and ${MAX_SWEEP_CYCLES}`,
+        `Sweep cycles must be between ${MIN_SWEEP_CYCLES} and ${MAX_SWEEP_CYCLES}`,
       )
     }
     if (spec.linePitchMm <= SWEEP_TOOTH_CLEARANCE_MM) {

@@ -1,7 +1,7 @@
 import type { Mat, OpenCv } from '../opencv'
 import type { IsTestSpec } from './types'
 import type { IsLine, IsLineGroup } from './couponGeometry'
-import { tierRampMm } from './couponGeometry'
+import { effectiveMeasuredLineMm, tierRampMm } from './couponGeometry'
 import type { IsAlignment } from './isFiducialAligner'
 import { mmToPx } from './isFiducialAligner'
 import { median } from '../math'
@@ -35,6 +35,9 @@ export interface TracedLine {
   lateralMm: Float64Array
   /** Index where the noise-floor window starts: the last stretch of the clean read. */
   noiseWindowStart: number
+  /** The px/mm this trace's lateral deviations were converted with (the card reference
+   *  along the lateral direction), so pixel-domain floors price through the same scale. */
+  lateralPxPerMm: number
 }
 
 export interface TracedGroup {
@@ -157,7 +160,7 @@ export function tracedSpanPx(
   line: IsLine,
 ): { start: { x: number; y: number }; end: { x: number; y: number } } {
   const dir = measuredDirection(line)
-  const endMm = tierRampMm(spec, line.speedMmS) + spec.measuredLineMm
+  const endMm = tierRampMm(spec, line.speedMmS, line.cornerSpeedMmS) + effectiveMeasuredLineMm(spec)
   const at = (sMm: number) =>
     mmToPx(alignment, line.measured.x0 + dir.dx * sMm, line.measured.y0 + dir.dy * sMm)
   return { start: at(TRACE_START_MM), end: at(endMm) }
@@ -189,8 +192,8 @@ function traceLine(
   const affinePxPerMm = Math.hypot(locX, locY)
   if (!(affinePxPerMm > 0)) return null
 
-  const rampMm = tierRampMm(spec, line.speedMmS)
-  const traceEndMm = rampMm + spec.measuredLineMm
+  const rampMm = tierRampMm(spec, line.speedMmS, line.cornerSpeedMmS)
+  const traceEndMm = rampMm + effectiveMeasuredLineMm(spec)
   const corner = mmToPx(alignment, line.measured.x0, line.measured.y0)
 
   const stepAlongMm = ALONG_STEP_PX / affinePxPerMm
@@ -220,7 +223,7 @@ function traceLine(
     }
     // True arc distance from the corner, converted with the card reference along the trace.
     const sTrueMm = (sLocMm * affinePxPerMm) / alongPxPerMm
-    tS[k] = timeAtDistance(sTrueMm, spec.cornerSpeedMmS, line.speedMmS, spec.accelMmS2)
+    tS[k] = timeAtDistance(sTrueMm, line.cornerSpeedMmS, line.speedMmS, spec.accelMmS2)
 
     if (valid < acrossCount) {
       lateralMm[k] = NaN
@@ -286,6 +289,7 @@ function traceLine(
     tS,
     lateralMm,
     noiseWindowStart: Math.floor(count * (1 - NOISE_WINDOW_FRACTION)),
+    lateralPxPerMm: acrossPxPerMm,
   }
 }
 
