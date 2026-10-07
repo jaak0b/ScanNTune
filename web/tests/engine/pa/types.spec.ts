@@ -151,27 +151,29 @@ describe('pa types', () => {
   describe('paFlowWarning', () => {
     const profile = defaultPrinterProfile()
     const spec = defaultPaTestSpec()
-    const limited = { ...defaultFilamentProfile(), maxVolumetricFlowMm3S: 10 }
+    const limited = { ...defaultFilamentProfile(), maxVolumetricFlowMm3S: 9 }
 
     it('judges the fast segment the generator emits, extrusion multiplier included', () => {
       // The 40 mm fast segment of a 0.45 x 0.2 mm bead from 1.75 mm filament at a 1.2
-      // multiplier commands E = 1.2 * 0.45 * 0.2 * 40 / (pi * 0.875^2) = 1.79605 at
-      // F6000 (100 mm/s): 10.8 mm^3/s, hand-derived, past the filament's 10 mm^3/s.
+      // multiplier: e_per_mm3 = 1.2 / (1.75 * 1.75 * 0.25 * pi) = 0.49890203, times the
+      // 0.08141593 mm^2 rounded bead, times 40 mm, E = 1.62474 at F6000 (100 mm/s):
+      // 1.2 x 8.141593 = 9.77 mm^3/s, hand-derived, past the filament's 9 mm^3/s.
       const rich = { ...limited, extrusionMultiplier: 1.2 }
       const report = generatePaGcodeWithReport(profile, rich, spec)
-      expect(report.gcode).toMatch(/^G1 X[\d.]+ Y[\d.]+ E1\.79605 F6000$/m)
+      expect(report.gcode).toMatch(/^G1 X[\d.]+ Y[\d.]+ E1\.62474 F6000$/m)
       const expected =
         "Lower the fast speed, or raise the filament's max volumetric flow only if the hotend " +
-        "can melt 10.8 mm^3/s. Above the filament's 10 mm^3/s max volumetric flow, the lines " +
+        "can melt 9.8 mm^3/s. Above the filament's 9 mm^3/s max volumetric flow, the lines " +
         'under-extrude.'
       expect(paFlowWarning(profile, rich, spec)).toBe(expected)
       expect(report.warnings).toContain(expected)
     })
 
     it('stays quiet when the commanded fast segment is within the limit', () => {
-      // At a 1.0 multiplier the same segment commands E = 1.49671 at F6000: 9.0 mm^3/s.
+      // At a 1.0 multiplier the same segment commands E = 0.41575169 x 0.08141593 x 40 =
+      // 1.35395 at F6000: 8.14 mm^3/s.
       const report = generatePaGcodeWithReport(profile, limited, spec)
-      expect(report.gcode).toMatch(/^G1 X[\d.]+ Y[\d.]+ E1\.49671 F6000$/m)
+      expect(report.gcode).toMatch(/^G1 X[\d.]+ Y[\d.]+ E1\.35395 F6000$/m)
       expect(paFlowWarning(profile, limited, spec)).toBeNull()
       expect(report.warnings.some((w) => w.includes('mm^3/s'))).toBe(false)
     })

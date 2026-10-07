@@ -23,29 +23,75 @@ export function newEmitter(openAreas: Box[] = []): Emitter {
   return { lines: [], x: 0, y: 0, retracted: false, openAreas }
 }
 
+// The coupon extrusion math below is PrusaSlicer 2.9.6's, operation for operation, so a coupon
+// commands exactly the filament PrusaSlicer would emit for the same bead: the cross-section
+// (Flow::mm3_per_mm), the filament per mm^3 with the extrusion multiplier applied first
+// (Extruder::e_per_mm3), the filament per mm of path (GCodeGenerator::_extrude, e_per_mm =
+// e_per_mm3 * mm3_per_mm), the segment length taken between the printed 3-decimal coordinates
+// (GCodeGenerator::point_to_gcode_quantized), and the E value quantized to 5 decimals
+// (GCodeFormatter::quantize_e). OrcaSlicer runs the same formulas but measures segment length
+// between its internal 1e-6 mm coordinates, so its E can occasionally differ in the fifth digit.
+
 /**
  * The cross-section of a non-bridge bead as PrusaSlicer, OrcaSlicer and SuperSlicer model it
  * (PrusaSlicer Flow::mm3_per_mm), mm^2: a rectangle with semicircular ends, where the width is
- * the bead's outer silhouette, the width a scan of the bead measures.
+ * the bead's outer silhouette, the width a scan of the bead measures. Flow stores width and
+ * height as float and returns the cross-section as float; both roundings are reproduced.
  */
 export function roundedBeadCrossSectionMm2(lineWidthMm: number, layerHeightMm: number): number {
-  return layerHeightMm * (lineWidthMm - layerHeightMm * (1 - 0.25 * Math.PI))
+  const w = Math.fround(lineWidthMm)
+  const h = Math.fround(layerHeightMm)
+  return Math.fround(h * (w - h * (1 - 0.25 * Math.PI)))
 }
 
-/** The bead cross-section every coupon commands: width times layer height, mm^2. */
+/** The bead cross-section every coupon commands, mm^2: the rounded bead, as PrusaSlicer
+ *  commands it. */
 export function beadCrossSectionMm2(lineWidthMm: number, layerHeightMm: number): number {
-  return lineWidthMm * layerHeightMm
+  return roundedBeadCrossSectionMm2(lineWidthMm, layerHeightMm)
 }
 
-/** Standard slicer volumetric flow: the bead cross-section times its length, as filament. */
+/** Filament length per mm^3 of bead (PrusaSlicer Extruder::e_per_mm3): the extrusion
+ *  multiplier divided by the filament cross-section d * d * 0.25 * PI. */
+export function ePerMm3(extrusionMultiplier: number, filamentDiameterMm: number): number {
+  return extrusionMultiplier / (filamentDiameterMm * filamentDiameterMm * 0.25 * Math.PI)
+}
+
+/**
+ * Filament length for a bead of the given path length (PrusaSlicer GCodeGenerator::_extrude):
+ * e_per_mm = e_per_mm3 * mm3_per_mm, times the length. Unquantized; the move that emits it
+ * quantizes the E value with quantizeE.
+ */
 export function extrusionMm(
   lengthMm: number,
   lineWidthMm: number,
   layerHeightMm: number,
   filamentDiameterMm: number,
+  extrusionMultiplier = 1,
 ): number {
-  const filamentArea = Math.PI * (filamentDiameterMm / 2) ** 2
-  return (beadCrossSectionMm2(lineWidthMm, layerHeightMm) * lengthMm) / filamentArea
+  const ePerMm =
+    ePerMm3(extrusionMultiplier, filamentDiameterMm) * beadCrossSectionMm2(lineWidthMm, layerHeightMm)
+  return ePerMm * lengthMm
+}
+
+/** E quantized to the 5 decimals G-code carries, rounded half away from zero (PrusaSlicer
+ *  GCodeFormatter::quantize_e: std::round(v * 10^5) * 10^-5). */
+export function quantizeE(e: number): number {
+  const scaled = e * 100000
+  return (scaled < 0 ? -Math.round(-scaled) : Math.round(scaled)) * 0.00001
+}
+
+/** A coordinate as the G-code prints it, 3 decimals: the value a printed segment's length is
+ *  measured from (PrusaSlicer GCodeGenerator::point_to_gcode_quantized). */
+export function printedCoordinate(v: number): number {
+  return Number(v.toFixed(3))
+}
+
+/** The length of a move between two points as printed (3 decimals): the Euclidean norm of the
+ *  printed coordinate difference, as PrusaSlicer takes it ((p - prev).norm()). */
+export function printedSegmentLengthMm(x0: number, y0: number, x1: number, y1: number): number {
+  const dx = printedCoordinate(x1) - printedCoordinate(x0)
+  const dy = printedCoordinate(y1) - printedCoordinate(y0)
+  return Math.sqrt(dx * dx + dy * dy)
 }
 
 /**
@@ -119,24 +165,24 @@ export function travel(e: Emitter, p: PrinterProfile, x: number, y: number): voi
   if (bracket) retract(e, p, -1)
 }
 
-/** One bead's filament length: the geometric extrusion scaled by the filament's
- *  extrusion multiplier. Every printing move goes through this, so the multiplier has a
- *  single home; a generator that must print at exactly 1.0 (the extrusion multiplier
- *  test) passes a filament with the multiplier pinned to 1. */
+/** One bead's filament length, unquantized: extrusionMm with the filament's extrusion
+ *  multiplier. Every printing move goes through this, so the multiplier has a single home; a
+ *  generator that must print at exactly 1.0 (the extrusion multiplier test) passes a filament
+ *  with the multiplier pinned to 1. */
 export function beadExtrusionMm(
   p: PrinterProfile,
   f: FilamentProfile,
   lengthMm: number,
   lineWidthMm: number,
 ): number {
-  return f.extrusionMultiplier * extrusionMm(lengthMm, lineWidthMm, p.layerHeightMm, f.filamentDiameterMm)
+  return extrusionMm(lengthMm, lineWidthMm, p.layerHeightMm, f.filamentDiameterMm, f.extrusionMultiplier)
 }
 
 /**
- * The volumetric flow a bead commands at `speedMmS`, mm^3/s: the cross-section extrusionMm
- * deposits, scaled by the filament's extrusion multiplier exactly as beadExtrusionMm scales
- * every printing move, times the speed. A generator that pins the multiplier passes the same
- * pinned filament it prints with.
+ * The volumetric flow a bead commands at `speedMmS`, mm^3/s: the cross-section every printing
+ * move commands, scaled by the filament's extrusion multiplier exactly as beadExtrusionMm
+ * scales it, times the speed. A generator that pins the multiplier passes the same pinned
+ * filament it prints with.
  */
 export function beadVolumetricFlowMm3S(
   p: PrinterProfile,
@@ -178,6 +224,8 @@ export function highFlowWarning(
   )
 }
 
+/** A printing move to (x, y): the bead's filament over the printed segment length, quantized
+ *  as PrusaSlicer quantizes it. */
 export function extrude(
   e: Emitter,
   p: PrinterProfile,
@@ -187,8 +235,8 @@ export function extrude(
   y: number,
   speedMmS: number,
 ): void {
-  const len = Math.hypot(x - e.x, y - e.y)
-  const eAmt = beadExtrusionMm(p, f, len, lineWidthMm)
+  const len = printedSegmentLengthMm(e.x, e.y, x, y)
+  const eAmt = quantizeE(beadExtrusionMm(p, f, len, lineWidthMm))
   e.lines.push(
     `G1 X${x.toFixed(3)} Y${y.toFixed(3)} E${eAmt.toFixed(5)} F${Math.round(speedMmS * 60)}`,
   )

@@ -1,5 +1,11 @@
 import type { FilamentProfile, PrinterProfile } from '../gcode/profileTypes'
-import { beadExtrusionMm, type Emitter, extrude } from '../gcode/emitter'
+import {
+  beadExtrusionMm,
+  type Emitter,
+  extrude,
+  printedSegmentLengthMm,
+  quantizeE,
+} from '../gcode/emitter'
 
 /** An already-printed straight bead on the current layer, in bed coordinates. */
 export interface PrintedBead {
@@ -125,7 +131,9 @@ export function extrudeWithDips(
     if (flow < EPS) {
       e.lines.push(`G1 X${nx.toFixed(3)} Y${ny.toFixed(3)} F${feed}`)
     } else {
-      const eAmt = flow * beadExtrusionMm(p, f, b - a, lineWidthMm)
+      // The subsegment's E is computed and quantized exactly as extrude does for a whole move.
+      const len = printedSegmentLengthMm(e.x, e.y, nx, ny)
+      const eAmt = quantizeE(flow * beadExtrusionMm(p, f, len, lineWidthMm))
       e.lines.push(`G1 X${nx.toFixed(3)} Y${ny.toFixed(3)} E${eAmt.toFixed(5)} F${feed}`)
     }
     e.x = nx

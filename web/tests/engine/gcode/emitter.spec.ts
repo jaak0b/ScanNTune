@@ -3,8 +3,10 @@ import { defaultFilamentProfile, defaultPrinterProfile } from '../../../src/engi
 import type { Box } from '../../../src/engine/gcode/emitter'
 import {
   beadVolumetricFlowMm3S,
+  extrude,
   highFlowWarning,
   newEmitter,
+  quantizeE,
   rasterBase,
   roundedBeadCrossSectionMm2,
   travel,
@@ -168,39 +170,82 @@ describe('travel', () => {
   })
 })
 
+// PrusaSlicer 2.9.6 golden values, hand-derived along its own chain. Flow stores width and
+// height as float: float(0.42) = 0.41999998688697815, float(0.45) = 0.44999998807907104,
+// float(0.2) = 0.20000000298023224. Flow::mm3_per_mm evaluates h * (w - h * (1 - pi / 4)) in
+// double and returns it as float. Extruder::e_per_mm3 for 1.75 mm filament at multiplier 1 is
+// 1 / (1.75 * 1.75 * 0.25 * pi) = 1 / 2.4052819 = 0.41575169 mm per mm^3.
 describe('roundedBeadCrossSectionMm2', () => {
-  it('models the bead as a rectangle with semicircular ends of the outer width', () => {
-    // 0.42 x 0.2 bead: a (0.42 - 0.2) x 0.2 rectangle plus a 0.2 mm diameter circle split over
-    // its two ends, 0.044 + 0.0314159 = 0.0754159 mm^2.
-    expect(roundedBeadCrossSectionMm2(0.42, 0.2)).toBeCloseTo(0.0754159, 7)
+  it('returns PrusaSlicer Flow::mm3_per_mm to the float, not the double rounded bead', () => {
+    // 0.42 x 0.2: the double evaluation over the float inputs is 0.0754159249091657, returned
+    // as the float 0.07541592419147491. The double over the exact inputs, 0.0754159265358979,
+    // is a different value: the test pins Prusa's.
+    expect(roundedBeadCrossSectionMm2(0.42, 0.2)).toBe(0.07541592419147491)
+    expect(roundedBeadCrossSectionMm2(0.45, 0.2)).toBe(0.08141592890024185)
+  })
+})
+
+describe('extrude', () => {
+  it('emits the E PrusaSlicer emits for 30 mm of a 0.42 x 0.2 mm bead', () => {
+    // e_per_mm = 0.41575169 x 0.07541592 = 0.03135430; x 30 mm = 0.94062893, quantized 0.94063.
+    const e = newEmitter()
+    extrude(e, profile, filament, 0.42, 30, 0, 50)
+    expect(e.lines).toEqual(['G1 X30.000 Y0.000 E0.94063 F3000'])
+  })
+
+  it('emits the E PrusaSlicer emits for 100 mm of a 0.45 x 0.2 mm bead', () => {
+    // e_per_mm = 0.41575169 x 0.08141593 = 0.03384881; x 100 mm = 3.38488099, quantized 3.38488.
+    const e = newEmitter()
+    extrude(e, profile, filament, 0.45, 100, 0, 50)
+    expect(e.lines).toEqual(['G1 X100.000 Y0.000 E3.38488 F3000'])
+  })
+
+  it('meters E over the printed 3-decimal coordinates, not the unrounded move', () => {
+    // From the origin to x = 30.0004 prints X30.000, so the E covers exactly 30 mm: the same
+    // 0.94063 as the 30 mm move above, not the 0.94064 of 30.0004 mm (0.94064147).
+    const e = newEmitter()
+    extrude(e, profile, filament, 0.42, 30.0004, 0, 50)
+    expect(e.lines).toEqual(['G1 X30.000 Y0.000 E0.94063 F3000'])
+  })
+})
+
+describe('quantizeE', () => {
+  it('rounds a half away from zero, as std::round does, on both signs', () => {
+    // 0.000025 x 10^5 is exactly 2.5: std::round gives 3, and -2.5 gives -3 (a JavaScript
+    // Math.round would give -2).
+    expect(quantizeE(0.000025).toFixed(5)).toBe('0.00003')
+    expect(quantizeE(-0.000025).toFixed(5)).toBe('-0.00003')
   })
 })
 
 describe('beadVolumetricFlowMm3S and highFlowWarning', () => {
-  it('commands width times layer height times speed, scaled by the extrusion multiplier', () => {
-    // Hand-derived: 0.45 mm x 0.2 mm x 100 mm/s = 9.0 mm^3/s; at a 1.2 multiplier 10.8.
-    expect(beadVolumetricFlowMm3S(profile, filament, 0.45, 100)).toBeCloseTo(9, 9)
+  it('commands the rounded bead cross-section times speed, scaled by the extrusion multiplier', () => {
+    // Hand-derived: 0.08141593 mm^2 (0.45 x 0.2 rounded bead) x 100 mm/s = 8.141593 mm^3/s; at
+    // a 1.2 multiplier 9.769911.
+    expect(beadVolumetricFlowMm3S(profile, filament, 0.45, 100)).toBeCloseTo(8.141593, 6)
     const rich = { ...filament, extrusionMultiplier: 1.2 }
-    expect(beadVolumetricFlowMm3S(profile, rich, 0.45, 100)).toBeCloseTo(10.8, 9)
+    expect(beadVolumetricFlowMm3S(profile, rich, 0.45, 100)).toBeCloseTo(9.769911, 6)
   })
 
   it('warns past the configured filament limit, multiplier included, and stays quiet below it', () => {
-    const limited = { ...filament, maxVolumetricFlowMm3S: 10 }
-    // 9.0 mm^3/s at a 1.0 multiplier stays under the 10 mm^3/s limit.
+    const limited = { ...filament, maxVolumetricFlowMm3S: 9 }
+    // 8.14 mm^3/s at a 1.0 multiplier stays under the 9 mm^3/s limit.
     expect(highFlowWarning(profile, limited, 0.45, 100, 'fast speed')).toBeNull()
-    // The 1.2 multiplier lifts the same bead to 10.8 mm^3/s, past it.
+    // The 1.2 multiplier lifts the same bead to 9.77 mm^3/s, past it.
     expect(highFlowWarning(profile, { ...limited, extrusionMultiplier: 1.2 }, 0.45, 100, 'fast speed')).toBe(
       'Lower the fast speed, or raise the filament\'s max volumetric flow only if the hotend can ' +
-        'melt 10.8 mm^3/s. Above the filament\'s 10 mm^3/s max volumetric flow, the lines ' +
+        'melt 9.8 mm^3/s. Above the filament\'s 9 mm^3/s max volumetric flow, the lines ' +
         'under-extrude.',
     )
   })
 
   it('judges an unset filament limit against the typical hotend', () => {
-    // 0.42 x 0.2 x 150 = 12.6 mm^3/s, past the 12 mm^3/s typical hotend default.
-    expect(highFlowWarning(profile, filament, 0.42, 150, 'line speed')).toBe(
+    // 0.07541592 mm^2 (0.42 x 0.2 rounded bead) x 150 mm/s = 11.31 mm^3/s stays under the
+    // 12 mm^3/s typical hotend default; x 170 mm/s = 12.82 mm^3/s passes it.
+    expect(highFlowWarning(profile, filament, 0.42, 150, 'line speed')).toBeNull()
+    expect(highFlowWarning(profile, filament, 0.42, 170, 'line speed')).toBe(
       'Lower the line speed, or raise the filament\'s max volumetric flow only if the hotend can ' +
-        'melt 12.6 mm^3/s. Above the 12 mm^3/s a typical hotend melts, the lines under-extrude.',
+        'melt 12.8 mm^3/s. Above the 12 mm^3/s a typical hotend melts, the lines under-extrude.',
     )
   })
 })

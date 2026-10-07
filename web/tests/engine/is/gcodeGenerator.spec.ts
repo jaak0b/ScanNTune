@@ -36,8 +36,16 @@ const allLines = g.groups.flatMap((grp) => grp.lines)
 const ePerMm = (w: number) =>
   extrusionMm(1, w, profile.layerHeightMm, filament.filamentDiameterMm)
 
-const runUpLen = (line: IsLine) =>
-  Math.hypot(line.runUp.x1 - line.runUp.x0, line.runUp.y1 - line.runUp.y0)
+/** A move's length between the 3-decimal coordinates the G-code prints for its two ends: the
+ *  length the generator meters a move's E over. */
+const printedLen = (ax: number, ay: number, bx: number, by: number) => {
+  const printed = (v: number) => Number(v.toFixed(3))
+  return Math.hypot(printed(bx) - printed(ax), printed(by) - printed(ay))
+}
+
+/** The printed length of a line's run-up cruise on a coupon placed at (x0, y0). */
+const runUpLen = (line: IsLine, x0 = ox, y0 = oy) =>
+  printedLen(x0 + line.runUp.x0, y0 + line.runUp.y0, x0 + line.runUp.x1, y0 + line.runUp.y1)
 
 /** The full-flow run-up cruise move, ending exactly on the line's ringing corner. */
 const cornerMoveStr = (line: IsLine) =>
@@ -478,10 +486,10 @@ describe('generateIsGcodeWithReport (Klipper)', () => {
       ...spec,
       speedsMmS: [150, 200],
     })
-    // 200 mm/s x 0.42 mm x 0.2 mm = 16.8 mm^3/s, hand-derived.
+    // 200 mm/s x 0.07541592 mm^2 (the 0.42 x 0.2 mm rounded bead) = 15.08 mm^3/s, hand-derived.
     expect(fast.warnings).toContain(
       "Lower the line speed, or raise the filament's max volumetric flow only if the hotend " +
-        'can melt 16.8 mm^3/s. Above the 12 mm^3/s a typical hotend melts, the lines ' +
+        'can melt 15.1 mm^3/s. Above the 12 mm^3/s a typical hotend melts, the lines ' +
         'under-extrude.',
     )
     expect(fast.gcode).toContain('F12000')
@@ -536,7 +544,7 @@ describe('generateIsGcodeWithReport (Marlin and RepRapFirmware)', () => {
       group.lines.forEach((line, k) => {
         const move =
           `G1 X${(oxc + line.measured.x0).toFixed(3)} Y${(oyc + line.measured.y0).toFixed(3)} ` +
-          `E${(runUpLen(line) * ePerMm(nominal)).toFixed(5)} F${runUpFeed(line)}`
+          `E${(runUpLen(line, oxc, oyc) * ePerMm(nominal)).toFixed(5)} F${runUpFeed(line)}`
         expect(chunk, `line ${k}`).toContain(move)
       })
       expect(Math.max(...group.lines.map((l) => l.cornerSpeedMmS))).toBeCloseTo(53.8, 9)
@@ -819,7 +827,7 @@ describe('resonant run-up sweep emission', () => {
         expect(line.cornerSpeedMmS).toBe(100)
         const idx = chunk.indexOf(
           `G1 X${(oxs + line.runUp.x1).toFixed(3)} Y${(oys + line.runUp.y1).toFixed(3)} ` +
-            `E${(runUpLen(line) * ePerMm(nominal)).toFixed(5)} F6000`,
+            `E${(runUpLen(line, oxs, oys) * ePerMm(nominal)).toFixed(5)} F6000`,
         )
         expect(idx).toBeGreaterThanOrEqual(0)
       }
@@ -831,7 +839,7 @@ describe('resonant run-up sweep emission', () => {
     for (const group of gs.groups) {
       for (const line of group.lines) {
         for (const tooth of line.teeth) {
-          const len = Math.hypot(tooth.x1 - tooth.x0, tooth.y1 - tooth.y0)
+          const len = printedLen(oxs + tooth.x0, oys + tooth.y0, oxs + tooth.x1, oys + tooth.y1)
           const move =
             `G1 X${(oxs + tooth.x1).toFixed(3)} Y${(oys + tooth.y1).toFixed(3)} ` +
             `E${(len * ePerMm(nominal)).toFixed(5)} F${Math.round(tooth.speedMmS * 60)}`
@@ -851,7 +859,7 @@ describe('resonant run-up sweep emission', () => {
     for (const group of gs.groups) {
       for (const line of group.lines) {
         for (const tooth of line.teeth) {
-          const len = Math.hypot(tooth.x1 - tooth.x0, tooth.y1 - tooth.y0)
+          const len = printedLen(oxs + tooth.x0, oys + tooth.y0, oxs + tooth.x1, oys + tooth.y1)
           const move =
             `G1 X${(oxs + tooth.x1).toFixed(3)} Y${(oys + tooth.y1).toFixed(3)} ` +
             `E${(len * ePerMm(nominal * 0.72)).toFixed(5)} ` +
@@ -967,9 +975,10 @@ describe('resonant run-up sweep emission', () => {
   })
 
   it('warns when the sweep peak flow passes the hotend limit, quiet at the default', () => {
-    // At a 200 mm/s corner speed the sweep peaks at 200.88 mm/s: 16.9 mm^3/s, above the
-    // 12 mm^3/s default limit, and the corner speed is the field that sets it. The default
-    // corner speed peaks at 101.74 mm/s (8.5 mm^3/s) and stays quiet.
+    // At a 200 mm/s corner speed the sweep peaks at 200.88 mm/s: x 0.07541592 mm^2 (the
+    // rounded bead) = 15.15 mm^3/s, above the 12 mm^3/s default limit, and the corner speed is
+    // the field that sets it. The default corner speed peaks at 101.74 mm/s (7.67 mm^3/s) and
+    // stays quiet.
     const fast = generateIsGcodeWithReport(profile, filament, {
       ...sweepSpec,
       cornerSpeedMmS: 200,
@@ -977,7 +986,7 @@ describe('resonant run-up sweep emission', () => {
     })
     expect(fast.warnings).toContain(
       "Lower the corner speed, or raise the filament's max volumetric flow only if the hotend " +
-        'can melt 16.9 mm^3/s. Above the 12 mm^3/s a typical hotend melts, the lines ' +
+        'can melt 15.1 mm^3/s. Above the 12 mm^3/s a typical hotend melts, the lines ' +
         'under-extrude.',
     )
     expect(report.warnings.some((w) => w.startsWith('Lower the corner speed'))).toBe(false)
@@ -1014,29 +1023,37 @@ describe('filament flow settings', () => {
   })
 
   it('judges the high-flow warning against the filament limit when configured', () => {
-    // The default spec extrudes 12.6 mm^3/s: above the 12 default, below a 20 limit.
+    // A 170 mm/s tier extrudes 170 x 0.07541592 mm^2 (the 0.42 x 0.2 mm rounded bead) =
+    // 12.82 mm^3/s: above the 12 default, below a 20 limit. The default 150 mm/s tier
+    // (11.31 mm^3/s) stays under the 12 default.
+    const fast = { ...spec, speedsMmS: [170] }
     expect(
       generateIsGcodeWithReport(profile, filament, spec).warnings.some((w) =>
+        w.includes('mm^3/s'),
+      ),
+    ).toBe(false)
+    expect(
+      generateIsGcodeWithReport(profile, filament, fast).warnings.some((w) =>
         w.includes('typical hotend'),
       ),
     ).toBe(true)
     const strong = { ...filament, maxVolumetricFlowMm3S: 20 }
     expect(
-      generateIsGcodeWithReport(profile, strong, spec).warnings.some((w) =>
+      generateIsGcodeWithReport(profile, strong, fast).warnings.some((w) =>
         w.includes('mm^3/s'),
       ),
     ).toBe(false)
     const weak = { ...filament, maxVolumetricFlowMm3S: 10 }
     expect(
-      generateIsGcodeWithReport(profile, weak, spec).warnings.some((w) =>
+      generateIsGcodeWithReport(profile, weak, fast).warnings.some((w) =>
         w.includes("filament's 10 mm^3/s max volumetric flow"),
       ),
     ).toBe(true)
   })
 
   it('judges the flow of the bead it commands, extrusion multiplier included', () => {
-    // 12.6 mm^3/s at a 1.0 multiplier sits under a 13 mm^3/s filament limit; a 1.2
-    // multiplier lifts the commanded bead to 15.1 mm^3/s (hand-derived), past it.
+    // 11.31 mm^3/s at a 1.0 multiplier sits under a 13 mm^3/s filament limit; a 1.2
+    // multiplier lifts the commanded bead to 13.57 mm^3/s (hand-derived), past it.
     const limited = { ...filament, maxVolumetricFlowMm3S: 13 }
     expect(
       generateIsGcodeWithReport(profile, limited, spec).warnings.some((w) => w.includes('mm^3/s')),
@@ -1045,7 +1062,7 @@ describe('filament flow settings', () => {
       generateIsGcodeWithReport(profile, { ...limited, extrusionMultiplier: 1.2 }, spec).warnings,
     ).toContain(
       "Lower the line speed, or raise the filament's max volumetric flow only if the hotend " +
-        "can melt 15.1 mm^3/s. Above the filament's 13 mm^3/s max volumetric flow, the lines " +
+        "can melt 13.6 mm^3/s. Above the filament's 13 mm^3/s max volumetric flow, the lines " +
         'under-extrude.',
     )
   })

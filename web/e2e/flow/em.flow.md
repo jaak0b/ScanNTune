@@ -68,7 +68,7 @@ changed model; the widths did not), with the derivation recorded there.
 
 | testid | assertion |
 |---|---|
-| `em-flow` | leading number `1.1174` within ± 0.01 (text is `"<factor> ± <uncertainty>"`, e.g. `1.117 ± 0.004`; parse the leading number) |
+| `em-flow` | leading number `1.0032` within ± 0.01 (text is `"<factor> ± <uncertainty>"`, e.g. `1.003 ± 0.004`; parse the leading number) |
 | `em-width` | `0.4188` mm within ± 0.01 mm (text is `"<value> mm"`, parse the leading number) |
 | `em-blocks` | exact text `36 of 36` |
 | `em-bias` | leading number `0.0025` mm within ± 0.003 mm (text is `"separator check <value> mm"`) |
@@ -78,7 +78,7 @@ changed model; the widths did not), with the derivation recorded there.
 
 | testid | assertion |
 |---|---|
-| `em-flow` | leading number `1.1213` within ± 0.015 |
+| `em-flow` | leading number `1.0067` within ± 0.015 |
 | `em-width` | `0.4175` mm within ± 0.01 mm |
 | `em-blocks` | exact text `18 of 18` |
 | `em-bias` | leading number `0.0015` mm within ± 0.003 mm |
@@ -88,7 +88,7 @@ changed model; the widths did not), with the derivation recorded there.
 
 | testid | assertion |
 |---|---|
-| `em-flow` | leading number `1.1213` within ± 0.015 |
+| `em-flow` | leading number `1.0067` within ± 0.015 |
 | `em-width` | `0.4175` mm within ± 0.01 mm |
 | `em-blocks` | exact text `18 of 18` |
 | `em-bias` | leading number `0.0001` mm within ± 0.003 mm |

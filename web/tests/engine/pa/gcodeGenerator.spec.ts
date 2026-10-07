@@ -7,10 +7,12 @@ import {
 import { defaultFilamentProfile, defaultPrinterProfile, defaultPaTestSpec, paValueForLine, couponGeometry } from '../../../src/engine/pa/types'
 
 describe('extrusionMm', () => {
-  it('computes E from the standard volumetric flow formula', () => {
-    // 100 mm of 0.45 x 0.2 mm bead from 1.75 mm filament:
-    // E = (0.45 * 0.2 * 100) / (pi * 0.875^2) = 3.7417...
-    expect(extrusionMm(100, 0.45, 0.2, 1.75)).toBeCloseTo(3.7417, 3)
+  it('computes E along the PrusaSlicer flow chain', () => {
+    // 100 mm of 0.45 x 0.2 mm bead from 1.75 mm filament: Flow::mm3_per_mm returns the float
+    // 0.08141592890024185 mm^2 (the rounded bead), Extruder::e_per_mm3 is
+    // 1 / (1.75 * 1.75 * 0.25 * pi) = 0.41575169, so E = 0.41575169 x 0.08141593 x 100 =
+    // 3.38488099 (3.38488 once quantized). The flat 0.45 x 0.2 rectangle would give 3.7417.
+    expect(extrusionMm(100, 0.45, 0.2, 1.75)).toBeCloseTo(3.384881, 6)
   })
 })
 

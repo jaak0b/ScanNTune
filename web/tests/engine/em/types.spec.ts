@@ -88,11 +88,12 @@ describe('warning helpers', () => {
   it('reports the comb flow the generator commands, at the pinned 1.0 extrusion multiplier', () => {
     const profile = defaultPrinterProfile()
     const spec = { ...defaultEmTestSpec(profile), printSpeedMmS: 100 }
-    // Hand-derived: 100 mm/s x 0.42 mm nominal width x 0.2 mm layer = 8.4 mm^3/s. The test
-    // prints at exactly 1.0, so a filament multiplier never changes the commanded flow.
-    expect(volumetricFlowMm3S(spec, profile, defaultFilamentProfile())).toBeCloseTo(8.4, 9)
+    // Hand-derived: 100 mm/s x 0.07541592 mm^2, the rounded bead cross-section of the 0.42 mm
+    // nominal width at 0.2 mm layers, = 7.541592 mm^3/s. The test prints at exactly 1.0, so a
+    // filament multiplier never changes the commanded flow.
+    expect(volumetricFlowMm3S(spec, profile, defaultFilamentProfile())).toBeCloseTo(7.541592, 6)
     const rich = { ...defaultFilamentProfile(), extrusionMultiplier: 1.25 }
-    expect(volumetricFlowMm3S(spec, profile, rich)).toBeCloseTo(8.4, 9)
+    expect(volumetricFlowMm3S(spec, profile, rich)).toBeCloseTo(7.541592, 6)
   })
   it('computes the acceleration ramp distance v^2 / (2a)', () => {
     expect(accelRampMm(100, 5000)).toBeCloseTo(1.0, 9)

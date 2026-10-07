@@ -379,22 +379,23 @@ describe('extrusion multiplier pinning', () => {
   })
 
   it('judges the high-flow warning against the filament limit when configured', () => {
-    // 120 mm/s at 0.42 mm width and 0.2 mm layers is 10.1 mm^3/s: silent by default,
-    // warned past a configured 8 mm^3/s filament limit, naming that limit.
+    // 120 mm/s over the 0.07541592 mm^2 rounded bead of 0.42 mm width at 0.2 mm layers is
+    // 9.05 mm^3/s: silent by default, warned past a configured 8 mm^3/s filament limit,
+    // naming that limit.
     const fast = { ...spec, printSpeedMmS: 120 }
     expect(generateEmGcodeWithReport(profile, filament, fast).warnings
       .some((w) => w.includes('mm^3/s'))).toBe(false)
     const weak = { ...filament, maxVolumetricFlowMm3S: 8 }
     expect(generateEmGcodeWithReport(profile, weak, fast).warnings).toContain(
       "Lower the print speed, or raise the filament's max volumetric flow only if the hotend " +
-        "can melt 10.1 mm^3/s. Above the filament's 8 mm^3/s max volumetric flow, the lines " +
+        "can melt 9.0 mm^3/s. Above the filament's 8 mm^3/s max volumetric flow, the lines " +
         'under-extrude.',
     )
   })
 
   it('judges the flow at the pinned 1.0 multiplier the test prints with', () => {
-    // A 1.25 filament multiplier never reaches the comb lines, so 10.1 mm^3/s stays under a
-    // 10.5 mm^3/s limit (12.6 mm^3/s would pass it).
+    // A 1.25 filament multiplier never reaches the comb lines, so 9.05 mm^3/s stays under a
+    // 10.5 mm^3/s limit (11.31 mm^3/s would pass it).
     const fast = { ...spec, printSpeedMmS: 120 }
     const rich = { ...filament, extrusionMultiplier: 1.25, maxVolumetricFlowMm3S: 10.5 }
     expect(generateEmGcodeWithReport(profile, rich, fast).warnings

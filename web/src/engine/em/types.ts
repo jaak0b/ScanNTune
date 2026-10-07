@@ -1,5 +1,6 @@
 import type { FilamentProfile, PrinterProfile } from '../gcode/profileTypes'
 import {
+  beadCrossSectionMm2,
   beadVolumetricFlowMm3S,
   highFlowWarning,
   MEASURED_LAYERS,
@@ -63,7 +64,7 @@ export function defaultEmTestSpec(profile: PrinterProfile): EmTestSpec {
   // The minimum pitch is rounded UP so rounding can never squeeze the tightest gap below
   // the readable floor; the maximum only positions the top of the sweep.
   const ceil2 = (v: number) => Math.ceil(v * 100) / 100
-  const speedCap = DEFAULT_MAX_FLOW_MM3_S / (nominal * profile.layerHeightMm)
+  const speedCap = DEFAULT_MAX_FLOW_MM3_S / beadCrossSectionMm2(nominal, profile.layerHeightMm)
   const pitchMinMm = ceil2(nominal * GAP_HEADROOM_FACTOR + MIN_OPEN_GAP_MM)
   return {
     pitchMinMm,

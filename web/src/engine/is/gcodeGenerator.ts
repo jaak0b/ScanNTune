@@ -29,6 +29,8 @@ import {
   NOMINAL_WIDTH_FACTOR,
   PEDESTAL_LAYERS,
   PEDESTAL_WIDTH_FACTOR,
+  printedSegmentLengthMm,
+  quantizeE,
   retract,
   travel,
 } from '../gcode/emitter'
@@ -146,8 +148,9 @@ function primeOnTheMove(
   y: number,
   speedMmS: number,
 ): void {
-  const len = Math.hypot(x - e.x, y - e.y)
-  const eAmt = p.retractMm + beadExtrusionMm(p, f, len, lineWidthMm)
+  // The bead's E over the printed segment, plus the deretract, quantized once as one move.
+  const len = printedSegmentLengthMm(e.x, e.y, x, y)
+  const eAmt = quantizeE(p.retractMm + beadExtrusionMm(p, f, len, lineWidthMm))
   e.lines.push(
     `G1 X${x.toFixed(3)} Y${y.toFixed(3)} E${eAmt.toFixed(5)} F${Math.round(speedMmS * 60)}`,
   )
