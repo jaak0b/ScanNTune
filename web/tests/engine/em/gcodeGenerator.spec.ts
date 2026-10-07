@@ -85,6 +85,26 @@ describe('generateEmGcodeWithReport', () => {
     expect(zs).toEqual(['0.200', '0.400', '0.600', '10'])
   })
 
+  it('winds the centre rail loops at PrusaSlicer perimeter spacing and rasters the rail from their inner edge', () => {
+    // The default 94.6 x 78 mm coupon sits at bed origin (62.7, 71); its 4 mm rail spans bed x
+    // 74.7 to 145.3, y 108 to 112. The external rail loop's centre lies half the 0.42 mm width
+    // inside the rail (0.21: x 74.910, y 108.210); the second loop one rounded bead spacing,
+    // 0.42 - 0.2 * (1 - pi / 4) = 0.3770796 mm, further (0.5870796: x 75.287, y 108.587). The
+    // raster starts half a spacing past it, 0.7756194 mm inside the rail edges (y 108.776 to
+    // 111.224), where it once started a full 0.84 mm in.
+    expect(report.gcode).toContain('G1 X74.910 Y108.210 E')
+    expect(report.gcode).toContain('G1 X75.287 Y108.587 E')
+    const railRasterYs = lines
+      .map((l) => l.match(/^G1 X([\d.]+) Y([\d.]+) E\d/))
+      .filter((m): m is RegExpMatchArray => m !== null)
+      .map((m) => [Number(m[1]), Number(m[2])])
+      .filter(([x, y]) => x > 75.3 && x < 144.7 && y > 108.6 && y < 111.4)
+      .map(([, y]) => y)
+
+    expect(Math.min(...railRasterYs)).toBe(108.776)
+    expect(Math.max(...railRasterYs)).toBe(111.224)
+  })
+
   it('contains no pause and pins the firmware flow override to 100 percent', () => {
     expect(report.gcode).not.toContain('PAUSE')
     // The test's baseline is exactly 1.0, so a leftover flow override is neutralized and

@@ -1,5 +1,5 @@
 import type { FilamentProfile, PrinterProfile } from '../gcode/profileTypes'
-import { highFlowWarning, PERIMETER_LOOPS, perimeterBandMm } from '../gcode/emitter'
+import { highFlowWarning, PERIMETER_LOOPS, widestPerimeterBandMm } from '../gcode/emitter'
 import { fiducialHoleBoxes } from '../gcode/couponShell'
 
 export type { Firmware, FilamentProfile, PrinterProfile } from '../gcode/profileTypes'
@@ -217,9 +217,10 @@ export function couponGeometry(spec: PaTestSpec): CouponGeometry {
  * The line-local x range every test line prints over. A line's bead (half the line width either
  * side of its path, and past its end) stays clear of each fiducial hole grown by the band of the
  * base's perimeter loops around it, so no line bridges a hole, covers its rim, or prints over its
- * perimeters. Where any line would come too close to a hole, the nominal line is shortened at
- * that end, and every line shares the shortened range: all lines print the same path apart from
- * the swept parameter, and the speed transitions stay where they are.
+ * perimeters. The geometry carries no layer height, so the band is the widest the loops reach at
+ * any layer height. Where any line would come too close to a hole, the nominal line is shortened
+ * at that end, and every line shares the shortened range: all lines print the same path apart
+ * from the swept parameter, and the speed transitions stay where they are.
  */
 function lineExtentXsMm(
   spec: PaTestSpec,
@@ -230,7 +231,7 @@ function lineExtentXsMm(
   transitionXsMm: [number, number],
 ): [number, number] {
   const lineLen = 2 * spec.slowSegmentMm + spec.fastSegmentMm
-  const keepOutMm = perimeterBandMm(PERIMETER_LOOPS, spec.lineWidthMm) + spec.lineWidthMm / 2
+  const keepOutMm = widestPerimeterBandMm(PERIMETER_LOOPS, spec.lineWidthMm) + spec.lineWidthMm / 2
   const lineYs = Array.from({ length: spec.lineCount }, (_, i) => lineStartYMm(i))
   let start = 0
   let end = lineLen

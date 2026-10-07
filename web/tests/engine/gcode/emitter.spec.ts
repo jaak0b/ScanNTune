@@ -6,11 +6,14 @@ import {
   extrude,
   highFlowWarning,
   newEmitter,
+  perimeterBandMm,
+  perimeterLoopInsetsMm,
   quantizeE,
   rasterBase,
   roundedBeadCrossSectionMm2,
   roundedRectangleExtrusionSpacingMm,
   travel,
+  widestPerimeterBandMm,
 } from '../../../src/engine/gcode/emitter'
 
 const profile = defaultPrinterProfile()
@@ -108,9 +111,9 @@ describe('rasterBase retract bracketing', () => {
   })
 
   it('retracts only for hops through the open hole, not for hops that cut its clearance ring', () => {
-    // The raster skips the hole grown by a 1.26 mm clearance ring (three 0.42 mm perimeter
-    // loops printed afterwards), but only the hole itself is open.
-    const ring: Box = { x0: 13.74, y0: 13.74, x1: 26.26, y1: 26.26 }
+    // The raster skips the hole grown by a 1.153 mm clearance ring (the band of three 0.42 x
+    // 0.2 mm perimeter loops printed afterwards), but only the hole itself is open.
+    const ring: Box = { x0: 13.847, y0: 13.847, x1: 26.153, y1: 26.153 }
     const e = newEmitter([CENTRE_HOLE])
     rasterBase(e, profile, filament, nominal, RECT.x0, RECT.y0, RECT.w, RECT.h, true, [ring])
     const hops = hopsOf(e.lines)
@@ -156,6 +159,47 @@ describe('roundedRectangleExtrusionSpacingMm', () => {
     expect(() => roundedRectangleExtrusionSpacingMm(0.04, 0.2)).toThrow(
       'Use a wider line or a lower layer height. A 0.04 mm line is too narrow to fill a 0.2 mm layer.',
     )
+  })
+})
+
+describe('perimeterLoopInsetsMm', () => {
+  it('places the loops as PrusaSlicer PerimeterGenerator does: the external one half a width in, each further one a rounded bead spacing in', () => {
+    // 0.42 x 0.2 mm beads, spacing 0.3770796 (the float above). The external loop's centre sits
+    // 0.21 inside the boundary; the first internal loop ext_perimeter_spacing2, the mean of two
+    // equal spacings, further in (0.5870796); the next perimeter_spacing further (0.9641592).
+    const insets = perimeterLoopInsetsMm(3, 0.42, 0.2)
+
+    expect(insets).toHaveLength(3)
+    expect(insets[0]).toBe(0.21)
+    expect(insets[1]).toBeCloseTo(0.5870796, 7)
+    expect(insets[2]).toBeCloseTo(0.9641592, 7)
+  })
+})
+
+describe('perimeterBandMm', () => {
+  it.each([
+    // Two 0.45 x 0.2 mm loops: 0.225 + 0.4070796 + 0.4070796 / 2.
+    ['two 0.45 mm loops', 2, 0.45, 0.8356194],
+    // Three 0.42 x 0.2 mm loops around a hole: 0.21 + 2 x 0.3770796 + 0.3770796 / 2.
+    ['three 0.42 mm loops', 3, 0.42, 1.152699],
+    // A lone external loop: ext_perimeter_spacing / 2 past its centre, 0.225 + 0.2035398.
+    ['a single 0.45 mm loop', 1, 0.45, 0.4285398],
+  ])('ends %s at the PrusaSlicer infill boundary, half a spacing past the innermost centre', (_, loops, width, band) => {
+    expect(perimeterBandMm(loops, width, 0.2)).toBeCloseTo(band, 6)
+  })
+
+  it('is empty without loops', () => {
+    expect(perimeterBandMm(0, 0.45, 0.2)).toBe(0)
+  })
+
+  it.each([
+    // 0.225 + 1.5 x (0.45 - h x 0.2146018) for each layer height.
+    [0.05, 0.8839049],
+    [0.1, 0.8678097],
+    [0.3, 0.8034291],
+  ])('stays inside the widest band of one width per loop at a %s mm layer', (layerHeight, band) => {
+    expect(widestPerimeterBandMm(2, 0.45)).toBe(0.9)
+    expect(perimeterBandMm(2, 0.45, layerHeight)).toBeCloseTo(band, 6)
   })
 })
 

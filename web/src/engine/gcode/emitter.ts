@@ -325,11 +325,48 @@ export const MEASURED_LAYERS = 2
 export const HIGH_FLOW_WARNING_THRESHOLD_MM3_S = 12
 
 /**
- * How far `loops` perimeter loops reach from the boundary they follow, mm: the far edge of the
- * last loop's bead, where the raster behind the loops begins. Also the clearance anything printed
- * on top keeps when it must stay off a fiducial hole's perimeters.
+ * The centreline inset of each of `loops` perimeter loops from the boundary they follow, mm,
+ * outermost first, placed as PrusaSlicer's PerimeterGenerator (classic) places them: the
+ * external loop half its width inside the boundary (offset by ext_perimeter_width / 2), so its
+ * bead's outer side lies on the boundary; the first internal loop ext_perimeter_spacing2, the mean
+ * of ext_perimeter_spacing and perimeter_spacing, further in; every further loop perimeter_spacing
+ * in from the one before. A coupon prints its external and internal perimeters at one width, so
+ * all three spacings are the rounded bead spacing (Flow::spacing, which is
+ * rounded_rectangle_extrusion_spacing): adjacent loops overlap by exactly the h * (1 - pi / 4)
+ * their rounded sides leave open, and the band they form fills solid.
  */
-export function perimeterBandMm(loops: number, lineWidthMm: number): number {
+export function perimeterLoopInsetsMm(loops: number, lineWidthMm: number, layerHeightMm: number): number[] {
+  const extPerimeterSpacing = roundedRectangleExtrusionSpacingMm(lineWidthMm, layerHeightMm)
+  const perimeterSpacing = extPerimeterSpacing
+  const extPerimeterSpacing2 = 0.5 * (extPerimeterSpacing + perimeterSpacing)
+  const insets: number[] = []
+  for (let k = 0; k < loops; k++) {
+    if (k === 0) insets.push(lineWidthMm / 2)
+    else insets.push(insets[k - 1] + (k === 1 ? extPerimeterSpacing2 : perimeterSpacing))
+  }
+  return insets
+}
+
+/**
+ * How far `loops` perimeter loops reach from the boundary they follow, mm: PrusaSlicer's infill
+ * boundary, the innermost loop's centreline offset inward by half its spacing (perimeter_spacing
+ * / 2, or ext_perimeter_spacing / 2 when the external loop is the only one), taken without
+ * PrusaSlicer's infill_overlap so the raster behind the loops meets them with neither a gap nor a
+ * double layer. Also the clearance a raster keeps around a fiducial hole's loops.
+ */
+export function perimeterBandMm(loops: number, lineWidthMm: number, layerHeightMm: number): number {
+  if (loops <= 0) return 0
+  const insets = perimeterLoopInsetsMm(loops, lineWidthMm, layerHeightMm)
+  return insets[loops - 1] + roundedRectangleExtrusionSpacingMm(lineWidthMm, layerHeightMm) / 2
+}
+
+/**
+ * The widest perimeterBandMm can be at this line width, whatever the layer height, mm: one full
+ * width per loop. The rounded bead spacing only falls below the width as the layer height grows,
+ * so the loops never reach past it. For geometry that must stay clear of the loops but is defined
+ * without a layer height.
+ */
+export function widestPerimeterBandMm(loops: number, lineWidthMm: number): number {
   return loops * lineWidthMm
 }
 
@@ -362,7 +399,10 @@ export function rectLoop(
   doExtrude(e, p, f, lineWidthMm, x0, y0, speedMmS)
 }
 
-/** Perimeter loops inset from the part outline and outset around each fiducial hole. */
+/**
+ * Perimeter loops inset from the part outline and outset around each fiducial hole, at
+ * PrusaSlicer's perimeter spacing (perimeterLoopInsetsMm).
+ */
 export function basePerimeters(
   e: Emitter,
   p: PrinterProfile,
@@ -377,13 +417,12 @@ export function basePerimeters(
   speedMmS?: number,
 ): void {
   const speed = speedMmS ?? shellSpeedMmS(p)
-  for (let k = 0; k < PERIMETER_LOOPS; k++) {
-    const ins = (k + 0.5) * lineWidthMm
+  const insets = perimeterLoopInsetsMm(PERIMETER_LOOPS, lineWidthMm, p.layerHeightMm)
+  for (const ins of insets) {
     rectLoop(e, p, f, lineWidthMm, x0 + ins, y0 + ins, x0 + w - ins, y0 + h - ins, speed, doExtrude)
   }
   for (const hole of holes) {
-    for (let k = 0; k < PERIMETER_LOOPS; k++) {
-      const out = (k + 0.5) * lineWidthMm
+    for (const out of insets) {
       rectLoop(e, p, f, lineWidthMm, hole.x0 - out, hole.y0 - out, hole.x1 + out, hole.y1 + out, speed, doExtrude)
     }
   }
@@ -521,9 +560,9 @@ export function frameBandInfill(
   doExtrude: ExtrudeFn = extrude,
   speedMmS?: number,
 ): void {
-  const infillInset = perimeterBandMm(PERIMETER_LOOPS, lineWidthMm)
+  const infillInset = perimeterBandMm(PERIMETER_LOOPS, lineWidthMm, p.layerHeightMm)
   // Raster clearance around a fiducial hole: past the outermost of its perimeter loops.
-  const holeClearance = perimeterBandMm(HOLE_PERIMETER_LOOPS, lineWidthMm)
+  const holeClearance = perimeterBandMm(HOLE_PERIMETER_LOOPS, lineWidthMm, p.layerHeightMm)
   const expanded = holes.map((b) => ({
     x0: b.x0 - holeClearance,
     y0: b.y0 - holeClearance,
@@ -545,9 +584,9 @@ export function frameBandInfill(
     if (!e.retracted) retract(e, p, 1)
     rasterBase(e, p, f, lineWidthMm, s.sx, s.sy, s.w, s.h, angle45, expanded, doExtrude, speedMmS)
   }
+  const holeInsets = perimeterLoopInsetsMm(HOLE_PERIMETER_LOOPS, lineWidthMm, p.layerHeightMm)
   for (const hole of holes) {
-    for (let k = 0; k < HOLE_PERIMETER_LOOPS; k++) {
-      const out = (k + 0.5) * lineWidthMm
+    for (const out of holeInsets) {
       rectLoop(e, p, f, lineWidthMm, hole.x0 - out, hole.y0 - out, hole.x1 + out, hole.y1 + out,
         speedMmS ?? shellSpeedMmS(p), doExtrude)
     }

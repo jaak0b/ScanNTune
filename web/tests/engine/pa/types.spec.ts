@@ -42,8 +42,9 @@ describe('pa types', () => {
 
   it('shortens every default test line at both ends to keep its bead clear of the fiducial holes', () => {
     // Line-local x runs from the 8 mm margin. The top-left hole spans coupon x 4 to 9; the two
-    // 0.45 mm perimeter loops around it reach 0.9 mm further and the bead's half width adds
-    // 0.225 mm, so the first and last lines (y 8 and 68) may start no earlier than coupon x 10.125:
+    // 0.45 mm perimeter loops around it reach at most 0.9 mm further at any layer height, and the
+    // bead's half width adds 0.225 mm, so the first and last lines (y 8 and 68) may start no
+    // earlier than coupon x 10.125:
     // line-local 2.125. The right holes start at coupon x 87, so the lines end at 87 - 1.125 =
     // 85.875: line-local 77.875. The transitions stay at 20 and 60.
     const g = couponGeometry(defaultPaTestSpec())

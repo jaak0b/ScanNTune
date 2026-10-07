@@ -21,6 +21,8 @@ import {
   HIGH_FLOW_WARNING_THRESHOLD_MM3_S,
   newEmitter,
   PERIMETER_LOOPS,
+  perimeterBandMm,
+  perimeterLoopInsetsMm,
   RASTER_SPEED_FACTOR,
   rasterBase,
   rectLoop,
@@ -145,7 +147,8 @@ function emitEmGcode(profile: PrinterProfile, rawFilament: FilamentProfile, spec
   L.push('M221 S100')
 
   const totalLayers = PEDESTAL_LAYERS + MEASURED_LAYERS
-  const infillInset = PERIMETER_LOOPS * nominal
+  const railLoopInsets = perimeterLoopInsetsMm(PERIMETER_LOOPS, nominal, profile.layerHeightMm)
+  const infillInset = perimeterBandMm(PERIMETER_LOOPS, nominal, profile.layerHeightMm)
 
   // Contrasting-color base: two solid layers over the full coupon rectangle (the window is
   // backed, not open; only the fiducial holes stay open), then a filament-change pause.
@@ -176,12 +179,11 @@ function emitEmGcode(profile: PrinterProfile, rawFilament: FilamentProfile, spec
     const railY0 = oy + g.railY0Mm
     const railW = g.couponWidthMm - 2 * g.frameBandMm
     retract(e, profile, 1)
-    travel(e, profile, railX0 + railW - 0.5 * nominal, railY0 + 0.5 * nominal)
+    travel(e, profile, railX0 + railW - railLoopInsets[0], railY0 + railLoopInsets[0])
     retract(e, profile, -1)
     // The loops wind from the rail's right corner because the raster below starts at the
     // right end; ending the perimeters there keeps the hop between them short and wet.
-    for (let k = 0; k < PERIMETER_LOOPS; k++) {
-      const ins = (k + 0.5) * nominal
+    for (const ins of railLoopInsets) {
       rectLoop(e, profile, filament, nominal, railX0 + railW - ins, railY0 + ins,
         railX0 + ins, railY0 + g.railWidthMm - ins,
         firstLayerSpeed ?? profile.travelSpeedMmS * RASTER_SPEED_FACTOR)

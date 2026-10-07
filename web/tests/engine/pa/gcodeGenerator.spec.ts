@@ -229,8 +229,9 @@ describe('generatePaGcode', () => {
   it('prints each test line from x 72.125 to 147.875, switching speed at x 90 and x 130', () => {
     // The default 96 x 76 mm coupon sits at bed origin (62, 72), so line 0 runs at y 72 + 8 = 80.
     // The nominal line spans coupon x 8 to 88 with its transitions at 28 and 68 (bed 90 and 130).
-    // The top-left hole spans coupon x 4 to 9, its two 0.45 mm perimeter loops reach 0.9 mm past
-    // it, and the bead's half width adds 0.225 mm, so the line starts at coupon 10.125 (bed
+    // The top-left hole spans coupon x 4 to 9, its two 0.45 mm perimeter loops reach at most
+    // 0.9 mm past it at any layer height (0.836 mm at 0.2 mm), and the bead's half width adds
+    // 0.225 mm, so the line starts at coupon 10.125 (bed
     // 72.125); the right holes start at coupon 87, so it ends at 85.875 (bed 147.875). At
     // 0.0338488 mm of filament per mm of bead (the extrusionMm case above), the 17.875 mm slow
     // segments take E 0.60505 and the 40 mm fast segment E 1.35395.
@@ -281,27 +282,38 @@ describe('generatePaGcode', () => {
     expect(longTravels.length).toBeLessThanOrEqual(10)
   })
 
-  it('prints two perimeter loops around the part and each fiducial hole', () => {
+  it('prints two perimeter loops around the part and each fiducial hole at PrusaSlicer perimeter spacing', () => {
+    // The default coupon sits at bed origin (62, 72). The external loop's centre lies half the
+    // 0.45 mm width inside the outline (0.225); the second loop one rounded bead spacing further,
+    // 0.45 - 0.2 * (1 - pi / 4) = 0.4070796 mm, so at 0.6320796. Around the holes (bed x 149 or 66,
+    // y 76 or 139 at their min corners) the same insets apply outward.
     const g = generatePaGcode(profile, filament, spec)
-    const geo = couponGeometry(spec)
-    const ox = (profile.bedWidthMm - geo.baseWidthMm) / 2
-    const oy = (profile.bedDepthMm - geo.baseHeightMm) / 2
-    const lw = spec.lineWidthMm
-    // Outer part loop corner, centerline inset 0.5 * lineWidth.
-    const cx = (ox + 0.5 * lw).toFixed(3)
-    const cy = (oy + 0.5 * lw).toFixed(3)
-    expect(g).toContain(`G0 X${cx} Y${cy} `)
-    expect(g).toContain(`X${cx} Y${cy} E`)
-    // Second part loop corner at 1.5 * lineWidth.
-    expect(g).toContain(`X${(ox + 1.5 * lw).toFixed(3)} Y${(oy + 1.5 * lw).toFixed(3)} E`)
-    // Loops around each hole, centerline outset 0.5 and 1.5 * lineWidth from the box.
-    for (const f of geo.fiducials) {
-      const hx0 = ox + f.xMm - geo.fiducialSizeMm / 2
-      const hy0 = oy + f.yMm - geo.fiducialSizeMm / 2
-      for (const out of [0.5 * lw, 1.5 * lw]) {
-        expect(g).toContain(`X${(hx0 - out).toFixed(3)} Y${(hy0 - out).toFixed(3)} E`)
-      }
+    expect(g).toContain('G0 X62.225 Y72.225 ')
+    expect(g).toContain('X62.225 Y72.225 E')
+    expect(g).toContain('X62.632 Y72.632 E')
+    for (const corner of [
+      'X148.775 Y75.775 E', 'X148.368 Y75.368 E',
+      'X148.775 Y138.775 E', 'X148.368 Y138.368 E',
+      'X65.775 Y138.775 E', 'X65.368 Y138.368 E',
+    ]) {
+      expect(g).toContain(corner)
     }
+  })
+
+  it('starts the base raster where the perimeter loops end', () => {
+    // PrusaSlicer's infill boundary: the inner loop's centre (0.6320796) plus half a spacing
+    // (0.2035398) puts the raster's edge 0.8356194 mm inside the outline, bed x 62.836 and y 72.836.
+    // Before the loops moved to the rounded bead spacing the raster started at 0.9 mm (62.900).
+    const lines = generatePaGcode(profile, filament, spec).split('\n')
+    const base = lines.slice(0, lines.indexOf('PAUSE'))
+    const endpoints = base
+      .map((l) => l.match(/^G1 X([\d.]+) Y([\d.]+) E\d/))
+      .filter((m): m is RegExpMatchArray => m !== null)
+      .map((m) => [Number(m[1]), Number(m[2])])
+    const rasterXs = endpoints.map(([x]) => x).filter((x) => x > 62.7 && x < 70)
+    const rasterYs = endpoints.map(([, y]) => y).filter((y) => y > 72.7 && y < 80)
+    expect(Math.min(...rasterXs)).toBe(62.836)
+    expect(Math.min(...rasterYs)).toBe(72.836)
   })
 
   it('ends with the end gcode', () => {
@@ -372,9 +384,9 @@ describe('test line clearance from the fiducial holes', () => {
     return false
   }
 
-  // Each 5 mm hole grown by the 0.9 mm band of the two 0.45 mm perimeter loops around it, plus
-  // the 0.225 mm half width of a bead: a path inside one of these boxes lays its bead on the hole
-  // or on its loops. The default 96 x 76 mm coupon sits at bed origin (62, 72), its holes at bed
+  // Each 5 mm hole grown by 0.9 mm, the widest band the two 0.45 mm perimeter loops around it
+  // reach at any layer height (0.836 mm at the default 0.2 mm), plus the 0.225 mm half width of a
+  // bead: a path inside one of these boxes lays its bead on the hole or on its loops. The default 96 x 76 mm coupon sits at bed origin (62, 72), its holes at bed
   // x 149 to 154 (right) and 66 to 71 (left), y 76 to 81 (bottom) and 139 to 144 (top).
   const DEFAULT_KEEP_OUT: Box[] = [
     { x0: 147.875, y0: 74.875, x1: 155.125, y1: 82.125 },
