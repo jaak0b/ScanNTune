@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  chiSquareSurvivalEvenDof,
   fCriticalValue,
   hampelOutliers,
   logGamma,
@@ -7,6 +8,7 @@ import {
   median,
   medianStandardError,
   mulberry32,
+  normalQuantile,
   regularizedIncompleteBeta,
 } from '../../src/engine/math'
 
@@ -99,6 +101,71 @@ describe('fCriticalValue', () => {
   it('approaches the chi-squared limit for large denominator degrees of freedom', () => {
     // F_0.05(2, infinity) = chi2_0.05(2) / 2 = 5.9915 / 2 = 2.9957 (standard chi2 table).
     expect(fCriticalValue(2, 1e6, 0.05)).toBeCloseTo(2.9957, 3)
+  })
+})
+
+describe('normalQuantile', () => {
+  it('matches the standard normal quantiles in the central region |p - 0.5| <= 0.425', () => {
+    // scipy.stats.norm.ppf: 0.9 -> 1.2815515655, 0.75 -> 0.6744897502, 0.3 -> -0.5244005127.
+    expect(normalQuantile(0.9)).toBeCloseTo(1.2815515655, 9)
+    expect(normalQuantile(0.75)).toBeCloseTo(0.6744897502, 9)
+    expect(normalQuantile(0.3)).toBeCloseTo(-0.5244005127, 9)
+    expect(normalQuantile(0.5)).toBe(0)
+  })
+  it('matches the published standard normal percentage points in the intermediate tail', () => {
+    // Standard normal table: z_0.975 = 1.959964, z_0.95 = 1.644854, z_0.999 = 3.090232.
+    expect(normalQuantile(0.975)).toBeCloseTo(1.959964, 6)
+    expect(normalQuantile(0.95)).toBeCloseTo(1.644854, 6)
+    expect(normalQuantile(0.025)).toBeCloseTo(-1.959964, 6)
+    expect(normalQuantile(0.999)).toBeCloseTo(3.090232, 6)
+    // scipy.stats.norm.ppf(1e-10) = -6.361340902404056.
+    expect(normalQuantile(1e-10)).toBeCloseTo(-6.3613409024, 9)
+  })
+  it('matches the far tail beyond r = 5', () => {
+    // scipy.stats.norm.ppf: 1e-15 -> -7.941345326170998, 1e-300 -> -37.0470962993612.
+    expect(normalQuantile(1e-15)).toBeCloseTo(-7.9413453262, 9)
+    expect(normalQuantile(1e-300)).toBeCloseTo(-37.0470962994, 9)
+    expect(normalQuantile(1 - 1e-15)).toBeCloseTo(7.94, 1)
+  })
+  it('returns infinities at 0 and 1 and NaN outside [0, 1]', () => {
+    expect(normalQuantile(0)).toBe(-Infinity)
+    expect(normalQuantile(1)).toBe(Infinity)
+    expect(normalQuantile(1.5)).toBeNaN()
+    expect(normalQuantile(-0.1)).toBeNaN()
+    expect(normalQuantile(NaN)).toBeNaN()
+  })
+})
+
+describe('chiSquareSurvivalEvenDof', () => {
+  it('returns the tail probability of the published chi-square critical values', () => {
+    // Chi-square table critical values to six decimals: chi2_2(0.95) = 5.991465 and
+    // chi2_20(0.999) = 45.314746; their upper tails are 0.05000 and 0.001000 (4 digits).
+    expect(chiSquareSurvivalEvenDof(5.991465, 2)).toBeCloseTo(0.05, 5)
+    expect(chiSquareSurvivalEvenDof(45.314746, 20)).toBeCloseTo(0.001, 6)
+  })
+  it('matches the closed form at a hand-computed point', () => {
+    // 4 dof at x = 2: e^{-1} (1 + 1) = 2 / e = 0.7357589 (hand-computed).
+    expect(chiSquareSurvivalEvenDof(2, 4)).toBeCloseTo(0.7357589, 7)
+  })
+  it('stays accurate deep in the tail and near 1 for many degrees of freedom', () => {
+    // scipy.stats.chi2.sf(300, 60) = 1.2835090407158946e-33 and sf(100, 200) = 0.99999999968.
+    expect(chiSquareSurvivalEvenDof(300, 60) / 1.2835090407158946e-33).toBeCloseTo(1, 8)
+    expect(chiSquareSurvivalEvenDof(100, 200)).toBeCloseTo(0.99999999968, 10)
+  })
+  it('keeps the log-space sum finite when the terms span more than the double range', () => {
+    // 2000 dof at x = 4000: the summed terms span about e^1688, beyond any double ratio.
+    // scipy.stats.chi2.sf(4000, 2000) = 6.847349459617758e-136.
+    expect(chiSquareSurvivalEvenDof(4000, 2000) / 6.847349459617758e-136).toBeCloseTo(1, 8)
+  })
+  it('is 1 at and below zero and 0 at infinity', () => {
+    expect(chiSquareSurvivalEvenDof(0, 2)).toBe(1)
+    expect(chiSquareSurvivalEvenDof(-3, 6)).toBe(1)
+    expect(chiSquareSurvivalEvenDof(Infinity, 6)).toBe(0)
+  })
+  it('throws on degrees of freedom that are not a positive even integer', () => {
+    expect(() => chiSquareSurvivalEvenDof(1, 3)).toThrow(/even dof/)
+    expect(() => chiSquareSurvivalEvenDof(1, 0)).toThrow(/even dof/)
+    expect(() => chiSquareSurvivalEvenDof(1, 2.5)).toThrow(/even dof/)
   })
 })
 
