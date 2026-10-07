@@ -14,7 +14,7 @@ import { scaleReferenceAtDpi } from '../engine/scannerCalibration'
 import { resolutionRowValue } from '../util/scanResolution'
 import { analyzeEmScans } from '../workerClient'
 import type { EmProcessing } from '../workerClient'
-import { emCorrection } from '../engine/em/emCorrectionFormatter'
+import { emCorrection, formatSlicerFlow } from '../engine/em/emCorrectionFormatter'
 import { generateEmGcodeWithReport } from '../engine/em/gcodeGenerator'
 import { unresolvedVariablesWarning } from '../engine/pa/slicerVariables'
 import {
@@ -177,9 +177,10 @@ const progressText = ref('')
 // The user's CURRENT slicer flow, entered either as a factor (PrusaSlicer extrusion
 // multiplier / Orca flow ratio, e.g. 0.96) or as a percent (Cura-style, e.g. 96). Values
 // above 5 are read as percent; real factors live near 1 and real percents near 100, so the
-// two ranges cannot collide. The corrected value is echoed back in the same style.
-// Deliberately starts empty: the corrected flow is computed relative to this value, so
-// analysis is blocked until the user has entered their actual current setting.
+// two ranges cannot collide. The entry only chooses the display style the corrected value is
+// echoed back in: the coupon prints at 100 percent flow, so the number itself never enters
+// the arithmetic. Deliberately starts empty: analysis is blocked until the user has chosen
+// a style by entering their current setting.
 const currentFlow = ref<number | null>(null)
 const currentFlowValid = computed(() => currentFlow.value !== null && currentFlow.value > 0)
 
@@ -255,36 +256,28 @@ async function analyze(): Promise<void> {
 
 // Result card state, derived from the analyzedSpec snapshot, never the live form state.
 const result = computed(() => processing.value?.result ?? null)
-// Machine-level correction: the coupon always prints at firmware flow 100%, so the M221
-// command is computed against that, independent of any slicer setting.
+// The measured over/under-extrusion ratio, which is the absolute flow to set because the
+// coupon always prints at flow 100%. The M221 command and the slicer flow value below both
+// read this one result.
 const correction = computed(() => {
   const r = result.value
   const s = analyzedSpec.value
   if (!r || !r.success || r.wMm === null || !s) return null
-  return emCorrection(store.selected?.firmware ?? 'Klipper', 100, s.nominalLineWidthMm, r.wMm)
+  return emCorrection(store.selected?.firmware ?? 'Klipper', s.nominalLineWidthMm, r.wMm)
 })
 
-// Corrected slicer flow: the measured over/under-extrusion ratio applied to the user's
-// current slicer flow, echoed in the style it was entered (factor or percent).
+// Corrected slicer flow: the same ratio as the M221 tile, echoed in the style the current
+// flow was entered in (factor or percent). The uncertainty is the standard error of the
+// measured bead width (between-block spread of the analysis) relative to that width, applied
+// to the shown value. Presented the same way the input shaper states its frequency
+// confidence interval.
 const newSlicerFlow = computed(() => {
   const r = result.value
-  const s = analyzedSpec.value
-  if (!r || !r.success || r.wMm === null || !s) return null
+  const c = correction.value
   const entered = currentFlow.value
-  if (entered === null || entered <= 0) return null
-  const isPercent = entered > 5
-  const factor = isPercent ? entered / 100 : entered
-  const corrected = factor * (s.nominalLineWidthMm / r.wMm)
-  // Uncertainty on the corrected flow: the standard error of the measured bead width
-  // (between-block spread of the analysis), propagated through the correction ratio.
-  // Presented the same way the input shaper states its frequency confidence interval.
-  const uncertainty = r.seMm !== null ? (r.seMm / r.wMm) * corrected : null
-  if (isPercent) {
-    const ci = uncertainty !== null ? ` ± ${(uncertainty * 100).toFixed(1)}` : ''
-    return `${(corrected * 100).toFixed(1)}${ci}%`
-  }
-  const ci = uncertainty !== null ? ` ± ${uncertainty.toFixed(3)}` : ''
-  return `${corrected.toFixed(3)}${ci}`
+  if (!r || !c || entered === null || entered <= 0) return null
+  const relativeSe = r.seMm !== null && r.wMm !== null ? r.seMm / r.wMm : null
+  return formatSlicerFlow(c.newFlowPercent, relativeSe, entered)
 })
 const pitchScaleOff = computed(() => {
   const p = result.value?.pitchScale
@@ -566,10 +559,9 @@ const scanCards = computed<ScanCard[]>(() => {
         />
       </div>
       <p class="tip mb-3">
-        Enter the current value from your slicer, either as an extrusion multiplier / flow
-        ratio (0.96) or as a percentage (96). The corrected value is computed relative to
-        this setting and is shown in the same format, so the analysis cannot run until it
-        is entered.
+        Enter your current slicer flow as an extrusion multiplier / flow ratio (0.96) or as a
+        percentage (96). The result is shown in the same format, and the coupon always prints
+        at 100 percent flow, so the entry does not change its value.
       </p>
       <div class="scan-inputs mb-3">
         <label class="dropzone" :class="{ 'dropzone-disabled': !isCalibrated || analysisStarted }">
