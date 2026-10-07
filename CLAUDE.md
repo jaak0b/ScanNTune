@@ -168,7 +168,9 @@ perimeters. Measurement (`em/fiducialAligner`, `em/gapMeasurer`, `em/emAnalyzer`
 width is the gap complement `w = measured local pitch - measured gap` (line centres are
 extrusion-immune, so printer axis stretch and material shrinkage cancel), edges located by a gradient
 centroid (center-of-gravity) sub-pixel estimator, samples pooled over both rows, MAD-cleaned, and
-summarized by the median. Distances convert to true mm ONLY via the card calibration px/mm
+summarized by the median. The flow output is expressed in the slicers' rounded bead model: the
+cross-section the coupon commanded over PrusaSlicer's `Flow::mm3_per_mm` (a rectangle with
+semicircular ends) at the measured width. Distances convert to true mm ONLY via the card calibration px/mm
 (`useCalibration`, a hard requirement for this flow); the affine is for locating features. The block
 separators are NOT a width reference (their air is `2 + nominal - w`, w-dependent); they provide the
 `biasMm` cross-check residual. `pitchScale` (measured vs commanded pitch) is a per-axis printer-scale

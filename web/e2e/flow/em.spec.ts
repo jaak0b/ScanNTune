@@ -3,8 +3,10 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { seedCalibration } from '../helpers/seedCalibration'
 
-// Literals below are copied verbatim from em.flow.md / golden/PROVENANCE.md. No math, no
-// derivation: the test only transcribes and compares.
+// Literals below are copied verbatim from em.flow.md / golden/PROVENANCE.md; the test only
+// transcribes and compares. The flow literals are the one owner-directed exception: they were
+// re-derived from the frozen widths when the flow output moved to the slicers' rounded bead
+// model, and each carries its derivation (see PROVENANCE.md).
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 
@@ -37,7 +39,9 @@ const cases: EmCase[] = [
     fixtures: ['golden/em_widegap_0d_600dpi_black_white.jpg', 'golden/em_widegap_180d_600dpi_black_white.jpg'],
     dpi: 600,
     pxPerMm: 23.622,
-    flow: { value: 1.0028, tolerance: 0.01 },
+    // Coupon commands 0.42 x 0.2 = 0.084 mm^2; rounded bead at w = 0.4188:
+    // 0.2 x (0.4188 - 0.2 x (1 - pi / 4)) = 0.0751759 mm^2; 0.084 / 0.0751759 = 1.1174.
+    flow: { value: 1.1174, tolerance: 0.01 },
     width: { value: 0.4188, tolerance: 0.01 },
     blocksText: '36 of 36',
     bias: { value: 0.0025, tolerance: 0.003 },
@@ -48,7 +52,9 @@ const cases: EmCase[] = [
     fixtures: ['golden/em_widegap_0d_600dpi_black_white.jpg'],
     dpi: 600,
     pxPerMm: 23.622,
-    flow: { value: 1.006, tolerance: 0.015 },
+    // Rounded bead at w = 0.4175: 0.2 x (0.4175 - 0.0429204) = 0.0749159 mm^2;
+    // 0.084 / 0.0749159 = 1.1213.
+    flow: { value: 1.1213, tolerance: 0.015 },
     width: { value: 0.4175, tolerance: 0.01 },
     blocksText: '18 of 18',
     bias: { value: 0.0015, tolerance: 0.003 },
@@ -59,7 +65,8 @@ const cases: EmCase[] = [
     fixtures: ['golden/em_widegap_0d_300dpi_black_white.jpg'],
     dpi: 300,
     pxPerMm: 11.811,
-    flow: { value: 1.006, tolerance: 0.015 },
+    // Same width as the 600 dpi single scan, so the same derivation: 0.084 / 0.0749159 = 1.1213.
+    flow: { value: 1.1213, tolerance: 0.015 },
     width: { value: 0.4175, tolerance: 0.01 },
     blocksText: '18 of 18',
     bias: { value: 0.0001, tolerance: 0.003 },

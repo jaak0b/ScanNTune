@@ -50,9 +50,13 @@ filament and the plate lies flat on the glass (a plate wider than the scanner's 
 rides the bezel and lifts the part into blur; surface the caveat in the UI). Correction is a
 ratio:
 
-    new_flow = current_flow * (nominal_width / w)
+    new_flow = A_coupon(nominal_width, h) / (h * (w - h * (1 - pi / 4)))
 
-so it is valid regardless of whether the error originates from flow setting, filament
+where the denominator is the slicers' rounded bead cross-section at the measured width w and
+layer height h (PrusaSlicer `Flow::mm3_per_mm`, also OrcaSlicer and SuperSlicer), and A_coupon is
+the cross-section the coupon commands. The coupon prints at flow 1.0, so new_flow is the absolute
+value to set; the M221 override is new_flow / current_flow. The correction is a ratio, so it
+is valid regardless of whether the error originates from flow setting, filament
 diameter, or extruder steps. Resolution comes from averaging many identical gaps per
 block and interpolating between pitch steps via the intercept; the practical floor is
 filament diameter variation (~1% volumetric on standard spools), which the UI must

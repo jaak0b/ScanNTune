@@ -6,6 +6,7 @@ import {
   highFlowWarning,
   newEmitter,
   rasterBase,
+  roundedBeadCrossSectionMm2,
   travel,
 } from '../../../src/engine/gcode/emitter'
 
@@ -164,6 +165,14 @@ describe('travel', () => {
       'G0 X30.000 Y25.000 F9000',
       'G0 X10.000 Y25.000 F9000',
     ])
+  })
+})
+
+describe('roundedBeadCrossSectionMm2', () => {
+  it('models the bead as a rectangle with semicircular ends of the outer width', () => {
+    // 0.42 x 0.2 bead: a (0.42 - 0.2) x 0.2 rectangle plus a 0.2 mm diameter circle split over
+    // its two ends, 0.044 + 0.0314159 = 0.0754159 mm^2.
+    expect(roundedBeadCrossSectionMm2(0.42, 0.2)).toBeCloseTo(0.0754159, 7)
   })
 })
 

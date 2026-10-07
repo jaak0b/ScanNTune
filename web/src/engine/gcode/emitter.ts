@@ -23,7 +23,16 @@ export function newEmitter(openAreas: Box[] = []): Emitter {
   return { lines: [], x: 0, y: 0, retracted: false, openAreas }
 }
 
-/** Standard slicer bead cross-section, approximated as width times layer height, mm^2. */
+/**
+ * The cross-section of a non-bridge bead as PrusaSlicer, OrcaSlicer and SuperSlicer model it
+ * (PrusaSlicer Flow::mm3_per_mm), mm^2: a rectangle with semicircular ends, where the width is
+ * the bead's outer silhouette, the width a scan of the bead measures.
+ */
+export function roundedBeadCrossSectionMm2(lineWidthMm: number, layerHeightMm: number): number {
+  return layerHeightMm * (lineWidthMm - layerHeightMm * (1 - 0.25 * Math.PI))
+}
+
+/** The bead cross-section every coupon commands: width times layer height, mm^2. */
 export function beadCrossSectionMm2(lineWidthMm: number, layerHeightMm: number): number {
   return lineWidthMm * layerHeightMm
 }

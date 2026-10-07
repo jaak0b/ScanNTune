@@ -59,7 +59,7 @@ Spec header for every case: pitch 1.14 to 1.35 mm, 9 blocks x 5 lines, nominal l
 
 | field | value | tolerance | rationale |
 |---|---|---|---|
-| new slicer flow (entered current flow 1.0) | 1.0028 | ± 0.01 | Matches the pipeline's own stated uncertainty (± 0.0033) with a wide margin for UI rounding (`toFixed(3)`) and the small residual between this run and the single-scan captures below. |
+| new slicer flow (entered current flow 1.0) | 1.1174 | ± 0.01 | Re-derived from the frozen width (see "Flow output in the rounded bead model" below): 0.084 / (0.2 x (0.4188 - 0.2 x (1 - pi / 4))) = 0.084 / 0.0751759 = 1.1174. The band still covers the propagated uncertainty: the width's standard error (about 0.0014 mm) times the rounded model's width sensitivity (1.114) gives about 0.004, plus UI rounding (`toFixed(3)`). |
 | measured line width | 0.4188 mm | ± 0.01 mm | Same margin rationale; the two single-scan widths (0.4175, 0.4202) bracket this by about 0.001 mm either side. |
 | blocks measured | 36 of 36 | exact | 18 blocks per scan (9 blocks x 2 rows) x 2 scans; both scans align and every block is measured, no dropped blocks. |
 | separator check (bias) | 0.0025 mm | ± 0.003 mm | Matches the pipeline's `biasMm=0.0025`; band covers rounding. |
@@ -69,7 +69,7 @@ Spec header for every case: pitch 1.14 to 1.35 mm, 9 blocks x 5 lines, nominal l
 
 | field | value | tolerance | rationale |
 |---|---|---|---|
-| new slicer flow (entered current flow 1.0) | 1.0060 | ± 0.015 | Matches the pipeline's stated uncertainty (± 0.0051) with margin. |
+| new slicer flow (entered current flow 1.0) | 1.1213 | ± 0.015 | Re-derived from the frozen width: 0.084 / (0.2 x (0.4175 - 0.0429204)) = 0.084 / 0.0749159 = 1.1213. The originally stated uncertainty (± 0.0051) scaled by the width sensitivity (about 1.11) is about ± 0.006, inside the band. |
 | measured line width | 0.4175 mm | ± 0.01 mm | Direct pipeline output `wMm=0.4175`. |
 | blocks measured | 18 of 18 | exact | 9 blocks x 2 rows, single scan, full detection. |
 | separator check (bias) | 0.0015 mm | ± 0.003 mm | Matches pipeline's `biasMm=0.0015`. |
@@ -79,11 +79,23 @@ Spec header for every case: pitch 1.14 to 1.35 mm, 9 blocks x 5 lines, nominal l
 
 | field | value | tolerance | rationale |
 |---|---|---|---|
-| new slicer flow (entered current flow 1.0) | 1.0060 | ± 0.015 | Matches the pipeline's stated uncertainty (± 0.0022) with margin, and the same nominal correction as the matching 600 dpi single scan (both read the same physical bead width against the same nominal). |
+| new slicer flow (entered current flow 1.0) | 1.1213 | ± 0.015 | Re-derived from the frozen width, which equals the 600 dpi single scan's, so the same 0.084 / 0.0749159 = 1.1213 (both read the same physical bead width against the same nominal). The originally stated uncertainty (± 0.0022) scaled by the width sensitivity is about ± 0.003, inside the band. |
 | measured line width | 0.4175 mm | ± 0.01 mm | Direct pipeline output `wMm=0.4175`, matching the 600 dpi single-scan capture at the same orientation, cross-DPI agreement. |
 | blocks measured | 18 of 18 | exact | 9 blocks x 2 rows, single scan, full detection at the lower resolution. |
 | separator check (bias) | 0.0001 mm | ± 0.003 mm | Matches pipeline's `biasMm=0.0001`. |
 | pitch scale | 0.9962 | ± 0.003 | Matches pipeline's `pitchScale=0.99623`. |
+
+## Flow output in the rounded bead model
+
+The new slicer flow rows were first frozen as nominal width over measured width (1.0028 for the
+pair, 1.0060 for each single scan). The flow output was then moved to the bead model PrusaSlicer,
+OrcaSlicer and SuperSlicer slice with (PrusaSlicer `Flow::mm3_per_mm`, a rectangle with
+semicircular ends): new flow = the cross-section the coupon commanded / h x (w - h x (1 - pi / 4))
+at the measured width w and layer height h. The measurement is unchanged, so the frozen widths
+(0.4188 and 0.4175 mm) still stand, and the flow rows above are re-derived from them with the
+coupon this sample was printed from: a 0.42 x 0.2 mm rectangle, 0.084 mm^2, and
+h x (1 - pi / 4) = 0.0429204 mm at h = 0.2 mm. These flow rows are a formula check on the frozen
+widths, not a new owner capture; the widths and every other row keep their owner-reviewed tier.
 
 ## Gaps for the phase 2 implementer
 

@@ -14,7 +14,11 @@ import { scaleReferenceAtDpi } from '../engine/scannerCalibration'
 import { resolutionRowValue } from '../util/scanResolution'
 import { analyzeEmScans } from '../workerClient'
 import type { EmProcessing } from '../workerClient'
-import { emCorrection, formatSlicerFlow } from '../engine/em/emCorrectionFormatter'
+import {
+  emCorrection,
+  flowRatioRelativeSe,
+  formatSlicerFlow,
+} from '../engine/em/emCorrectionFormatter'
 import { EM_OVERRIDDEN_SETTINGS, generateEmGcodeWithReport } from '../engine/em/gcodeGenerator'
 import { restartNoteText } from '../engine/gcode/couponShell'
 import { unresolvedVariablesWarning } from '../engine/pa/slicerVariables'
@@ -212,6 +216,9 @@ function onProgress(p: EmProgress): void {
 // The spec the current `processing` result was actually analyzed against, so the result card
 // stays consistent even if the form fields above change afterwards.
 const analyzedSpec = shallowRef<EmTestSpec | null>(null)
+// The layer height the coupon's measured layers printed at (the profile's), snapshotted with
+// the spec: the flow ratio is expressed in the slicers' rounded bead model, which depends on it.
+const analyzedLayerHeightMm = shallowRef<number | null>(null)
 
 // The calibration is a hard requirement, so the pick guard refuses files without one.
 const {
@@ -234,6 +241,7 @@ const {
   canPick: () => calibration.calibration !== null,
   onReset: () => {
     analyzedSpec.value = null
+    analyzedLayerHeightMm.value = null
   },
   onSettled: () => {
     progressText.value = ''
@@ -250,6 +258,7 @@ async function analyze(): Promise<void> {
   const cal = calibration.calibration
   if (files.length === 0 || analyzing.value || !cal || !currentFlowValid.value) return
   const usedSpec = spec.value
+  const usedLayerHeightMm = flowProfile.value.layerHeightMm
   progressText.value = 'Reading the scan'
   await analyzeWith(async () => {
     const bytesList = await Promise.all(files.map((file) => readBytes(file)))
@@ -258,6 +267,7 @@ async function analyze(): Promise<void> {
     const scanPxPerMm = scaleReferenceAtDpi(cal, cal.dpi)
     const p = await analyzeEmScans(bytesList, usedSpec, scanPxPerMm, cal.dpi, onProgress)
     analyzedSpec.value = usedSpec
+    analyzedLayerHeightMm.value = usedLayerHeightMm
     return p
   })
 }
@@ -271,22 +281,26 @@ const result = computed(() => processing.value?.result ?? null)
 const correction = computed(() => {
   const r = result.value
   const s = analyzedSpec.value
+  const h = analyzedLayerHeightMm.value
   const entered = currentFlow.value
-  if (!r || !r.success || r.wMm === null || !s || entered === null || entered <= 0) return null
-  return emCorrection(store.selected?.firmware ?? 'Klipper', s.nominalLineWidthMm, r.wMm, entered)
+  if (!r || !r.success || r.wMm === null || !s || h === null || entered === null || entered <= 0) {
+    return null
+  }
+  return emCorrection(store.selected?.firmware ?? 'Klipper', s.nominalLineWidthMm, h, r.wMm, entered)
 })
 
 // Corrected slicer flow: the absolute measured ratio the M221 command also derives from,
-// echoed in the style the current flow was entered in (factor or percent). The uncertainty is the standard error of the
-// measured bead width (between-block spread of the analysis) relative to that width, applied
-// to the shown value. Presented the same way the input shaper states its frequency
-// confidence interval.
+// echoed in the style the current flow was entered in (factor or percent). The uncertainty is
+// the standard error of the measured bead width (between-block spread of the analysis)
+// propagated into the flow ratio, applied to the shown value. Presented the same way the input
+// shaper states its frequency confidence interval.
 const newSlicerFlow = computed(() => {
   const r = result.value
   const c = correction.value
+  const h = analyzedLayerHeightMm.value
   const entered = currentFlow.value
-  if (!r || !c || entered === null || entered <= 0) return null
-  const relativeSe = r.seMm !== null && r.wMm !== null ? r.seMm / r.wMm : null
+  if (!r || !c || h === null || entered === null || entered <= 0) return null
+  const relativeSe = r.seMm !== null && r.wMm !== null ? flowRatioRelativeSe(r.wMm, r.seMm, h) : null
   return formatSlicerFlow(c.newFlowPercent, relativeSe, entered)
 })
 const pitchScaleOff = computed(() => {
