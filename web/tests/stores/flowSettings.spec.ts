@@ -33,10 +33,6 @@ const IS: IsSettings = {
   linesPerSpeed: 5,
   measuredLineMm: 30,
   linePitchMm: 2.5,
-  sweep: true,
-  sweepFromHz: 35,
-  sweepToHz: 150,
-  sweepCycles: 16,
   scanPlace: 'part',
   partColors: 'single',
 }
@@ -158,6 +154,37 @@ describe('per-flow settings stores', () => {
     setActivePinia(createPinia())
     usePrinterProfiles().select(id)
     expect(useIsSettings().settings).toEqual(IS)
+  })
+
+  it('loads an input shaper entry stored with the retired resonant run-up fields, dropping them', () => {
+    // Earlier versions persisted four run-up sweep fields with every entry. They are no
+    // longer settings: the entry must still load, with only the current fields.
+    const id = addProfile()
+    const legacy = {
+      lineSpeedMmS: 150,
+      cornerSpeedMmS: 20,
+      linesPerSpeed: 5,
+      measuredLineMm: 30,
+      linePitchMm: 2.5,
+      sweep: true,
+      sweepFromHz: 35,
+      sweepToHz: 150,
+      sweepCycles: 16,
+      scanPlace: 'part',
+      partColors: 'single',
+    }
+    localStorage.setItem('scanntune.settings.is', JSON.stringify({ [id]: legacy }))
+    setActivePinia(createPinia())
+    usePrinterProfiles().select(id)
+    expect(useIsSettings().settings).toEqual({
+      lineSpeedMmS: 150,
+      cornerSpeedMmS: 20,
+      linesPerSpeed: 5,
+      measuredLineMm: 30,
+      linePitchMm: 2.5,
+      scanPlace: 'part',
+      partColors: 'single',
+    })
   })
 
   it('reset removes the stored entry, so the speeds are gone rather than reverting to a number', () => {

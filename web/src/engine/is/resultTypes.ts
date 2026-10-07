@@ -33,8 +33,7 @@ export interface IsLineOutcome {
   lineIndex: number
   axis: IsAxis
   speedMmS: number
-  /** The line's rung of the corner-speed excitation ladder, mm/s (the spec's corner
-   *  speed on every line when the sweep is enabled). */
+  /** The line's rung of the corner-speed excitation ladder, mm/s. */
   cornerSpeedMmS: number
   /** True when the tracer could follow the line's bead in the scan. */
   traced: boolean

@@ -300,14 +300,13 @@ function refusedAxis(
  * the scan can resolve sits on a faster rung than every line it cannot, the coupon
  * self-ranged and the remedy is a faster ladder. The line speed bounds the corner speed
  * (validateIsSpec), so the advice says when the line speed has to rise with it. Null when
- * the sweep replaced the ladder or the amplitude pattern does not show that split.
+ * the amplitude pattern does not show that split.
  */
 export function ladderAdvice(
   spec: IsTestSpec,
   lines: IsLineOutcome[],
   amplitudeFloorMm: number,
 ): string | null {
-  if (spec.sweep) return null
   const withAmp = lines.filter((l) => l.amplitudeMm !== null)
   const resolvable = withAmp.filter((l) => l.amplitudeMm! >= amplitudeFloorMm)
   const unresolvable = withAmp.filter((l) => l.amplitudeMm! < amplitudeFloorMm)

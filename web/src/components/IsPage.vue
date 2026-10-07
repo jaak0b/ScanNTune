@@ -73,10 +73,6 @@ const {
     linesPerSpeed: specDefaults.value.linesPerSpeed,
     measuredLineMm: specDefaults.value.measuredLineMm,
     linePitchMm: specDefaults.value.linePitchMm,
-    sweep: specDefaults.value.sweep,
-    sweepFromHz: specDefaults.value.sweepFromHz,
-    sweepToHz: specDefaults.value.sweepToHz,
-    sweepCycles: specDefaults.value.sweepCycles,
     scanPlace: 'part' as ScanPlace,
     partColors: 'single' as PartColors,
   }),
@@ -94,10 +90,6 @@ const {
   linesPerSpeed,
   measuredLineMm: measuredLine,
   linePitchMm: linePitch,
-  sweep,
-  sweepFromHz,
-  sweepToHz,
-  sweepCycles,
   scanPlace,
   partColors,
 } = settingsForm
@@ -136,10 +128,6 @@ const spec = computed<IsTestSpec | null>(() => {
     linesPerSpeed: linesPerSpeed.value ?? specDefaults.value.linesPerSpeed,
     measuredLineMm: measuredLine.value ?? specDefaults.value.measuredLineMm,
     linePitchMm: linePitch.value ?? specDefaults.value.linePitchMm,
-    sweep: sweep.value,
-    sweepFromHz: sweepFromHz.value ?? specDefaults.value.sweepFromHz,
-    sweepToHz: sweepToHz.value ?? specDefaults.value.sweepToHz,
-    sweepCycles: sweepCycles.value ?? specDefaults.value.sweepCycles,
     axes: ['x', 'y'] as IsAxis[],
     placement: (scanPlace.value === 'plate' ? 'front' : 'center') as IsTestSpec['placement'],
     contrastBase: partColors.value === 'base',
@@ -489,52 +477,6 @@ async function analyze(): Promise<void> {
           :text="highFlowText"
         />
         <p v-if="accelNote" class="tip mb-0">{{ accelNote }}</p>
-      </div>
-      <v-divider class="my-3" />
-      <div class="field-group mt-1" :class="{ 'optional-off': !sweep }">
-        <span class="group-label">Resonant run-up</span>
-        <v-switch
-          v-model="sweep"
-          label="Resonant run-up (frequency sweep)"
-          density="compact"
-          color="primary"
-          hide-details
-          data-testid="is-sweep-toggle"
-        />
-        <v-expand-transition>
-          <p v-if="!sweep" class="tip mt-0 mb-0" data-testid="is-sweep-note">
-            Enable this when the printed lines show almost no ringing after the corner, which
-            is common on small stiff printers. The run-up becomes a comb of corners that
-            sweeps the frequency band and builds the ringing up before each measured line,
-            at the cost of a larger coupon.
-          </p>
-        </v-expand-transition>
-        <div v-if="sweep" class="fields mt-2">
-          <NumericField
-            v-model="sweepFromHz"
-            label="Sweep start (Hz)"
-            :step="5"
-            :min="20"
-            data-testid="is-sweep-from"
-            hint="Start of the excited frequency band."
-          />
-          <NumericField
-            v-model="sweepToHz"
-            label="Sweep end (Hz)"
-            :step="5"
-            :min="25"
-            data-testid="is-sweep-to"
-            hint="End of the excited frequency band, reached right before the corner."
-          />
-          <NumericField
-            v-model="sweepCycles"
-            label="Sweep cycles"
-            :step="1"
-            :min="4"
-            data-testid="is-sweep-cycles"
-            hint="More cycles strengthen the buildup but lengthen the coupon."
-          />
-        </div>
       </div>
       <v-divider class="my-3" />
       <div class="field-group mt-1">
@@ -957,12 +899,6 @@ async function analyze(): Promise<void> {
 }
 .soft-alert {
   font-size: 0.875rem;
-}
-.optional-off {
-  opacity: 0.75;
-}
-.optional-off .group-label {
-  opacity: 0.4;
 }
 .alert-stack > * + * {
   margin-top: 8px;

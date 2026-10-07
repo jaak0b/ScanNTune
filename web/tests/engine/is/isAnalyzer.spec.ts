@@ -102,31 +102,6 @@ describe('analyzeIsCoupon render recovery', () => {
   )
 
   it(
-    'recovers the ground truth from a resonant run-up (sweep) coupon: the teeth change the leg, not the read',
-    async () => {
-      // The sweep only reshapes the run-up legs; the measured segments and the fitted
-      // ringing model are unchanged, so recovery must hold with teeth drawn in the window.
-      const sweepSpec: IsTestSpec = { ...ySpec, sweep: true }
-      const truth = { y: { frequencyHz: 118, dampingRatio: 0.12, ringAmpMm: 0.2 } }
-      const r = await analyzePair(
-        sweepSpec,
-        { truth, quarterTurns: 0, flipped: true },
-        { truth, quarterTurns: 1, flipped: true },
-      )
-      expect(r.aligned).toBe(true)
-      const y = axisOf(r, 'y')
-      expect(y.refusals).toEqual([])
-      expect(y.accepted).toBe(true)
-      expect(Math.abs(y.frequencyHz! - 118)).toBeLessThanOrEqual(2.4)
-      expect(Math.abs(y.dampingRatio! - 0.12)).toBeLessThanOrEqual(0.03)
-    },
-    // The single-axis sweep coupon is no larger than the two-axis renders; its cost was the
-    // renderer testing some 200 sweep teeth per line at every sub-pixel, which the renderer
-    // now skips outside the teeth's footprint without changing a rendered value.
-    240000,
-  )
-
-  it(
     'measures both axes in the field regime: faint 0.05 mm class ringing under scan noise',
     async () => {
       // The regime real stiff printers produce: ring amplitudes a few hundredths of a
@@ -518,8 +493,6 @@ describe('analyzeIsCoupon render recovery', () => {
     // No split (a slow rung resolved): no advice.
     const mixed = [outcome(20, 0.003), outcome(45, 0.001), outcome(70, 0.003), outcome(100, 0.006)]
     expect(ladderAdvice(ySpec, mixed, floor)).toBeNull()
-    // The sweep replaces the ladder: never advised there.
-    expect(ladderAdvice({ ...ySpec, sweep: true }, split, floor)).toBeNull()
   })
 
   it('reports a failed alignment with a reason on a blank image', async () => {

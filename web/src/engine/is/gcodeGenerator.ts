@@ -34,12 +34,7 @@ import {
   retract,
   travel,
 } from '../gcode/emitter'
-import {
-  isCouponGeometry,
-  type IsSegment,
-  MIN_CORNER_SPEED_MM_S,
-  sweepPeakSpeedMmS,
-} from './couponGeometry'
+import { isCouponGeometry, type IsSegment, MIN_CORNER_SPEED_MM_S } from './couponGeometry'
 import { dipsForMove, extrudeWithDips, type PrintedBead } from './crossings'
 import { disableShapingCommands, isMotionLimitCommands } from './firmwareMotion'
 import { fitSpecToPrinter, type IsTestSpec, rampWarnings, validateIsSpec } from './types'
@@ -57,10 +52,7 @@ export const IS_OVERRIDDEN_SETTINGS: readonly OverriddenSetting[] = couponOverri
 
 /**
  * The high-flow warnings of a fitted spec: one per speed tier whose measured lines exceed the
- * flow limit, and one for the resonance sweep, whose fastest chord runs at the vector sum of
- * the corner speed and the peak lateral swing speed (about 18.75 mm/s under the
- * accel_per_hz scaling), so at high corner speeds it can pass the limit even when every tier
- * stays below it. Judged on the measured layers' nominal bead, extrusion multiplier included.
+ * flow limit. Judged on the measured layers' nominal bead, extrusion multiplier included.
  */
 export function isFlowWarnings(
   profile: PrinterProfile,
@@ -68,15 +60,9 @@ export function isFlowWarnings(
   fitted: IsTestSpec,
 ): string[] {
   const nominal = profile.nozzleDiameterMm * NOMINAL_WIDTH_FACTOR
-  const warnings = fitted.speedsMmS.map((speed) =>
-    highFlowWarning(profile, filament, nominal, speed, 'line speed'),
-  )
-  if (fitted.sweep) {
-    warnings.push(
-      highFlowWarning(profile, filament, nominal, sweepPeakSpeedMmS(fitted), 'corner speed'),
-    )
-  }
-  return warnings.filter((w): w is string => w !== null)
+  return fitted.speedsMmS
+    .map((speed) => highFlowWarning(profile, filament, nominal, speed, 'line speed'))
+    .filter((w): w is string => w !== null)
 }
 
 export function generateIsGcode(
@@ -208,7 +194,7 @@ function finishLine(
 }
 
 function emitIsGcode(profile: PrinterProfile, filament: FilamentProfile, spec: IsTestSpec): string {
-  const g = isCouponGeometry(spec, profile.squareCornerVelocityMmS)
+  const g = isCouponGeometry(spec)
   const { ox, oy } = couponOrigin(
     profile,
     g.couponWidthMm,
@@ -237,27 +223,19 @@ function emitIsGcode(profile: PrinterProfile, filament: FilamentProfile, spec: I
       [
         '; ScanNTune input shaper resonance test',
         `; speed tiers ${spec.speedsMmS.join(', ')} mm/s, acceleration ${spec.accelMmS2} mm/s^2`,
-        ...(spec.sweep
-          ? [
-              `; resonant run-up sweep ${spec.sweepFromHz} to ${spec.sweepToHz} Hz over ` +
-                `${spec.sweepCycles} cycles`,
-            ]
-          : [
-              `; corner-speed excitation ladder ${MIN_CORNER_SPEED_MM_S} to ` +
-                `${spec.cornerSpeedMmS} mm/s across the ${spec.linesPerSpeed} lines of each tier`,
-            ]),
+        `; corner-speed excitation ladder ${MIN_CORNER_SPEED_MM_S} to ` +
+          `${spec.cornerSpeedMmS} mm/s across the ${spec.linesPerSpeed} lines of each tier`,
       ],
       // The test rings the frame on purpose: the spec's acceleration and corner speed
       // replace the profile's limits for the whole print, and the velocity ceiling is
       // raised to the fastest commanded move so a low configured maximum can never clamp
-      // a tier or a sweep chord (a clamped chord stretches its time slice and shifts the
-      // cell off its labeled frequency).
+      // a tier.
       {
         motionLines: isMotionLimitCommands(
           profile,
           spec.accelMmS2,
           spec.cornerSpeedMmS,
-          Math.max(...spec.speedsMmS, sweepPeakSpeedMmS(spec), profile.travelSpeedMmS),
+          Math.max(...spec.speedsMmS, profile.travelSpeedMmS),
         ),
       },
     ),
@@ -333,14 +311,6 @@ function emitIsGcode(profile: PrinterProfile, filament: FilamentProfile, spec: I
         // emitted corner limit equals the TOP rung, an upper bound, so every slower rung
         // passes the corner unbraked on all firmwares.
         const runUpSpeed = Math.min(line.cornerSpeedMmS, speed)
-        // The sweep chords carry their own commanded speeds; the pedestal layer scales
-        // them uniformly in time (same path, slower everywhere) so even the fastest
-        // chord, the peak of the deepest swing, stays at or below the first layer
-        // speed cap. The pedestal only needs to stick and is not measured.
-        const pedestalScale =
-          pedestal && spec.sweep
-            ? Math.min(1, profile.firstLayerSpeedMmS / sweepPeakSpeedMmS(spec))
-            : 1
         travel(e, profile, ox + line.prime.x0, oy + line.prime.y0)
         primeOnTheMove(e, profile, filament, width, ox + line.prime.x1, oy + line.prime.y1,
           primeSpeed)
@@ -351,19 +321,6 @@ function emitIsGcode(profile: PrinterProfile, filament: FilamentProfile, spec: I
         // taken without deceleration, so the corner dumps no pressure and the bead stays
         // continuous through it.
         extrude(e, profile, filament, width, ox + line.runUp.x1, oy + line.runUp.y1, runUpSpeed)
-        // Resonant run-up chords (empty without the sweep): the ramped zigzag of
-        // Klipper's resonance tester, constant forward speed with a bang-bang lateral
-        // acceleration. Each chord is commanded at its own average speed so every sweep
-        // cell lasts exactly one forcing period. Adjacent chords change each axis's velocity
-        // by at most the profile's square corner velocity, far below the corner limit this
-        // test emits, and no cell's lateral acceleration exceeds the test acceleration, so
-        // the planner's junction model gives no reason to brake between chords; that rests
-        // on the model and has not been checked on a toolhead trace. One continuous bead
-        // throughout, ending on the corner.
-        for (const tooth of line.teeth) {
-          extrude(e, profile, filament, width, ox + tooth.x1, oy + tooth.y1,
-            tooth.speedMmS * pedestalScale)
-        }
         // Crossings over beads printed earlier this layer are taken at full flow, the way
         // grid infill crosses itself: the free beads must weld into the stiff grid, and
         // with pressure advance disabled a zero-E stretch drains nozzle pressure and

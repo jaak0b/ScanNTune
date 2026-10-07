@@ -7,10 +7,6 @@ export type IsSettings = ScanPlanSettings & {
   linesPerSpeed: number | null
   measuredLineMm: number | null
   linePitchMm: number | null
-  sweep: boolean
-  sweepFromHz: number | null
-  sweepToHz: number | null
-  sweepCycles: number | null
 }
 
 const FIELDS: FieldKinds<IsSettings> = {
@@ -19,10 +15,6 @@ const FIELDS: FieldKinds<IsSettings> = {
   linesPerSpeed: { kind: 'nullableNumber' },
   measuredLineMm: { kind: 'nullableNumber' },
   linePitchMm: { kind: 'nullableNumber' },
-  sweep: { kind: 'boolean' },
-  sweepFromHz: { kind: 'nullableNumber' },
-  sweepToHz: { kind: 'nullableNumber' },
-  sweepCycles: { kind: 'nullableNumber' },
   ...SCAN_PLAN_FIELDS,
 }
 

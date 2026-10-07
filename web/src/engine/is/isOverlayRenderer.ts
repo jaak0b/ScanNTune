@@ -2,7 +2,7 @@ import type { Mat, OpenCv } from '../opencv'
 import type { IsAlignment } from './isFiducialAligner'
 import { mmToPx } from './isFiducialAligner'
 import type { IsTestSpec } from './types'
-import { effectiveMeasuredLineMm, isCouponGeometry, tierRampMm } from './couponGeometry'
+import { isCouponGeometry, tierRampMm } from './couponGeometry'
 import type { IsLine } from './couponGeometry'
 import { measuredDirection } from './lineTracer'
 import type { IsAxisResult, IsLineOutcome, IsPointPx } from './resultTypes'
@@ -118,7 +118,7 @@ function drawLineOutcome(
   const dir = measuredDirection(line)
   const rampMm = tierRampMm(spec, line.speedMmS, line.cornerSpeedMmS)
   const bracketColor = new cv.Scalar(...BRACKET_COLOR)
-  for (const sMm of [rampMm, rampMm + effectiveMeasuredLineMm(spec)]) {
+  for (const sMm of [rampMm, rampMm + spec.measuredLineMm]) {
     const at = mmToPx(alignment, line.measured.x0 + dir.dx * sMm, line.measured.y0 + dir.dy * sMm)
     const half = BRACKET_HALF_MM * pxPerMm
     const a = { x: at.x - px * half, y: at.y - py * half }

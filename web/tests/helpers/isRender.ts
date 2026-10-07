@@ -110,29 +110,6 @@ interface RingedLine {
   lat: (sMm: number) => number
   maxAmpMm: number
   lengthMm: number
-  /**
-   * Bounding box of the sweep teeth's coverage footprint (bead half-width plus the soft-edge
-   * blur), or null without teeth. Outside it every tooth's coverage is exactly zero, so the
-   * per-tooth loop is skipped there without changing a single rendered value: a sweep line
-   * carries some 200 teeth, and testing each of them at every sub-pixel made the sweep
-   * render cost two minutes per scan.
-   */
-  teethBox: IsSegment | null
-}
-
-/** The teeth's coverage footprint: softEdge is zero once a point lies more than half the
- *  blur outside a bead, so the bead half-width plus the full blur bounds it safely. */
-function teethFootprint(line: IsLine, o: Resolved): IsSegment | null {
-  if (line.teeth.length === 0) return null
-  const pad = o.lineWidthMm / 2 + o.blurSigmaMm
-  const xs = line.teeth.flatMap((t) => [t.x0, t.x1])
-  const ys = line.teeth.flatMap((t) => [t.y0, t.y1])
-  return {
-    x0: Math.min(...xs) - pad,
-    y0: Math.min(...ys) - pad,
-    x1: Math.max(...xs) + pad,
-    y1: Math.max(...ys) + pad,
-  }
 }
 
 function buildRingedLines(spec: IsTestSpec, g: IsCouponGeometry, o: Resolved): RingedLine[] {
@@ -143,9 +120,8 @@ function buildRingedLines(spec: IsTestSpec, g: IsCouponGeometry, o: Resolved): R
       const line = group.lines[i]
       const horizontal = line.measured.y0 === line.measured.y1
       const lengthMm = Math.abs(line.measured.x1 - line.measured.x0) + Math.abs(line.measured.y1 - line.measured.y0)
-      const teethBox = teethFootprint(line, o)
       if (!truth) {
-        out.push({ line, horizontal, lat: () => 0, maxAmpMm: 0, lengthMm, teethBox })
+        out.push({ line, horizontal, lat: () => 0, maxAmpMm: 0, lengthMm })
         continue
       }
       const tierIndex = spec.speedsMmS.indexOf(line.speedMmS)
@@ -167,7 +143,7 @@ function buildRingedLines(spec: IsTestSpec, g: IsCouponGeometry, o: Resolved): R
         const t = timeAtDistance(sMm, line.cornerSpeedMmS, line.speedMmS, spec.accelMmS2)
         return lobeA * Math.exp(-t / lobeTau) + B * Math.exp(-omega * zeta * t) * Math.cos(omegaD * t + phi)
       }
-      out.push({ line, horizontal, lat, maxAmpMm: Math.abs(B) + Math.abs(lobeA), lengthMm, teethBox })
+      out.push({ line, horizontal, lat, maxAmpMm: Math.abs(B) + Math.abs(lobeA), lengthMm })
     }
   }
   return out
@@ -195,16 +171,8 @@ function couponCoverage(
   const halfW = o.lineWidthMm / 2
   for (const rl of lines) {
     if (coverage >= 1) break
-    // Straight legs: the run-up in the window (the prime and tail sit under the bands),
-    // plus the resonant run-up teeth when the spec sweeps.
+    // Straight legs: the run-up in the window (the prime and tail sit under the bands).
     coverage = Math.max(coverage, segmentCoverage(x, y, rl.line.runUp, halfW, sigma))
-    const tb = rl.teethBox
-    if (tb !== null && x >= tb.x0 && x <= tb.x1 && y >= tb.y0 && y <= tb.y1) {
-      for (const tooth of rl.line.teeth) {
-        if (coverage >= 1) break
-        coverage = Math.max(coverage, segmentCoverage(x, y, tooth, halfW, sigma))
-      }
-    }
     // The measured segment with the ringing lateral path.
     const m = rl.line.measured
     if (rl.horizontal) {

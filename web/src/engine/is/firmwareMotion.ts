@@ -90,8 +90,8 @@ export function minAccelForCornerSpeedMmS2(
  * the per-axis maximum caps every move on those firmwares, so a stock value below the test
  * acceleration would stretch the modelled ramps. Klipper's ACCEL is itself the maximum.
  * The maximum velocity is raised to the fastest commanded move of the print (rounded up
- * to a whole mm/s), so a configured maximum below a tier speed or a sweep chord can
- * never clamp a commanded feedrate: Klipper VELOCITY, Marlin M203 in mm/s, and
+ * to a whole mm/s), so a configured maximum below a tier speed can never clamp a
+ * commanded feedrate: Klipper VELOCITY, Marlin M203 in mm/s, and
  * RepRapFirmware M203 in mm/min.
  */
 export function isMotionLimitCommands(

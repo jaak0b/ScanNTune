@@ -2,7 +2,6 @@ import type { PrinterProfile } from '../gcode/profileTypes'
 import type { CouponPlacement } from '../gcode/couponShell'
 import {
   accelRampMm,
-  effectiveRunUpMm,
   fieldExtentMm,
   frameBandMm,
   INNER_MARGIN_MM,
@@ -10,7 +9,6 @@ import {
   maxPackedRampMm,
   MIN_CORNER_SPEED_MM_S,
   MIN_MEASURED_LINE_MM,
-  SWEEP_TOOTH_CLEARANCE_MM,
 } from './couponGeometry'
 import { maxCornerSpeedMmS, minAccelForCornerSpeedMmS2 } from './firmwareMotion'
 
@@ -37,12 +35,10 @@ export interface IsTestSpec {
   accelMmS2: number
   /**
    * TOP rung of the corner-speed excitation ladder, and the size of the strongest
-   * ringing excitation. With the sweep off, each tier's lines take their corner at
-   * geometrically spaced run-up speeds from MIN_CORNER_SPEED_MM_S up to this value, one
-   * rung per line (the step-excitation idea of Klipper's ringing tower: the print
-   * self-ranges, so some lines ring visibly regardless of frame stiffness). With the
-   * sweep enabled the ladder is replaced by the sweep leg: every line corners at exactly
-   * this speed, which is also the sweep leg's constant forward speed. The emitted motion
+   * ringing excitation. Each tier's lines take their corner at geometrically spaced
+   * run-up speeds from MIN_CORNER_SPEED_MM_S up to this value, one rung per line (the
+   * step-excitation idea of Klipper's ringing tower: the print self-ranges, so some
+   * lines ring visibly regardless of frame stiffness). The emitted motion
    * limits set the firmware's corner limit to this value once, so the planner takes
    * every 90 degree corner at that line's full run-up speed with zero deceleration
    * (slower rungs pass under the limit unbraked): the pressure dump K * (v_in - v_corner)
@@ -55,31 +51,6 @@ export interface IsTestSpec {
   cornerSpeedMmS: number
   /** How far each measured segment extends into the frame band at both ends. */
   weldMm: number
-  /**
-   * Resonant run-up (frequency sweep): replaces the straight run-up leg with the ramped
-   * zigzag excitation of Klipper's resonance tester (resonance_tester.py, vibrate_axis).
-   * The leg advances at the constant corner speed while a bang-bang constant-magnitude
-   * lateral acceleration swings the head once per cell, the forcing frequency stepping
-   * geometrically from `sweepFromHz` to `sweepToHz` over `sweepCycles` cells. The swing
-   * acceleration follows the resonance tester's accel_per_hz scaling (75 mm/s^2 per Hz,
-   * its default), never above the profile acceleration, so the excitation stays a
-   * gentle probe instead of driving the machine at its acceleration ceiling. The
-   * forward speed never changes and the lateral velocity is continuous, so the sweep
-   * itself contains no velocity steps; cells arriving at the machine's resonance period
-   * add in phase (forced resonance), so the ring launched into the measured segment
-   * builds up to roughly the resonance's Q factor times a single corner's amplitude.
-   * Meant for small stiff printers whose single-corner ring is too faint to scan; the
-   * coupon grows by the sweep's leg length.
-   */
-  sweep: boolean
-  /** Lowest excitation frequency of the sweep, Hz. */
-  sweepFromHz: number
-  /** Highest excitation frequency of the sweep, Hz; the sweep ends here, next to the
-   *  launch corner, so high resonances excite last and decay least. */
-  sweepToHz: number
-  /** Number of forcing cycles across the band. More cycles dwell longer near the
-   *  resonance but lengthen the leg. */
-  sweepCycles: number
   /** Where the coupon sits on the bed: centered, or pushed to the front/back edge. */
   placement: CouponPlacement
   /**
@@ -113,8 +84,6 @@ export const MAX_LINES_PER_SPEED = 15
  * can raise it.
  */
 export const DEFAULT_CORNER_SPEED_MM_S = 100
-export const MIN_SWEEP_CYCLES = 4
-export const MAX_SWEEP_CYCLES = 40
 /** Below this acceleration the ringing trace is often too weak to measure. */
 const LOW_ACCEL_MM_S2 = 4000
 /** Default acceleration floor: the same threshold, so a default spec never starts in the
@@ -131,10 +100,8 @@ export function defaultIsTestSpec(profile: PrinterProfile): IsTestSpec {
     // field extent enters the two-axis footprint once per group) and leave headroom over
     // the three-line analyzer floor when lines are damaged or unreadable.
     linesPerSpeed: 8,
-    // RING_WAVELENGTHS_READ (couponGeometry.ts) wavelengths of the lowest resonance of
-    // interest at the tier speed: 5 * tierSpeed / 25 Hz, so 30 mm at the 150 mm/s default
-    // tier. With the sweep enabled, effectiveMeasuredLineMm evaluates this same
-    // constraint at the sweep's declared band edge instead of the fixed 25 Hz.
+    // Five wavelengths of the lowest resonance of interest at the tier speed:
+    // 5 * tierSpeed / 25 Hz, so 30 mm at the 150 mm/s default tier.
     measuredLineMm: 30,
     // Hosts the ramp to the 100 mm/s default corner speed (about 1.25 mm at 4000 mm/s^2)
     // with cruise to spare; the through-band leg stretch is extra.
@@ -147,13 +114,6 @@ export function defaultIsTestSpec(profile: PrinterProfile): IsTestSpec {
     accelMmS2: Math.max(profile.printAccelMmS2, MIN_ACCEL_MM_S2),
     cornerSpeedMmS: DEFAULT_CORNER_SPEED_MM_S,
     weldMm: 1,
-    // Off by default: on printers that ring visibly from a single corner the sweep only
-    // costs coupon area. The band defaults span the measurable resonance range above the
-    // frequencies a plain corner already excites well.
-    sweep: false,
-    sweepFromHz: 35,
-    sweepToHz: F_MAX_HZ,
-    sweepCycles: 16,
     placement: 'center',
     contrastBase: false,
   }
@@ -190,27 +150,6 @@ export function validateIsSpec(spec: IsTestSpec): void {
   }
   if (spec.weldMm <= 0) throw new Error('Weld length must be positive')
   if (spec.axes.length === 0) throw new Error('At least one axis must be selected')
-  if (spec.sweep) {
-    if (spec.sweepFromHz < F_MIN_HZ || spec.sweepToHz > F_MAX_HZ) {
-      throw new Error(
-        `The sweep band must lie inside the measurable ${F_MIN_HZ} to ${F_MAX_HZ} Hz range`,
-      )
-    }
-    if (spec.sweepFromHz >= spec.sweepToHz) {
-      throw new Error('The sweep start frequency must be below the end frequency')
-    }
-    if (spec.sweepCycles < MIN_SWEEP_CYCLES || spec.sweepCycles > MAX_SWEEP_CYCLES) {
-      throw new Error(
-        `Sweep cycles must be between ${MIN_SWEEP_CYCLES} and ${MAX_SWEEP_CYCLES}`,
-      )
-    }
-    if (spec.linePitchMm <= SWEEP_TOOTH_CLEARANCE_MM) {
-      throw new Error(
-        `The resonant run-up needs a line pitch above ${SWEEP_TOOTH_CLEARANCE_MM} mm so the ` +
-          'sweep teeth keep clear of the neighbouring lines',
-      )
-    }
-  }
 }
 
 /**
@@ -229,13 +168,9 @@ export function rampWarnings(spec: IsTestSpec): string[] {
         "printer's true maximum acceleration.",
     )
   }
-  // The run-up must reach its cruise speed before the corner: v^2 / 2a from rest. With
-  // the sweep the ramp must finish before the FIRST tooth instead, and the straight
-  // stretch there (the through-band leg plus the in-window stub) always hosts it by
-  // construction: the band is sized for the tier's deceleration ramp plus margin, which
-  // never falls below the corner speed's ramp, so no warning can arise.
+  // The run-up must reach its cruise speed before the corner: v^2 / 2a from rest.
   const rampUpMm = accelRampMm(spec.cornerSpeedMmS, spec.accelMmS2)
-  if (!spec.sweep && rampUpMm > spec.runUpMm) {
+  if (rampUpMm > spec.runUpMm) {
     warnings.push(
       `The ${spec.runUpMm} mm run-up is too short to reach the ${spec.cornerSpeedMmS} mm/s ` +
         `corner speed at ${spec.accelMmS2} mm/s^2. Lengthen the run-up.`,
@@ -326,7 +261,7 @@ function fitSpecToBed(
     const band = frameBandMm(fitted)
     const field = fieldExtentMm(fitted)
     const both = fitted.axes.length === 2
-    const crossTerm = both ? INNER_MARGIN_MM + field + effectiveRunUpMm(fitted) : 0
+    const crossTerm = both ? INNER_MARGIN_MM + field + fitted.runUpMm : 0
     const fixed = 2 * band + INNER_MARGIN_MM + maxPackedRampMm(fitted) + crossTerm
     const limits: number[] = []
     if (fitted.axes.includes('y')) {
