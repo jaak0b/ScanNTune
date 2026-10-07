@@ -9,10 +9,12 @@ import {
   isCouponGeometry,
   maxPackedRampMm,
   MIN_CORNER_SPEED_MM_S,
+  MIN_MEASURED_LINE_MM,
   SWEEP_TOOTH_CLEARANCE_MM,
 } from './couponGeometry'
+import { maxCornerSpeedMmS, minAccelForCornerSpeedMmS2 } from './firmwareMotion'
 
-export { accelRampMm, MIN_CORNER_SPEED_MM_S }
+export { accelRampMm, MIN_CORNER_SPEED_MM_S, MIN_MEASURED_LINE_MM }
 
 export type IsAxis = 'x' | 'y'
 
@@ -46,7 +48,9 @@ export interface IsTestSpec {
    * (slower rungs pass under the limit unbraked): the pressure dump K * (v_in - v_corner)
    * is zero by construction and the bead stays continuous. The excitation is the
    * per-axis velocity step at the corner; the residual ring amplitude is approximately
-   * delta-v over omega, so faster rungs ring the frame proportionally harder.
+   * delta-v over omega, so faster rungs ring the frame proportionally harder. The printer
+   * fit (fitSpecToPrinter) lowers it to the fastest corner the firmware's corner limit can
+   * express at the test acceleration.
    */
   cornerSpeedMmS: number
   /** How far each measured segment extends into the frame band at both ends. */
@@ -100,9 +104,6 @@ export const MIN_LINES_PER_SPEED = 3
 /** Extra replicate lines cost little coupon area and raise the chance that at least the
  *  required three lines per axis survive print damage and scan artifacts. */
 export const MAX_LINES_PER_SPEED = 15
-/** Hard floor of the clean read length; the default is derived per tier speed instead
- *  (five wavelengths of the lowest resonance of interest: 5 * tierSpeed / 25 Hz). */
-export const MIN_MEASURED_LINE_MM = 20
 /**
  * Default corner (run-up) speed. The per-axis velocity step at the corner leaves a
  * residual ring amplitude of approximately delta-v over omega: at 100 mm/s about
@@ -244,12 +245,58 @@ export function rampWarnings(spec: IsTestSpec): string[] {
 }
 
 /**
+ * Fits the spec to the selected printer: first to what its firmware can execute, then to its
+ * bed. This is the single place a spec is fitted; the generator and the analysis both read
+ * its result, so the coupon is analyzed exactly as it was printed. Every change is described
+ * in a user-worded note; a spec the printer cannot host throws.
+ */
+export function fitSpecToPrinter(
+  spec: IsTestSpec,
+  profile: PrinterProfile,
+): { spec: IsTestSpec; notes: string[] } {
+  const firmware = fitSpecToFirmware(spec, profile)
+  const bed = fitSpecToBed(firmware.spec, profile)
+  return { spec: bed.spec, notes: [...firmware.notes, ...bed.notes] }
+}
+
+/**
+ * Lowers the corner speed to the fastest corner the firmware's corner limit can express at
+ * the test acceleration (see maxCornerSpeedMmS). The lowered value becomes the spec's one
+ * corner speed, so the ladder's top rung, the ramps, the packing, the emitted limits, and the
+ * analysis time base all agree with the corner the printer actually takes. Throws when the
+ * firmware cannot express even the minimum corner speed.
+ */
+function fitSpecToFirmware(
+  spec: IsTestSpec,
+  profile: PrinterProfile,
+): { spec: IsTestSpec; notes: string[] } {
+  const cap = maxCornerSpeedMmS(profile, spec.accelMmS2)
+  if (cap === null) return { spec, notes: [] }
+  if (cap < MIN_CORNER_SPEED_MM_S) {
+    throw new Error(
+      `Raise the test acceleration to at least ` +
+        `${minAccelForCornerSpeedMmS2(profile, MIN_CORNER_SPEED_MM_S)} mm/s^2. Below that, ` +
+        `Marlin's junction deviation cannot express the ${MIN_CORNER_SPEED_MM_S} mm/s minimum ` +
+        'corner speed.',
+    )
+  }
+  if (spec.cornerSpeedMmS <= cap) return { spec, notes: [] }
+  return {
+    spec: { ...spec, cornerSpeedMmS: cap },
+    notes: [
+      `The corner speed was limited to ${cap} mm/s because Marlin's junction deviation ` +
+        `cannot express a faster corner at ${spec.accelMmS2} mm/s^2.`,
+    ],
+  }
+}
+
+/**
  * Shrinks the spec until the coupon fits the configured bed: the highest speed tier is
  * dropped first (never below a single tier), then the measured lines are shortened toward the
  * minimum length. Throws when the bed cannot host even the smallest coupon. Every
  * reduction is described in a user-worded note.
  */
-export function fitSpecToBed(
+function fitSpecToBed(
   spec: IsTestSpec,
   profile: PrinterProfile,
 ): { spec: IsTestSpec; notes: string[] } {

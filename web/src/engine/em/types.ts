@@ -1,5 +1,7 @@
-import type { PrinterProfile } from '../pa/types'
+import type { FilamentProfile, PrinterProfile } from '../gcode/profileTypes'
 import {
+  beadVolumetricFlowMm3S,
+  highFlowWarning,
   MEASURED_LAYERS,
   NOMINAL_WIDTH_FACTOR,
   PEDESTAL_LAYERS,
@@ -163,8 +165,44 @@ export function emCouponGeometry(spec: EmTestSpec): EmCouponGeometry {
   }
 }
 
-export function volumetricFlowMm3S(spec: EmTestSpec, layerHeightMm: number): number {
-  return spec.printSpeedMmS * spec.nominalLineWidthMm * layerHeightMm
+/**
+ * The filament as the extrusion multiplier test prints it: the multiplier pinned to exactly
+ * 1.0, so the measured ratio is the absolute value to set, with no back-multiplication. The
+ * generator prints with it and the flow figures below are judged on it, so both describe the
+ * same commanded bead.
+ */
+export function emPrintFilament(filament: FilamentProfile): FilamentProfile {
+  return { ...filament, extrusionMultiplier: 1 }
+}
+
+/** Volumetric flow of a measured comb line at the print speed, mm^3/s: the coupon's fastest
+ *  bead, as the generator commands it. */
+export function volumetricFlowMm3S(
+  spec: EmTestSpec,
+  profile: PrinterProfile,
+  filament: FilamentProfile,
+): number {
+  return beadVolumetricFlowMm3S(
+    profile,
+    emPrintFilament(filament),
+    spec.nominalLineWidthMm,
+    spec.printSpeedMmS,
+  )
+}
+
+/** The high-flow warning for the measured comb lines, or null within the flow limit. */
+export function emFlowWarning(
+  profile: PrinterProfile,
+  filament: FilamentProfile,
+  spec: EmTestSpec,
+): string | null {
+  return highFlowWarning(
+    profile,
+    emPrintFilament(filament),
+    spec.nominalLineWidthMm,
+    spec.printSpeedMmS,
+    'print speed',
+  )
 }
 
 export function accelRampMm(speedMmS: number, accelMmS2: number): number {

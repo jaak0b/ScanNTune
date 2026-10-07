@@ -51,6 +51,57 @@ const lastExtrusionIndex = (lines: string[]) => {
   return -1
 }
 
+type OpenBox = { x0: number; y0: number; x1: number; y1: number }
+
+/** The coupon's fiducial holes in bed coordinates. */
+function holeBoxesOf(geo: typeof g, x0: number, y0: number): OpenBox[] {
+  return geo.fiducials.map((f) => ({
+    x0: x0 + f.xMm - geo.fiducialSizeMm / 2,
+    y0: y0 + f.yMm - geo.fiducialSizeMm / 2,
+    x1: x0 + f.xMm + geo.fiducialSizeMm / 2,
+    y1: y0 + f.yMm + geo.fiducialSizeMm / 2,
+  }))
+}
+
+/** True when the straight path passes through a box interior, by dense sampling. */
+function crossesAny(ax: number, ay: number, bx: number, by: number, boxes: OpenBox[]): boolean {
+  const n = Math.max(2, Math.ceil(Math.hypot(bx - ax, by - ay) / 0.01))
+  for (let k = 1; k < n; k++) {
+    const x = ax + ((bx - ax) * k) / n
+    const y = ay + ((by - ay) * k) / n
+    if (boxes.some((b) => x > b.x0 && x < b.x1 && y > b.y0 && y < b.y1)) return true
+  }
+  return false
+}
+
+/** Walks the travels with the retract state (stationary and moving retracts alike) and
+ *  returns each travel crossing an open box, split by whether the nozzle was retracted. */
+function travelsAcross(lines: string[], boxes: OpenBox[]): { primed: string[]; retracted: number } {
+  let x = 0
+  let y = 0
+  let retracted = false
+  const primed: string[] = []
+  let retractedCount = 0
+  lines.forEach((l, i) => {
+    if (/^G1 .*E-/.test(l)) retracted = true
+    else if (/^G1 .*E[\d.]/.test(l)) retracted = false
+    const m = l.match(/^G([01]) X(-?[\d.]+) Y(-?[\d.]+)/)
+    if (!m) return
+    const nx = Number(m[2])
+    const ny = Number(m[3])
+    if (m[1] === '0' && crossesAny(x, y, nx, ny, boxes)) {
+      if (retracted) retractedCount++
+      else primed.push(`line ${i}: ${l}`)
+    }
+    x = nx
+    y = ny
+  })
+  return { primed, retracted: retractedCount }
+}
+const primedTravelsAcross = (lines: string[], boxes: OpenBox[]) => travelsAcross(lines, boxes).primed
+const retractedTravelsAcross = (lines: string[], boxes: OpenBox[]) =>
+  travelsAcross(lines, boxes).retracted
+
 /** Layer chunks: the G-code lines between consecutive printing-layer Z moves. */
 function layerChunks(lines: string[]): string[][] {
   const zIndexes = lines.flatMap((l, i) => (/^G1 Z0\./.test(l) ? [i] : []))
@@ -388,37 +439,22 @@ describe('generateIsGcodeWithReport (Klipper)', () => {
     }
   })
 
-  it('never travels far across the open window without retracting first', () => {
-    // Window interior, shrunk a little so band-edge moves do not count.
-    const win = {
-      x0: ox + g.windowBox.x0 + 1,
-      y0: oy + g.windowBox.y0 + 1,
-      x1: ox + g.windowBox.x1 - 1,
-      y1: oy + g.windowBox.y1 - 1,
-    }
-    const inWindow = (x: number, y: number) =>
-      x > win.x0 && x < win.x1 && y > win.y0 && y < win.y1
-    let x = 0
-    let y = 0
-    let retracted = false
-    for (const l of lines) {
-      // Both stationary retracts and the moving wipe/prime variants carry the E state.
-      if (/^G1 .*E-/.test(l)) retracted = true
-      else if (/^G1 .*E[\d.]/.test(l)) retracted = false
-      const m = l.match(/^G([01]) X(-?[\d.]+) Y(-?[\d.]+)/)
-      if (!m) continue
-      const nx = Number(m[2])
-      const ny = Number(m[3])
-      if (m[1] === '0') {
-        const len = Math.hypot(nx - x, ny - y)
-        const crossesWindow = inWindow((x + nx) / 2, (y + ny) / 2) || inWindow(nx, ny)
-        if (len > 5 && crossesWindow) {
-          expect(retracted, `unretracted ${len.toFixed(1)}mm travel over the window: ${l}`).toBe(true)
-        }
-      }
-      x = nx
-      y = ny
-    }
+  it('never travels across the open window or a fiducial hole without retracting first', () => {
+    // Any length counts: a primed nozzle strings a film across an opening however short the
+    // hop. The window and the hole boxes are the coupon's own open areas.
+    const open = [
+      {
+        x0: ox + g.windowBox.x0,
+        y0: oy + g.windowBox.y0,
+        x1: ox + g.windowBox.x1,
+        y1: oy + g.windowBox.y1,
+      },
+      ...holeBoxesOf(g, ox, oy),
+    ]
+    const primed = primedTravelsAcross(lines, open)
+    expect(primed, primed.join('\n')).toEqual([])
+    // The scan is not vacuous: retracted travels across the window do occur.
+    expect(retractedTravelsAcross(lines, open)).toBeGreaterThan(0)
   })
 
   it('keeps every coordinate on the bed and inside the coupon footprint', () => {
@@ -442,7 +478,12 @@ describe('generateIsGcodeWithReport (Klipper)', () => {
       ...spec,
       speedsMmS: [150, 200],
     })
-    expect(fast.warnings.some((w) => w.includes('200 mm/s') && w.includes('mm^3/s'))).toBe(true)
+    // 200 mm/s x 0.42 mm x 0.2 mm = 16.8 mm^3/s, hand-derived.
+    expect(fast.warnings).toContain(
+      "Lower the line speed, or raise the filament's max volumetric flow only if the hotend " +
+        'can melt 16.8 mm^3/s. Above the 12 mm^3/s a typical hotend melts, the lines ' +
+        'under-extrude.',
+    )
     expect(fast.gcode).toContain('F12000')
   })
 })
@@ -452,13 +493,10 @@ describe('generateIsGcodeWithReport (Marlin and RepRapFirmware)', () => {
     const marlin: PrinterProfile = { ...profile, firmware: 'Marlin' }
     const gcode = generateIsGcodeWithReport(marlin, filament, spec).gcode
     expect(gcode).toContain('M203 X150 Y150') // velocity ceiling in mm/s
+    expect(gcode).toContain('M201 X4000 Y4000') // per-axis maximum acceleration, mm/s^2
     expect(gcode).toContain('M204 P4000 T4000') // test limits
     // No numeric restore: the restart note replaces the profile-value block.
     expect(gcode).not.toContain('M204 P3000 T3000')
-    expect(gcode).toContain('M205 X100 Y100')
-    // Junction-deviation equivalent of the 100 mm/s corner speed, on its own line:
-    // 0.4 * 100^2 / 4000 = 1.000 mm.
-    expect(gcode).toContain(`M205 J${((0.4 * 100 * 100) / spec.accelMmS2).toFixed(3)}`)
     expect(gcode).toContain(
       '; restart the printer or run M501 to restore your configured motion limits',
     )
@@ -468,10 +506,49 @@ describe('generateIsGcodeWithReport (Marlin and RepRapFirmware)', () => {
     expect(gcode).not.toContain('SET_VELOCITY_LIMIT')
   })
 
+  it('caps the 100 mm/s Marlin corner at 4000 mm/s^2 end to end, keeping J in range', () => {
+    // Marlin's planner takes a 90 degree junction at v^2 = a * J * (sqrt(2) + 1), so a 100 mm/s
+    // corner would need J = 1.0355 mm, which Marlin rejects ("?J out of range") and then brakes
+    // the corner with the user's own J. The fit lowers the corner to 53.8 mm/s instead
+    // (0.29973 mm, printed as 0.300), and that one speed drives the limits, the header, the
+    // ladder's top rung feed, and the geometry the analysis reads.
+    const marlin: PrinterProfile = { ...profile, firmware: 'Marlin' }
+    const report = generateIsGcodeWithReport(marlin, filament, spec)
+    const lines = report.gcode.split('\n')
+    const j = lines.find((l) => l.startsWith('M205 J'))!
+    expect(j).toBe('M205 J0.300')
+    expect(lines).toContain('M205 X53.8 Y53.8')
+    expect(lines).toContain(
+      '; corner-speed excitation ladder 20 to 53.8 mm/s across the 8 lines of each tier',
+    )
+    expect(report.warnings).toContain(
+      "The corner speed was limited to 53.8 mm/s because Marlin's junction deviation cannot " +
+        'express a faster corner at 4000 mm/s^2.',
+    )
+    // The emitted geometry is the capped coupon: every run-up cruise into its corner, and the
+    // top rung at exactly 53.8 mm/s (F3228), matches the geometry built from the capped spec.
+    const capped = { ...spec, cornerSpeedMmS: 53.8 }
+    const gc = isCouponGeometry(capped)
+    const oxc = (profile.bedWidthMm - gc.couponWidthMm) / 2
+    const oyc = (profile.bedDepthMm - gc.couponHeightMm) / 2
+    const chunk = measuredChunk(lines)
+    for (const group of gc.groups) {
+      group.lines.forEach((line, k) => {
+        const move =
+          `G1 X${(oxc + line.measured.x0).toFixed(3)} Y${(oyc + line.measured.y0).toFixed(3)} ` +
+          `E${(runUpLen(line) * ePerMm(nominal)).toFixed(5)} F${runUpFeed(line)}`
+        expect(chunk, `line ${k}`).toContain(move)
+      })
+      expect(Math.max(...group.lines.map((l) => l.cornerSpeedMmS))).toBeCloseTo(53.8, 9)
+    }
+    expect(chunk.some((l) => l.endsWith(' F3228'))).toBe(true)
+  })
+
   it('uses RepRapFirmware commands for limits, disable, and restore', () => {
     const rrf: PrinterProfile = { ...profile, firmware: 'RepRapFirmware' }
     const gcode = generateIsGcodeWithReport(rrf, filament, spec).gcode
     expect(gcode).toContain('M203 X9000 Y9000') // velocity ceiling in mm/min
+    expect(gcode).toContain('M201 X4000 Y4000') // per-axis maximum acceleration, mm/s^2
     expect(gcode).toContain('M204 P4000 T4000') // test limits
     // No numeric restore: the restart note replaces the profile-value block.
     expect(gcode).not.toContain('M204 P3000 T3000')
@@ -585,6 +662,23 @@ describe('contrastBase', () => {
       x = nx
       y = ny
     }
+  })
+
+  it('never travels across an open fiducial hole while primed, base layers included', () => {
+    // The base backs the window, so on the base layers only the holes are open; above the
+    // base the window is open too. The base raster's approach once crossed a hole primed.
+    const holes = holeBoxesOf(g, ox, oy)
+    const window = {
+      x0: ox + g.windowBox.x0,
+      y0: oy + g.windowBox.y0,
+      x1: ox + g.windowBox.x1,
+      y1: oy + g.windowBox.y1,
+    }
+    const base = primedTravelsAcross(lines.slice(0, pauseIndex), holes)
+    expect(base, base.join('\n')).toEqual([])
+    const coupon = primedTravelsAcross(lines.slice(pauseIndex), [...holes, window])
+    expect(coupon, coupon.join('\n')).toEqual([])
+    expect(retractedTravelsAcross(lines.slice(0, pauseIndex), holes)).toBeGreaterThan(0)
   })
 
   it('shifts the pedestal and measured layers up by the two base layers', () => {
@@ -779,7 +873,7 @@ describe('resonant run-up sweep emission', () => {
     // The launch-corner override alone covers the sweep: the chords never rely on a
     // sweep-driven limit change.
     const limits = (gcode: string) =>
-      gcode.split('\n').filter((l) => /^(SET_VELOCITY_LIMIT|M204|M205|M566)/.test(l))
+      gcode.split('\n').filter((l) => /^(SET_VELOCITY_LIMIT|M201|M203|M204|M205|M566)/.test(l))
     for (const firmware of ['Klipper', 'Marlin', 'RepRapFirmware'] as const) {
       const p: PrinterProfile = { ...profile, firmware }
       expect(limits(generateIsGcodeWithReport(p, filament, sweepSpec).gcode)).toEqual(
@@ -874,15 +968,19 @@ describe('resonant run-up sweep emission', () => {
 
   it('warns when the sweep peak flow passes the hotend limit, quiet at the default', () => {
     // At a 200 mm/s corner speed the sweep peaks at 200.88 mm/s: 16.9 mm^3/s, above the
-    // 12 mm^3/s default limit. The default corner speed peaks at 101.74 mm/s
-    // (8.5 mm^3/s) and stays quiet.
+    // 12 mm^3/s default limit, and the corner speed is the field that sets it. The default
+    // corner speed peaks at 101.74 mm/s (8.5 mm^3/s) and stays quiet.
     const fast = generateIsGcodeWithReport(profile, filament, {
       ...sweepSpec,
       cornerSpeedMmS: 200,
       speedsMmS: [200],
     })
-    expect(fast.warnings.some((w) => w.includes('resonance sweep peaks at 201 mm/s'))).toBe(true)
-    expect(report.warnings.some((w) => w.includes('resonance sweep'))).toBe(false)
+    expect(fast.warnings).toContain(
+      "Lower the corner speed, or raise the filament's max volumetric flow only if the hotend " +
+        'can melt 16.9 mm^3/s. Above the 12 mm^3/s a typical hotend melts, the lines ' +
+        'under-extrude.',
+    )
+    expect(report.warnings.some((w) => w.startsWith('Lower the corner speed'))).toBe(false)
   })
 
   it('keeps the corner-to-measured contract: the last tooth ends on the corner', () => {
@@ -931,9 +1029,25 @@ describe('filament flow settings', () => {
     const weak = { ...filament, maxVolumetricFlowMm3S: 10 }
     expect(
       generateIsGcodeWithReport(profile, weak, spec).warnings.some((w) =>
-        w.includes("filament's configured 10 mm^3/s"),
+        w.includes("filament's 10 mm^3/s max volumetric flow"),
       ),
     ).toBe(true)
+  })
+
+  it('judges the flow of the bead it commands, extrusion multiplier included', () => {
+    // 12.6 mm^3/s at a 1.0 multiplier sits under a 13 mm^3/s filament limit; a 1.2
+    // multiplier lifts the commanded bead to 15.1 mm^3/s (hand-derived), past it.
+    const limited = { ...filament, maxVolumetricFlowMm3S: 13 }
+    expect(
+      generateIsGcodeWithReport(profile, limited, spec).warnings.some((w) => w.includes('mm^3/s')),
+    ).toBe(false)
+    expect(
+      generateIsGcodeWithReport(profile, { ...limited, extrusionMultiplier: 1.2 }, spec).warnings,
+    ).toContain(
+      "Lower the line speed, or raise the filament's max volumetric flow only if the hotend " +
+        "can melt 15.1 mm^3/s. Above the filament's 13 mm^3/s max volumetric flow, the lines " +
+        'under-extrude.',
+    )
   })
 })
 
@@ -955,6 +1069,26 @@ describe('first layer speed', () => {
     expect(feeds.some((f) => f === firstLayerFeed)).toBe(true)
     // The measured layer keeps its normal speeds.
     expect(feedsOf(chunks[chunks.length - 1]).some((f) => f > firstLayerFeed)).toBe(true)
+  })
+
+  it('caps the moving prime of every pedestal line at the first layer speed', () => {
+    // A 20 mm/s first layer speed caps the 30 mm/s prime to F1200 on the pedestal layer;
+    // the measured layer keeps the F1800 prime. Hand-derived feeds.
+    const slowFirst: PrinterProfile = { ...profile, firstLayerSpeedMmS: 20 }
+    const chunks = layerChunks(generateIsGcodeWithReport(slowFirst, filament, spec).gcode.split('\n'))
+    // A prime ends where the line's prime stretch ends; its feed is the last field.
+    const primeEnds = allLines.map(
+      (l) => `G1 X${(ox + l.prime.x1).toFixed(3)} Y${(oy + l.prime.y1).toFixed(3)} E`,
+    )
+    const primeFeeds = (chunk: string[]) =>
+      chunk
+        .filter((l) => primeEnds.some((p) => l.startsWith(p)))
+        .map((l) => Number(l.match(/ F(\d+)$/)![1]))
+    const pedestalPrimes = primeFeeds(chunks[0])
+    const measuredPrimes = primeFeeds(chunks[chunks.length - 1])
+    // One moving prime per test line on each layer: eight lines per axis, both axes.
+    expect(pedestalPrimes).toEqual(Array(16).fill(1200))
+    expect(measuredPrimes).toEqual(Array(16).fill(1800))
   })
 
   it('caps only the base first layer when a contrast base is printed', () => {

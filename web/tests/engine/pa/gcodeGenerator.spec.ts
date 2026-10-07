@@ -172,6 +172,61 @@ describe('generatePaGcode', () => {
     }
   })
 
+  it('never travels across an open fiducial hole while primed', () => {
+    // Any length counts. The base raster's approach once crossed a hole primed on the first
+    // base layer; now every hole crossing is made retracted.
+    const lines = generatePaGcode(profile, filament, spec).split('\n')
+    const geo = couponGeometry(spec)
+    const ox = (profile.bedWidthMm - geo.baseWidthMm) / 2
+    const oy = (profile.bedDepthMm - geo.baseHeightMm) / 2
+    const holes = geo.fiducials.map((f) => ({
+      x0: ox + f.xMm - geo.fiducialSizeMm / 2,
+      y0: oy + f.yMm - geo.fiducialSizeMm / 2,
+      x1: ox + f.xMm + geo.fiducialSizeMm / 2,
+      y1: oy + f.yMm + geo.fiducialSizeMm / 2,
+    }))
+    const crossesHole = (ax: number, ay: number, bx: number, by: number) => {
+      const n = Math.max(2, Math.ceil(Math.hypot(bx - ax, by - ay) / 0.01))
+      for (let k = 1; k < n; k++) {
+        const sx = ax + ((bx - ax) * k) / n
+        const sy = ay + ((by - ay) * k) / n
+        if (holes.some((h) => sx > h.x0 && sx < h.x1 && sy > h.y0 && sy < h.y1)) return true
+      }
+      return false
+    }
+    let x = 0
+    let y = 0
+    let retracted = false
+    let retractedCrossings = 0
+    const primed: string[] = []
+    lines.forEach((l, i) => {
+      if (/^G1 .*E-/.test(l)) retracted = true
+      else if (/^G1 .*E[\d.]/.test(l)) retracted = false
+      const m = l.match(/^G([01]) X(-?[\d.]+) Y(-?[\d.]+)/)
+      if (!m) return
+      const nx = Number(m[2])
+      const ny = Number(m[3])
+      if (m[1] === '0' && crossesHole(x, y, nx, ny)) {
+        if (retracted) retractedCrossings++
+        else primed.push(`line ${i}: ${l}`)
+      }
+      x = nx
+      y = ny
+    })
+    expect(primed, primed.join('\n')).toEqual([])
+    expect(retractedCrossings).toBeGreaterThan(0)
+  })
+
+  it('notes after the last test line that the motion limits come back with a firmware restart', () => {
+    // The preamble set the profile's acceleration and corner limit, replacing what the
+    // firmware had configured, so the end-of-print comments name the motion limits too.
+    const lines = generatePaGcode(profile, filament, spec).split('\n')
+    const note = lines.indexOf('; run FIRMWARE_RESTART to restore your configured motion limits')
+    const lastExtrusion = lines.reduce((last, l, i) => (/^G1 X.* E\d/.test(l) ? i : last), -1)
+    expect(note).toBeGreaterThan(lastExtrusion)
+    expect(note).toBeLessThan(lines.indexOf('M104 S0'))
+  })
+
   it('rasters the base serpentine-style without long travel-backs', () => {
     const g = generatePaGcode(profile, filament, spec)
     const pauseAt = g.indexOf('\nPAUSE\n')
@@ -224,6 +279,21 @@ describe('generatePaGcode', () => {
   it('ends with the end gcode', () => {
     const g = generatePaGcode(profile, filament, spec)
     expect(g.trimEnd().endsWith('M84')).toBe(true)
+  })
+
+  it('notes after the last test line that pressure advance comes back with a firmware restart', () => {
+    // The coupon leaves pressure advance at the last line's value; nothing is re-applied
+    // numerically, so the restore is the restart comment, before the end gcode.
+    for (const s of [spec, { ...spec, sweep: 'smoothTime' as const, fixedAdvance: 0.04 }]) {
+      const lines = generatePaGcode(profile, filament, s).split('\n')
+      const note = lines.indexOf(
+        '; pressure advance resumes with the next firmware restart or saved configuration',
+      )
+      const lastExtrusion = lines.reduce((last, l, i) => (/^G1 X.* E\d/.test(l) ? i : last), -1)
+      expect(lastExtrusion).toBeGreaterThan(0)
+      expect(note).toBeGreaterThan(lastExtrusion)
+      expect(note).toBeLessThan(lines.indexOf('M104 S0'))
+    }
   })
 
   it('substitutes slicer variables in the start gcode', () => {

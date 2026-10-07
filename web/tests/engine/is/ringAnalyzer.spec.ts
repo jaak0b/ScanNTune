@@ -227,6 +227,56 @@ describe('jointAxisFit and poolAxisFits', () => {
     )
     expect(pool.accepted).toBe(false)
     expect(pool.refusals.some((r) => r.includes('statistically significant'))).toBe(true)
+    // The rescan remedy travels apart from the verdict, so a coupon-specific remedy can
+    // replace it.
+    expect(pool.refusals.some((r) => r.includes('half turn'))).toBe(false)
+    expect(pool.rescanAdvice).toContain('half turn')
+  })
+
+  it('refuses a significant ring whose frequency is too uncertain for a shaper', () => {
+    // Three 0.02 s records hold only 1.5 cycles of a 75 Hz ring: the joint fit is
+    // significant and lands inside the search range, but a frequency read off so few
+    // cycles carries a 95% interval wider than 10% of itself, the shaper's stopband.
+    // The same ring over 0.05 s (3.75 cycles) is accepted.
+    const record = (seed: number, n: number, durationS: number) => {
+      const tS = new Float64Array(n)
+      const y = new Float64Array(n)
+      const rand = rng(seed)
+      const wd = 2 * Math.PI * 75 * Math.sqrt(1 - 0.05 * 0.05)
+      for (let i = 0; i < n; i++) {
+        tS[i] = (i * durationS) / n
+        y[i] =
+          0.02 * Math.exp(-2 * Math.PI * 75 * 0.05 * tS[i]) * Math.cos(wd * tS[i] + 0.4) +
+          gauss(rand) * 0.01
+      }
+      return { tS, y }
+    }
+    const weakLine = (window: { tS: Float64Array; y: Float64Array }): LineFit => ({
+      accepted: false,
+      screening: 'weak-ringing',
+      refusalReason: 'below the detection threshold',
+      refusalCategory: 'weak-ringing',
+      params: null,
+      r2: 0,
+      noiseRmsMm: 0.01,
+      frequencySeHz: null,
+      window,
+    })
+    const short = [500, 501, 502].map((s) => record(s, 30, 0.02))
+    const pool = poolAxisFits(short.map(weakLine), [150], [150, 150, 150])
+    expect(pool.accepted).toBe(false)
+    expect(pool.refusals).toEqual([
+      'The pooled frequency estimate is too uncertain to configure an input shaper: its 95% ' +
+        'confidence interval is wider than the stopband of the shaper it would set. Reprint or ' +
+        'rescan the coupon.',
+    ])
+    // Every earlier gate passed: the ring is significant and its standard error exists, so
+    // the interval itself, not a missing estimate, refused the axis.
+    const joint = jointAxisFit(short, 75)!
+    expect(joint.significant).toBe(true)
+    expect(joint.frequencySeHz).not.toBeNull()
+    const long = [500, 501, 502].map((s) => record(s, 75, 0.05))
+    expect(poolAxisFits(long.map(weakLine), [150], [150, 150, 150]).accepted).toBe(true)
   })
 
   it('excludes an out-of-band line and keeps the joint estimate unbiased', () => {
@@ -299,6 +349,7 @@ describe('jointAxisFit and poolAxisFits', () => {
     const reason = pool.refusals.find((r) => r.includes('usable ringing trace'))!
     expect(reason).toContain('outside the measurable range')
     expect(reason).not.toContain('half turn')
+    expect(pool.rescanAdvice).toBeNull()
   })
 
   it('keeps the half-turn rescan advice when the exclusions have no single dominant cause', () => {
@@ -319,8 +370,8 @@ describe('jointAxisFit and poolAxisFits', () => {
       [150, 150, 150],
     )
     expect(pool.accepted).toBe(false)
-    const reason = pool.refusals.find((r) => r.includes('usable ringing trace'))!
-    expect(reason).toContain('half turn')
+    expect(pool.refusals.some((r) => r.includes('usable ringing trace'))).toBe(true)
+    expect(pool.rescanAdvice).toContain('half turn')
   })
 
   it('uses the F distribution with numerator dof 2N+2 and denominator dof n-4N-2, not swapped', () => {

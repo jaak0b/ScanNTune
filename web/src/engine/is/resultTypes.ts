@@ -3,10 +3,11 @@ import type { ShaperOption } from './shaperRecommender'
 import type { LineFitRefusalCategory, LineJointExclusion } from './ringAnalyzer'
 
 /**
- * Why a line contributed no measurement, as a category the UI can count and label:
- * the fit-level categories plus 'not-traced' for a line the tracer never followed.
+ * Why a line was left out of the axis's joint fit, as a category the UI can count and label:
+ * the fit-level categories, 'frequency-outlier' for a line whose own fitted frequency lies
+ * far from the other lines', and 'not-traced' for a line the tracer never followed.
  */
-export type IsLineRefusalCategory = LineFitRefusalCategory | 'not-traced'
+export type IsLineRefusalCategory = LineFitRefusalCategory | 'frequency-outlier' | 'not-traced'
 
 /**
  * Why a line was excluded from the axis's joint fit: the fit-level exclusions plus
@@ -44,15 +45,17 @@ export interface IsLineOutcome {
   /** Why the line was excluded from the joint fit; null for a line that entered it, and
    *  for a line never attempted because its axis was not assigned a scan. */
   exclusion: IsLineExclusion | null
-  /** User-worded reason the line was not used; null for an accepted line. */
+  /** User-worded reason the line was left out of the joint fit; null for a line that entered
+   *  it (whether or not its axis was measured), and for a line never attempted because its
+   *  axis was not assigned a scan. */
   refusalReason: string | null
-  /** Refusal category for counting and labeling; null for an accepted line, and for a
-   *  line never attempted because its axis was not assigned a scan. */
+  /** Category of refusalReason for counting and labeling; null exactly when it is null. */
   refusalCategory: IsLineRefusalCategory | null
   /** The line's own fitted ringing frequency, Hz (diagnostic); null without a per-line fit. */
   frequencyHz: number | null
-  /** The line's fitted ring amplitude, mm, from the joint fit when available, else from the
-   *  per-line fit; null without either. */
+  /** The line's ring amplitude at the start of its free ringdown (its fit-window start), mm:
+   *  from the joint fit when the line entered it, else from its own fit; null without
+   *  either. */
   amplitudeMm: number | null
   startPx: IsPointPx | null
   endPx: IsPointPx | null
@@ -74,7 +77,8 @@ export interface IsAxisResult {
   frequencySeHz: number | null
   /** Extra-sum-of-squares F statistic of the joint ring fit against drift only. */
   fStatistic: number | null
-  /** Median initial ring amplitude of the accepted lines, mm (diagnostic). */
+  /** Median over every line in the joint fit of that line's ring amplitude at the start of
+   *  its fit window (the start of the free ringdown), mm (diagnostic). */
   amplitudeMm: number | null
   linesUsed: number
   linesTraced: number

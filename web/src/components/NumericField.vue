@@ -48,7 +48,10 @@ onMounted(() => {
     @update:model-value="$emit('update:modelValue', $event)"
   >
     <template v-if="tooltip" #prepend-inner>
-      <span class="tooltip-anchor">
+      <!-- VField focuses its input on any mousedown inside the field (VTextField's
+           onControlMousedown), which on a phone opens the keyboard when the icon is tapped;
+           the tooltip opens on click, so the mousedown stops here. -->
+      <span class="tooltip-anchor" @mousedown.stop>
         <v-icon icon="mdi-information-outline" size="small" color="on-surface-variant" style="opacity: 0.6" />
         <v-tooltip activator="parent" open-on-hover open-on-click location="top" max-width="280">
           {{ tooltip }}

@@ -12,6 +12,62 @@ const profile = defaultPrinterProfile()
 const filament = defaultFilamentProfile()
 const spec = defaultEmTestSpec(profile)
 
+type OpenBox = { x0: number; y0: number; x1: number; y1: number }
+
+/** The centered coupon's open areas in bed coordinates: the two comb windows, then the
+ *  fiducial holes. */
+function openAreasOf(s: typeof spec): OpenBox[] {
+  const g = emCouponGeometry(s)
+  const ox = (profile.bedWidthMm - g.couponWidthMm) / 2
+  const oy = (profile.bedDepthMm - g.couponHeightMm) / 2
+  const windows = [
+    { x0: ox + g.frameBandMm, y0: oy + g.topRowY0Mm, x1: ox + g.couponWidthMm - g.frameBandMm, y1: oy + g.topRowY1Mm },
+    { x0: ox + g.frameBandMm, y0: oy + g.bottomRowY0Mm, x1: ox + g.couponWidthMm - g.frameBandMm, y1: oy + g.bottomRowY1Mm },
+  ]
+  const holes = g.fiducials.map((f) => ({
+    x0: ox + f.xMm - g.fiducialSizeMm / 2,
+    y0: oy + f.yMm - g.fiducialSizeMm / 2,
+    x1: ox + f.xMm + g.fiducialSizeMm / 2,
+    y1: oy + f.yMm + g.fiducialSizeMm / 2,
+  }))
+  return [...windows, ...holes]
+}
+
+/** True when the straight path passes through a box interior, by dense sampling. */
+function crossesAny(ax: number, ay: number, bx: number, by: number, boxes: OpenBox[]): boolean {
+  const n = Math.max(2, Math.ceil(Math.hypot(bx - ax, by - ay) / 0.01))
+  for (let k = 1; k < n; k++) {
+    const x = ax + ((bx - ax) * k) / n
+    const y = ay + ((by - ay) * k) / n
+    if (boxes.some((b) => x > b.x0 && x < b.x1 && y > b.y0 && y < b.y1)) return true
+  }
+  return false
+}
+
+/** The travels crossing an open box, split by whether the nozzle ran them retracted. */
+function travelsAcross(gcodeLines: string[], boxes: OpenBox[]): { primed: string[]; retracted: number } {
+  let x = 0
+  let y = 0
+  let retracted = false
+  const primed: string[] = []
+  let retractedCount = 0
+  gcodeLines.forEach((l, i) => {
+    if (/^G1 .*E-/.test(l)) retracted = true
+    else if (/^G1 .*E[\d.]/.test(l)) retracted = false
+    const m = l.match(/^G([01]) X(-?[\d.]+) Y(-?[\d.]+)/)
+    if (!m) return
+    const nx = Number(m[2])
+    const ny = Number(m[3])
+    if (m[1] === '0' && crossesAny(x, y, nx, ny, boxes)) {
+      if (retracted) retractedCount++
+      else primed.push(`line ${i}: ${l}`)
+    }
+    x = nx
+    y = ny
+  })
+  return { primed, retracted: retractedCount }
+}
+
 describe('generateEmGcodeWithReport', () => {
   const report = generateEmGcodeWithReport(profile, filament, spec)
   const lines = report.gcode.split('\n')
@@ -36,39 +92,23 @@ describe('generateEmGcodeWithReport', () => {
     expect(lines.filter((l) => l.startsWith('M221'))).toEqual(['M221 S100'])
   })
 
-  it('never travels far across the open window without retracting first', () => {
-    const g = emCouponGeometry(spec)
-    const ox = (profile.bedWidthMm - g.couponWidthMm) / 2
-    const oy = (profile.bedDepthMm - g.couponHeightMm) / 2
-    // Window interior, shrunk a little so band-edge moves do not count.
-    const win = {
-      x0: ox + g.frameBandMm + 1,
-      y0: oy + g.frameBandMm + 1,
-      x1: ox + g.couponWidthMm - g.frameBandMm - 1,
-      y1: oy + g.couponHeightMm - g.frameBandMm - 1,
-    }
-    const inWindow = (x: number, y: number) =>
-      x > win.x0 && x < win.x1 && y > win.y0 && y < win.y1
-    let x = 0
-    let y = 0
-    let retracted = false
-    for (const l of lines) {
-      if (/^G1 E-/.test(l)) retracted = true
-      else if (/^G1 E[^-]/.test(l)) retracted = false
-      const m = l.match(/^G([01]) X(-?[\d.]+) Y(-?[\d.]+)/)
-      if (!m) continue
-      const nx = Number(m[2])
-      const ny = Number(m[3])
-      if (m[1] === '0') {
-        const len = Math.hypot(nx - x, ny - y)
-        const crossesWindow = inWindow((x + nx) / 2, (y + ny) / 2) || inWindow(nx, ny)
-        if (len > 5 && crossesWindow) {
-          expect(retracted, `unretracted ${len.toFixed(1)}mm travel over the window: ${l}`).toBe(true)
-        }
-      }
-      x = nx
-      y = ny
-    }
+  it('notes after the last comb line that the flow percentage comes back with a firmware restart', () => {
+    // The pinned M221 S100 stays in force after the print; nothing is re-applied
+    // numerically, so the restore is the restart comment, before the end gcode.
+    const note = lines.indexOf('; the M221 flow percentage resumes with the next firmware restart')
+    const lastExtrusion = lines.reduce((last, l, i) => (/^G1 X.* E\d/.test(l) ? i : last), -1)
+    expect(lastExtrusion).toBeGreaterThan(0)
+    expect(note).toBeGreaterThan(lastExtrusion)
+    expect(note).toBeLessThan(lines.indexOf('M104 S0'))
+  })
+
+  it('never travels across a comb window or a fiducial hole without retracting first', () => {
+    // Any length counts: a primed nozzle strings a film across an opening however short the
+    // hop. The comb windows and the hole boxes are the coupon's own open areas.
+    const primed = travelsAcross(lines, openAreasOf(spec)).primed
+    expect(primed, primed.join('\n')).toEqual([])
+    // The scan is not vacuous: the comb approaches cross the windows retracted.
+    expect(travelsAcross(lines, openAreasOf(spec)).retracted).toBeGreaterThan(0)
   })
 
   it('uses the pedestal width on layer 1 and the nominal width on the top layer for comb lines', () => {
@@ -100,29 +140,30 @@ describe('generateEmGcodeWithReport', () => {
     expect(() => generateEmGcodeWithReport(tiny, filament, spec)).toThrow(/fit/i)
   })
 
-  it('retracts and unretracts across every layer transition (no ooze drag)', () => {
-    // Negative-E retract lines: one retract per block per row per layer (retract only, the
-    // matching unretract is a positive-E line), plus one retract+unretract pair (2 negative-E
-    // lines... only the retract half is negative) at each of the 3 layer transitions, plus the
-    // final retract before the end gcode.
-    const retractLines = lines.filter((l) => /^G1 E-/.test(l))
-    const totalLayers = 3 // PEDESTAL_LAYERS + MEASURED_LAYERS from defaultEmTestSpec's profile
-    const perLayerCombRetracts = 2 * spec.blockCount // 2 rows x blockCount blocks
-    const perLayerStripRetracts = 4 // one per band raster strip
-    const perLayerRailRetracts = 1 // approach travel to the rail crosses the window
-    // Each band-raster scanline that a fiducial hole splits hops the open hole retracted; the
-    // three top/bottom-strip holes split 60 scanlines per layer at this geometry.
-    const perLayerRasterHoleRetracts = 60
-    const layerTransitions = totalLayers - 1
-    const expected =
-      totalLayers *
-        (perLayerCombRetracts +
-          perLayerStripRetracts +
-          perLayerRailRetracts +
-          perLayerRasterHoleRetracts) +
-      layerTransitions +
-      1
-    expect(retractLines.length).toBe(expected)
+  it('pairs every retract with an un-retract and never extrudes retracted (no ooze drag)', () => {
+    // Every stationary retract is followed by travels (and at most a layer change) and then
+    // an un-retract before the next extrusion; only the final retract before the end G-code
+    // stays open. A missing un-retract would print a starved bead; a missing retract would
+    // leave a primed hop, which the open-area test above catches.
+    let retracted = false
+    let extrudedRetracted = 0
+    const openRetracts: number[] = []
+    lines.forEach((l, i) => {
+      if (/^G1 E-/.test(l)) {
+        expect(retracted, `double retract at line ${i}`).toBe(false)
+        retracted = true
+        openRetracts.push(i)
+      } else if (/^G1 E[\d.]/.test(l)) {
+        expect(retracted, `un-retract without a retract at line ${i}`).toBe(true)
+        retracted = false
+        openRetracts.pop()
+      } else if (/^G1 X.* E[\d.]/.test(l) && retracted) {
+        extrudedRetracted++
+      }
+    })
+    expect(extrudedRetracted).toBe(0)
+    // The one retract left open is the final one, after the last restart comment.
+    expect(openRetracts).toEqual([lines.indexOf('; run FIRMWARE_RESTART to restore your configured motion limits') + 1])
   })
 
   it('does not travel directly from the last comb of one layer to the first frame move of the next', () => {
@@ -251,6 +292,18 @@ describe('contrastBase', () => {
     }
   })
 
+  it('never travels across an open fiducial hole while primed, base layers included', () => {
+    // The base backs the comb windows, so on the base layers only the holes are open; above
+    // the base the windows are open too. The base raster's approach once crossed a hole primed.
+    const pauseIndex = lines.indexOf('PAUSE')
+    const open = openAreasOf(baseSpec)
+    const base = travelsAcross(lines.slice(0, pauseIndex), open.slice(2))
+    expect(base.primed, base.primed.join('\n')).toEqual([])
+    expect(base.retracted).toBeGreaterThan(0)
+    const coupon = travelsAcross(lines.slice(pauseIndex), open).primed
+    expect(coupon, coupon.join('\n')).toEqual([])
+  })
+
   it('prints two solid base layers over the full rectangle before the pause', () => {
     const g = emCouponGeometry(baseSpec)
     const ox = (profile.bedWidthMm - g.couponWidthMm) / 2
@@ -332,8 +385,20 @@ describe('extrusion multiplier pinning', () => {
     expect(generateEmGcodeWithReport(profile, filament, fast).warnings
       .some((w) => w.includes('mm^3/s'))).toBe(false)
     const weak = { ...filament, maxVolumetricFlowMm3S: 8 }
-    expect(generateEmGcodeWithReport(profile, weak, fast).warnings
-      .some((w) => w.includes("filament's configured 8 mm^3/s"))).toBe(true)
+    expect(generateEmGcodeWithReport(profile, weak, fast).warnings).toContain(
+      "Lower the print speed, or raise the filament's max volumetric flow only if the hotend " +
+        "can melt 10.1 mm^3/s. Above the filament's 8 mm^3/s max volumetric flow, the lines " +
+        'under-extrude.',
+    )
+  })
+
+  it('judges the flow at the pinned 1.0 multiplier the test prints with', () => {
+    // A 1.25 filament multiplier never reaches the comb lines, so 10.1 mm^3/s stays under a
+    // 10.5 mm^3/s limit (12.6 mm^3/s would pass it).
+    const fast = { ...spec, printSpeedMmS: 120 }
+    const rich = { ...filament, extrusionMultiplier: 1.25, maxVolumetricFlowMm3S: 10.5 }
+    expect(generateEmGcodeWithReport(profile, rich, fast).warnings
+      .some((w) => w.includes('mm^3/s'))).toBe(false)
   })
 })
 

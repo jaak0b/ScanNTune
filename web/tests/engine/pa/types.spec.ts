@@ -8,8 +8,9 @@ import {
   edgeShiftRange,
   fitsA4,
   maxLineCountForHeight,
-  paVolumetricFlowMm3S,
+  paFlowWarning,
 } from '../../../src/engine/pa/types'
+import { generatePaGcodeWithReport } from '../../../src/engine/pa/gcodeGenerator'
 
 describe('pa types', () => {
   it('steps PA linearly across lines', () => {
@@ -147,17 +148,32 @@ describe('pa types', () => {
     })
   })
 
-  describe('paVolumetricFlowMm3S', () => {
-    it('computes the fast segment flow as width times layer height times fast speed', () => {
-      const spec = { ...defaultPaTestSpec(), lineWidthMm: 0.5, fastSpeedMmS: 100 }
-      // 0.5 mm width * 0.2 mm layer height * 100 mm/s = 10 mm^3/s
-      expect(paVolumetricFlowMm3S(spec, 0.2)).toBeCloseTo(10, 10)
+  describe('paFlowWarning', () => {
+    const profile = defaultPrinterProfile()
+    const spec = defaultPaTestSpec()
+    const limited = { ...defaultFilamentProfile(), maxVolumetricFlowMm3S: 10 }
+
+    it('judges the fast segment the generator emits, extrusion multiplier included', () => {
+      // The 40 mm fast segment of a 0.45 x 0.2 mm bead from 1.75 mm filament at a 1.2
+      // multiplier commands E = 1.2 * 0.45 * 0.2 * 40 / (pi * 0.875^2) = 1.79605 at
+      // F6000 (100 mm/s): 10.8 mm^3/s, hand-derived, past the filament's 10 mm^3/s.
+      const rich = { ...limited, extrusionMultiplier: 1.2 }
+      const report = generatePaGcodeWithReport(profile, rich, spec)
+      expect(report.gcode).toMatch(/^G1 X[\d.]+ Y[\d.]+ E1\.79605 F6000$/m)
+      const expected =
+        "Lower the fast speed, or raise the filament's max volumetric flow only if the hotend " +
+        "can melt 10.8 mm^3/s. Above the filament's 10 mm^3/s max volumetric flow, the lines " +
+        'under-extrude.'
+      expect(paFlowWarning(profile, rich, spec)).toBe(expected)
+      expect(report.warnings).toContain(expected)
     })
 
-    it('scales linearly with fast speed', () => {
-      const spec = { ...defaultPaTestSpec(), lineWidthMm: 0.45, fastSpeedMmS: 60 }
-      const doubled = { ...spec, fastSpeedMmS: 120 }
-      expect(paVolumetricFlowMm3S(doubled, 0.2)).toBeCloseTo(2 * paVolumetricFlowMm3S(spec, 0.2), 10)
+    it('stays quiet when the commanded fast segment is within the limit', () => {
+      // At a 1.0 multiplier the same segment commands E = 1.49671 at F6000: 9.0 mm^3/s.
+      const report = generatePaGcodeWithReport(profile, limited, spec)
+      expect(report.gcode).toMatch(/^G1 X[\d.]+ Y[\d.]+ E1\.49671 F6000$/m)
+      expect(paFlowWarning(profile, limited, spec)).toBeNull()
+      expect(report.warnings.some((w) => w.includes('mm^3/s'))).toBe(false)
     })
   })
 })

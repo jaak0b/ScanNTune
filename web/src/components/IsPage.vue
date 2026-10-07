@@ -21,12 +21,16 @@ import type { ScanResolutionVerdict } from '../util/scanResolution'
 import { analyzeIsScans } from '../workerClient'
 import type { IsProcessing } from '../workerClient'
 import type { Firmware } from '../engine/gcode/profileTypes'
-import { generateIsGcodeWithReport } from '../engine/is/gcodeGenerator'
+import {
+  generateIsGcodeWithReport,
+  IS_OVERRIDDEN_SETTINGS,
+  isFlowWarnings,
+} from '../engine/is/gcodeGenerator'
 import { unresolvedVariablesWarning } from '../engine/pa/slicerVariables'
-import { flowWarningLimitMm3S } from '../engine/gcode/emitter'
+import { restartNoteText } from '../engine/gcode/couponShell'
 import {
   defaultIsTestSpec,
-  fitSpecToBed,
+  fitSpecToPrinter,
   MIN_CORNER_SPEED_MM_S,
   rampWarnings,
   validateIsSpec,
@@ -34,8 +38,7 @@ import {
   type IsTestSpec,
 } from '../engine/is/types'
 import { isCouponGeometry } from '../engine/is/couponGeometry'
-import { NOMINAL_WIDTH_FACTOR } from '../engine/gcode/emitter'
-import { defaultPrinterProfile } from '../engine/pa/types'
+import { defaultFilamentProfile, defaultPrinterProfile } from '../engine/gcode/profileTypes'
 import PrinterProfileCard from './PrinterProfileCard.vue'
 import IsFirstScanDiagram from './IsFirstScanDiagram.vue'
 import IsSecondScanDiagram from './IsSecondScanDiagram.vue'
@@ -118,19 +121,14 @@ const scanPlanNote = computed(() =>
   scanPlanNoteText(scanPlace.value, partColors.value, scanPlanTexts),
 )
 
-// The line and corner speeds must both be entered and satisfy the generator's own bound
-// (the corner speed floor, and the line speed being no slower than the corner speed) before a
-// spec can be assembled at all; there is no silent fallback to a computed default.
-const speedsValid = computed(
-  () =>
-    tierSpeed.value !== null &&
-    cornerSpeed.value !== null &&
-    cornerSpeed.value >= MIN_CORNER_SPEED_MM_S &&
-    tierSpeed.value >= cornerSpeed.value,
-)
+// The line and corner speeds must both be entered before a spec can be assembled at all;
+// there is no silent fallback to a computed default. Their bounds (the corner speed floor,
+// and the line speed being no slower than the corner speed) are validateIsSpec's alone: an
+// out-of-bounds pair still assembles, and the validator's own message surfaces below.
+const speedsMissing = computed(() => tierSpeed.value === null || cornerSpeed.value === null)
 
 const spec = computed<IsTestSpec | null>(() => {
-  if (!speedsValid.value || tierSpeed.value === null || cornerSpeed.value === null) return null
+  if (tierSpeed.value === null || cornerSpeed.value === null) return null
   return {
     ...specDefaults.value,
     speedsMmS: [tierSpeed.value],
@@ -148,15 +146,15 @@ const spec = computed<IsTestSpec | null>(() => {
   }
 })
 
-// The spec as the generator will actually print it: validated, then shrunk to the
-// configured bed with a user-worded note per reduction. Validation and fitting failures
+// The spec as the generator will actually print it: validated, then fitted to the printer's
+// firmware and bed with a user-worded note per change. Validation and fitting failures
 // both surface as the error text.
 const fitted = computed<{ spec: IsTestSpec; notes: string[] } | { error: string } | null>(() => {
   const s = spec.value
   if (!s) return null
   try {
     validateIsSpec(s)
-    return fitSpecToBed(s, store.selected ?? defaultPrinterProfile())
+    return fitSpecToPrinter(s, store.selected ?? defaultPrinterProfile())
   } catch (e) {
     return { error: e instanceof Error ? e.message : String(e) }
   }
@@ -185,30 +183,24 @@ const accelNote = computed(() => {
       `${p.printAccelMmS2} mm/s^2 because a weaker ramp leaves too faint a ringing trace.`
     : `The test accelerates at the profile's ${a} mm/s^2 print acceleration.`
 })
+// The generator's own flow warnings for the fitted spec, judged like the other flows against
+// the selected profile and filament, or the defaults while none is selected.
 const highFlowText = computed(() => {
   const s = fittedSpec.value
-  const p = store.selected
-  const f = store.selectedFilament
-  if (!s || !p || !f) return ''
-  const nominal = p.nozzleDiameterMm * NOMINAL_WIDTH_FACTOR
-  const flow = Math.max(...s.speedsMmS) * nominal * p.layerHeightMm
-  const limit = flowWarningLimitMm3S(f)
-  if (flow <= limit) return ''
-  return (
-    `The line speed extrudes ${flow.toFixed(1)} mm^3/s, above ` +
-    (f.maxVolumetricFlowMm3S > 0
-      ? `the filament's configured ${limit} mm^3/s maximum volumetric flow, `
-      : `the roughly ${limit} mm^3/s a typical hotend melts, `) +
-    'so the lines print thinner. The ringing wavelength is still readable from slightly ' +
-    'thinned lines.'
-  )
+  if (!s) return ''
+  return isFlowWarnings(
+    store.selected ?? defaultPrinterProfile(),
+    store.selectedFilament ?? defaultFilamentProfile(),
+    s,
+  ).join(' ')
 })
 
 const generateError = ref('')
 const unknownVariables = ref<string[]>([])
 const templateWarnings = ref<string[]>([])
+const restartNote = restartNoteText(IS_OVERRIDDEN_SETTINGS)
 const canGenerate = computed(
-  () => store.selected !== null && store.selectedFilament !== null && speedsValid.value,
+  () => store.selected !== null && store.selectedFilament !== null && fittedSpec.value !== null,
 )
 const unknownVariablesWarning = computed(() => unresolvedVariablesWarning(unknownVariables.value))
 
@@ -223,7 +215,7 @@ function generate(): void {
   const profile = store.selected
   const filament = store.selectedFilament
   const usedSpec = spec.value
-  if (!profile || !filament || !speedsValid.value || !usedSpec) return
+  if (!profile || !filament || !usedSpec) return
   generateError.value = ''
   unknownVariables.value = []
   templateWarnings.value = []
@@ -375,7 +367,6 @@ const canAnalyze = computed(
   () =>
     scanFiles.value.length === 2 &&
     isCalibrated.value &&
-    speedsValid.value &&
     fittedSpec.value !== null &&
     !analyzing.value,
 )
@@ -469,7 +460,7 @@ async function analyze(): Promise<void> {
             v-model="tierSpeed"
             label="Line speed (mm/s)"
             :step="10"
-            :min="cornerSpeed ?? MIN_CORNER_SPEED_MM_S"
+            :min="MIN_CORNER_SPEED_MM_S"
             data-testid="is-tier-speed"
           />
           <NumericField
@@ -490,7 +481,7 @@ async function analyze(): Promise<void> {
         </p>
         <v-alert
           v-if="highFlowText"
-          type="info"
+          type="warning"
           variant="tonal"
           density="compact"
           class="mt-2 soft-alert"
@@ -620,10 +611,10 @@ async function analyze(): Promise<void> {
         >
           {{ footprintText }}
         </v-chip>
-        <span v-if="!canGenerate && (!store.selected || !store.selectedFilament)" class="tip mt-0">
+        <span v-if="!store.selected || !store.selectedFilament" class="tip mt-0">
           Choose a printer profile first.
         </span>
-        <span v-else-if="!canGenerate" class="tip mt-0">
+        <span v-else-if="speedsMissing" class="tip mt-0">
           Enter both speeds in step 3 first.
         </span>
       </div>
@@ -675,10 +666,7 @@ async function analyze(): Promise<void> {
         </v-btn>
         <span v-if="filename" class="tip mt-0">{{ filename }}</span>
       </div>
-      <p class="tip mb-0" data-testid="is-restart-note">
-        Restart the firmware after the print finishes. The test overrides the printer's
-        motion limits, and the restart restores the configured values.
-      </p>
+      <p class="tip mb-0" data-testid="is-restart-note">{{ restartNote }}</p>
       <v-alert
         v-if="generateError"
         type="error"
@@ -774,6 +762,10 @@ async function analyze(): Promise<void> {
       </div>
       <p v-if="!isCalibrated" class="tip" data-testid="is-scan-needs-calibration">
         Calibrate the scanner in step 1 to enable the analysis.
+      </p>
+      <p v-if="!fittedSpec" class="tip" data-testid="is-scan-needs-speeds">
+        Enter the line speed and corner speed the coupon was printed with in step 3 to enable
+        the analysis.
       </p>
       <div class="gen-row">
         <v-btn

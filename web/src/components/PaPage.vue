@@ -9,7 +9,8 @@ import { readBytes } from '../util/preview'
 import { hasMeasuredResolution } from '../util/scanResolution'
 import { analyzePaScan } from '../workerClient'
 import type { PaProcessing } from '../workerClient'
-import { generatePaGcodeWithReport } from '../engine/pa/gcodeGenerator'
+import { generatePaGcodeWithReport, PA_OVERRIDDEN_SETTINGS } from '../engine/pa/gcodeGenerator'
+import { restartNoteText } from '../engine/gcode/couponShell'
 import { unresolvedVariablesWarning } from '../engine/pa/slicerVariables'
 import { paCorrection, sweepCorrection } from '../engine/pa/paCorrectionFormatter'
 import {
@@ -20,10 +21,10 @@ import {
   extruderPresetRanges,
   fitsA4,
   maxLineCountForHeight,
-  paVolumetricFlowMm3S,
+  paFlowWarning,
 } from '../engine/pa/types'
 import type { PaProgress, PaTestSpec } from '../engine/pa/types'
-import { flowWarningLimitMm3S } from '../engine/gcode/emitter'
+import { defaultFilamentProfile, defaultPrinterProfile } from '../engine/gcode/profileTypes'
 import NumericField from './NumericField.vue'
 import OverlayCanvas from './OverlayCanvas.vue'
 import CodeBlock from './CodeBlock.vue'
@@ -33,9 +34,10 @@ import ResolutionChip from './ResolutionChip.vue'
 
 const store = usePrinterProfiles()
 
-// Test range card state, persisted per printer profile; falls back to the spec defaults
-// when nothing is stored for the selected profile.
+// Test range card state and the smooth time step's sweep, persisted per printer profile; falls
+// back to the spec defaults when nothing is stored for the selected profile.
 const specDefaults = defaultPaTestSpec()
+const stDefaults = defaultSmoothTimeTestSpec(0)
 const paSettings = usePaSettings()
 const {
   form: settingsForm,
@@ -49,10 +51,22 @@ const {
     lineCount: specDefaults.lineCount,
     slowSpeedMmS: specDefaults.slowSpeedMmS,
     fastSpeedMmS: specDefaults.fastSpeedMmS,
+    smoothTimeStart: stDefaults.paStart,
+    smoothTimeEnd: stDefaults.paEnd,
+    smoothTimeFixedAdvance: null,
   }),
   () => store.selectedId,
 )
-const { paStart, paEnd, lineCount, slowSpeedMmS: slowSpeed, fastSpeedMmS: fastSpeed } = settingsForm
+const {
+  paStart,
+  paEnd,
+  lineCount,
+  slowSpeedMmS: slowSpeed,
+  fastSpeedMmS: fastSpeed,
+  smoothTimeStart: stStart,
+  smoothTimeEnd: stEnd,
+  smoothTimeFixedAdvance: stFixedAdvance,
+} = settingsForm
 
 const spec = computed<PaTestSpec>(() => ({
   ...defaultPaTestSpec(),
@@ -95,16 +109,23 @@ const exceedsA4 = computed(() => {
 const maxLinesForA4 = computed(() => maxLineCountForHeight(spec.value, A4_LONG_MM))
 const speedContrastLow = computed(() => spec.value.fastSpeedMmS < 3 * spec.value.slowSpeedMmS)
 const tooManyLines = computed(() => spec.value.lineCount > 24)
-const highFlow = computed(() => {
-  const p = store.selected
-  const f = store.selectedFilament
-  if (!p || !f) return false
-  return paVolumetricFlowMm3S(spec.value, p.layerHeightMm) > flowWarningLimitMm3S(f)
-})
+// The generator's own flow warning, judged like the other flows against the selected profile
+// and filament, or the defaults while none is selected.
+function flowWarningFor(s: PaTestSpec): string {
+  return (
+    paFlowWarning(
+      store.selected ?? defaultPrinterProfile(),
+      store.selectedFilament ?? defaultFilamentProfile(),
+      s,
+    ) ?? ''
+  )
+}
+const highFlowText = computed(() => flowWarningFor(spec.value))
 
 const generateError = ref('')
 const unknownVariables = ref<string[]>([])
 const templateWarnings = ref<string[]>([])
+const restartNote = restartNoteText(PA_OVERRIDDEN_SETTINGS)
 const canGenerate = computed(() => store.selected !== null && store.selectedFilament !== null)
 const unknownVariablesWarning = computed(() => unresolvedVariablesWarning(unknownVariables.value))
 
@@ -269,11 +290,9 @@ function applyShift(): void {
 }
 
 // Step 5, smooth time (optional, Klipper only). Shown once a successful PA result exists in this
-// session; hidden again if the user switches to a non-Klipper profile.
-const stDefaults = defaultSmoothTimeTestSpec(0)
-const stStart = ref<number | null>(stDefaults.paStart)
-const stEnd = ref<number | null>(stDefaults.paEnd)
-const stFixedAdvance = ref<number | null>(null)
+// session; hidden again if the user switches to a non-Klipper profile. The sweep range and the
+// fixed pressure advance are the persisted settings above, so both the generated coupon and the
+// analysis of an already printed one read the same values, also after a reload.
 const stSpec = computed<PaTestSpec>(() => ({
   ...defaultSmoothTimeTestSpec(stFixedAdvance.value ?? 0),
   paStart: stStart.value ?? stDefaults.paStart,
@@ -282,6 +301,9 @@ const stSpec = computed<PaTestSpec>(() => ({
 const showSmoothStep = computed(
   () => store.selected?.firmware === 'Klipper' && result.value?.success === true,
 )
+// The smooth time coupon prints its fast segments at the default fast speed, so it gets the
+// same flow check as the main coupon.
+const stHighFlowText = computed(() => flowWarningFor(stSpec.value))
 
 const stGenerateError = ref('')
 const stFilename = computed(() =>
@@ -415,6 +437,7 @@ const stCorrection = computed(() => {
           Generate G-code
         </v-btn>
       </div>
+      <p class="tip mb-0" data-testid="pa-restart-note">{{ restartNote }}</p>
       <v-dialog v-model="showPaInfo" max-width="560">
         <v-card title="What affects pressure advance">
           <v-card-text>
@@ -482,13 +505,13 @@ const stCorrection = computed(() => {
         :text="`The coupon is larger than A4. Most flatbed scanners cannot scan it in one pass. Reduce the line count to ${maxLinesForA4} or fewer unless your scanner is larger.`"
       />
       <v-alert
-        v-if="highFlow"
+        v-if="highFlowText"
         type="warning"
         variant="tonal"
         density="compact"
         class="mt-3 soft-alert"
         data-testid="pa-flow-warning"
-        text="At this fast speed, the fast segments under-extrude and the measured pressure advance is wrong. Lower the fast speed or raise the filament's max volumetric flow."
+        :text="highFlowText"
       />
       <v-alert
         v-if="generateError"
@@ -674,6 +697,15 @@ const stCorrection = computed(() => {
         </v-btn>
         <span v-if="stFilename" class="tip mt-0">{{ stFilename }}</span>
       </div>
+      <v-alert
+        v-if="stHighFlowText"
+        type="warning"
+        variant="tonal"
+        density="compact"
+        class="mt-3 soft-alert"
+        data-testid="pa-st-flow-warning"
+        :text="stHighFlowText"
+      />
       <v-alert
         v-if="stGenerateError"
         type="error"

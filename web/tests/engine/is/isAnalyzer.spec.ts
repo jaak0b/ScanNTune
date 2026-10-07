@@ -120,9 +120,10 @@ describe('analyzeIsCoupon render recovery', () => {
       expect(Math.abs(y.frequencyHz! - 118)).toBeLessThanOrEqual(2.4)
       expect(Math.abs(y.dampingRatio! - 0.12)).toBeLessThanOrEqual(0.03)
     },
-    // The sweep coupon is the largest render, and the joint fit adds its grid sweep over
-    // every record, so this case gets more headroom than the other render tests.
-    420000,
+    // The single-axis sweep coupon is no larger than the two-axis renders; its cost was the
+    // renderer testing some 200 sweep teeth per line at every sub-pixel, which the renderer
+    // now skips outside the teeth's footprint without changing a rendered value.
+    240000,
   )
 
   it(
@@ -180,9 +181,15 @@ describe('analyzeIsCoupon render recovery', () => {
       y.lines.forEach((l, i) => expect(l.cornerSpeedMmS).toBeCloseTo(rungs[i], 6))
       const bottom = y.lines[0]
       const top = y.lines[y.lines.length - 1]
-      expect(bottom.usedInJointFit || bottom.exclusion !== null).toBe(true)
+      // The faint bottom rung is not discarded: the joint fit reads it alongside the top rung,
+      // and both carry a joint-fit amplitude.
+      expect(bottom.usedInJointFit).toBe(true)
       expect(top.usedInJointFit).toBe(true)
-      expect(top.amplitudeMm!).toBeGreaterThan(2 * (bottom.amplitudeMm ?? 0))
+      expect(bottom.amplitudeMm).not.toBeNull()
+      expect(top.amplitudeMm).not.toBeNull()
+      // The rendered amplitudes stand 5 to 1 (100 over 20 mm/s); under the 3-level scan noise
+      // the fitted ratio must keep at least 2 of it.
+      expect(top.amplitudeMm!).toBeGreaterThan(2 * bottom.amplitudeMm!)
     },
     240000,
   )
@@ -214,14 +221,17 @@ describe('analyzeIsCoupon render recovery', () => {
         ),
       ).toBe(true)
 
-      // Every line is reported individually: none accepted, each with its own reason and
-      // category and an image-space position the overlay can point at. The dominant category
-      // must be the amplitude one, matching the pooled advice.
+      // Every line is reported individually with an image-space position the overlay can
+      // point at, and none is accepted. A line carries a refusal exactly when it was left out
+      // of the joint fit: a line in it was measured through the joint fit, so the alert's
+      // refusal counts and the table's joint-fit column cannot disagree. Lines without
+      // ringing read as weak on their own, and weak lines enter the joint fit, so most lines
+      // are in it and carry no refusal.
       expect(y.lines).toHaveLength(ySpec.speedsMmS.length * ySpec.linesPerSpeed)
-      expect(y.lines.every((l) => !l.accepted && l.refusalReason !== null)).toBe(true)
-      expect(y.lines.every((l) => l.refusalCategory !== null)).toBe(true)
-      const weak = y.lines.filter((l) => l.refusalCategory === 'weak-ringing').length
-      expect(weak * 2).toBeGreaterThan(y.lines.length)
+      expect(y.lines.every((l) => !l.accepted)).toBe(true)
+      expect(y.lines.every((l) => (l.refusalCategory === null) === l.usedInJointFit)).toBe(true)
+      expect(y.lines.every((l) => (l.refusalReason === null) === l.usedInJointFit)).toBe(true)
+      expect(y.lines.filter((l) => l.usedInJointFit).length * 2).toBeGreaterThan(y.lines.length)
       expect(y.lines.every((l) => l.startPx !== null && l.endPx !== null)).toBe(true)
     },
     240000,
@@ -491,9 +501,20 @@ describe('analyzeIsCoupon render recovery', () => {
     })
     const floor = 0.002
     // Clean split: every resolvable amplitude sits on a faster rung than every
-    // unresolvable one, so the advice fires.
+    // unresolvable one, so the advice fires. The 100 mm/s corner sits below the 150 mm/s
+    // line speed, so the line speed only has to rise once the corner passes it.
     const split = [outcome(20, 0.001), outcome(45, 0.0015), outcome(70, 0.003), outcome(100, 0.006)]
-    expect(ladderAdvice(ySpec, split, floor)).toContain('Raise the corner speed')
+    expect(ladderAdvice(ySpec, split, floor)).toBe(
+      'Raise the corner speed and reprint. If the new corner speed exceeds the 150 mm/s line ' +
+        'speed, raise the line speed to at least the corner speed. Only the lines with the ' +
+        'fastest corner speeds carried ringing the scan can resolve.',
+    )
+    // A corner speed already at the line speed can only rise with it.
+    expect(ladderAdvice({ ...ySpec, speedsMmS: [100] }, split, floor)).toBe(
+      'Raise the corner speed and the line speed together, then reprint. The line speed must ' +
+        'stay at least as fast as the corner speed. Only the lines with the fastest corner ' +
+        'speeds carried ringing the scan can resolve.',
+    )
     // No split (a slow rung resolved): no advice.
     const mixed = [outcome(20, 0.003), outcome(45, 0.001), outcome(70, 0.003), outcome(100, 0.006)]
     expect(ladderAdvice(ySpec, mixed, floor)).toBeNull()

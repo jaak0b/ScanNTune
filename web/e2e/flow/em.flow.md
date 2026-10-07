@@ -42,9 +42,10 @@ per row from a shared body; do not duplicate the test body.
    profile selected.
 4. Leave every "Test settings" field at its default (they already reproduce the golden spec
    above; do not change pitch, block count, lines per block, or print speed).
-5. In "Current slicer flow" (`data-testid="em-current-flow"`), enter `1`. The entered value only
-   chooses how the corrected flow is displayed (a value of 5 or less shows a factor) and does not
-   change the number; entering `1` also gates the Analyze button open (blank leaves it disabled).
+5. In "Current slicer flow" (`data-testid="em-current-flow"`), enter `1`. The entered value
+   chooses how the corrected flow is displayed (a value of 5 or less shows a factor) and never
+   changes the `em-flow` number; it only scales the M221 command, which at `1` equals the slicer
+   percentage. Entering `1` also gates the Analyze button open (blank leaves it disabled).
 6. Upload the case's fixture(s) through the real file input `em-scan-input`
    (`data-testid="em-scan-input"`, `<input type="file" multiple>`) via `setInputFiles`, passing
    both fixture paths at once for the pair case and a single path for the single-scan cases.

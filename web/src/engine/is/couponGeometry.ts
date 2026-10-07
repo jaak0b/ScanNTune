@@ -153,22 +153,25 @@ export function effectiveRunUpMm(spec: IsTestSpec): number {
  */
 export const RING_WAVELENGTHS_READ = 5
 
+/** Hard floor of the clean read length; the default is derived per tier speed instead
+ *  (five wavelengths of the lowest resonance of interest: 5 * tierSpeed / 25 Hz). */
+export const MIN_MEASURED_LINE_MM = 20
+
 /**
  * The clean read length actually laid out: with the sweep off, the spec's configured
  * value unchanged. With the sweep on, the coupon declares it measures frequencies from
  * `sweepFromHz` upward, so the read-length constraint (RING_WAVELENGTHS_READ wavelengths
  * of the lowest frequency of interest at the fastest tier speed) is evaluated at that
- * declared band edge instead of the fixed 25 Hz used for the non-sweep default; the
+ * declared band edge instead of the fixed 25 Hz used for the non-sweep default. The
  * result only ever shortens the coupon, never lengthens it past the user's configured
- * value.
+ * value, and never drops below MIN_MEASURED_LINE_MM, the floor validateIsSpec holds the
+ * configured value to (a high band edge or a slow tier would otherwise shorten it there).
  */
 export function effectiveMeasuredLineMm(spec: IsTestSpec): number {
   if (!spec.sweep) return spec.measuredLineMm
   const maxTierSpeedMmS = Math.max(...spec.speedsMmS)
-  return Math.min(
-    spec.measuredLineMm,
-    (RING_WAVELENGTHS_READ * maxTierSpeedMmS) / spec.sweepFromHz,
-  )
+  const bandEdgeMm = (RING_WAVELENGTHS_READ * maxTierSpeedMmS) / spec.sweepFromHz
+  return Math.min(spec.measuredLineMm, Math.max(MIN_MEASURED_LINE_MM, bandEdgeMm))
 }
 
 /**
@@ -465,9 +468,9 @@ function buildYGroup(
  * smallest corner x; the corner y then DECREASES as the corner x increases, so no leg
  * crosses a same-group measured segment. When the Y group exists, every X measured line
  * crosses every Y measured line; the crossing distances (from the X line's corner) are
- * recorded so the emitter can zero the flow over the already-printed beads. The window
- * sizing guarantees each crossing lies beyond BOTH lines' protected spans plus the inner
- * margin.
+ * recorded to document where the X line passes over the already-printed beads, which the
+ * emitter crosses at full flow so the beads weld into a stiff grid. The window sizing
+ * guarantees each crossing lies beyond BOTH lines' protected spans plus the inner margin.
  */
 function buildXGroup(
   spec: IsTestSpec,
@@ -550,7 +553,7 @@ export function isCouponGeometry(
   const couponHeightMm = interiorH + 2 * bandMm
 
   // Print order: the Y group first (its measured lines cross nothing), then the X group,
-  // whose measured lines carry the crossing dips over the Y beads.
+  // whose measured lines cross the Y beads at full flow.
   const groups: IsLineGroup[] = []
   const yGroup = hasY ? buildYGroup(spec, squareCornerVelocityMmS, bandMm, couponWidthMm) : null
   if (yGroup) groups.push(yGroup)

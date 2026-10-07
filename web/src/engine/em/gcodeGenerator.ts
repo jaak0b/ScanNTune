@@ -2,23 +2,24 @@ import type { FilamentProfile, PrinterProfile } from '../gcode/profileTypes'
 import {
   baseLayers,
   couponOrigin,
+  couponOverriddenSettings,
   EDGE_MARGIN_MM,
   fiducialHoleBoxes,
   filamentSwapPause,
+  finishCoupon,
   firstLayerSpeedCap,
   layerZBracket,
+  type OverriddenSetting,
   prepareProfile,
   setupPreamble,
   shellSlicerContext,
-  teardownLines,
 } from '../gcode/couponShell'
 import {
   BASE_LAYERS,
-  type Emitter,
   extrude,
-  flowWarningLimitMm3S,
   frameBandLayer,
   HIGH_FLOW_WARNING_THRESHOLD_MM3_S,
+  newEmitter,
   PERIMETER_LOOPS,
   RASTER_SPEED_FACTOR,
   rasterBase,
@@ -30,14 +31,25 @@ import {
 import {
   accelRampMm,
   emCouponGeometry,
+  emFlowWarning,
+  emPrintFilament,
   type EmTestSpec,
   MEASURED_LAYERS,
   PEDESTAL_LAYERS,
   PEDESTAL_WIDTH_FACTOR,
-  volumetricFlowMm3S,
 } from './types'
 
 export { EDGE_MARGIN_MM, HIGH_FLOW_WARNING_THRESHOLD_MM3_S }
+
+/**
+ * Firmware state the test leaves changed: the M221 flow percentage stays pinned at 100, and
+ * the preamble's motion limits stay in force; a firmware restart brings the configured values
+ * back.
+ */
+export const EM_OVERRIDDEN_SETTINGS: readonly OverriddenSetting[] = couponOverriddenSettings([
+  'flowPercentage',
+])
+
 /**
  * How far each comb line runs past its row boundary onto the band/rail perimeters.
  * Long enough that the wall crossing sits past the acceleration ramp and the nozzle
@@ -86,17 +98,8 @@ export function generateEmGcodeWithReport(
     warnings,
   } = prepareProfile(profile, filament, context, { includePause: spec.contrastBase })
 
-  const flow = volumetricFlowMm3S(spec, profile.layerHeightMm)
-  const flowLimit = flowWarningLimitMm3S(filament)
-  if (flow > flowLimit) {
-    warnings.push(
-      `Volumetric flow is ${flow.toFixed(1)} mm^3/s, above ` +
-        (filament.maxVolumetricFlowMm3S > 0
-          ? `the filament's configured ${flowLimit} mm^3/s maximum volumetric flow. `
-          : `the ${flowLimit} mm^3/s typical hotends under-extrude past. `) +
-        'Intended for high-flow hotends only.',
-    )
-  }
+  const flowWarning = emFlowWarning(profile, filament, spec)
+  if (flowWarning !== null) warnings.push(flowWarning)
   const ramp = accelRampMm(spec.printSpeedMmS, profile.printAccelMmS2)
   if (2 * ramp > spec.lineLengthMm / 2) {
     warnings.push(
@@ -111,7 +114,7 @@ export function generateEmGcodeWithReport(
 function emitEmGcode(profile: PrinterProfile, rawFilament: FilamentProfile, spec: EmTestSpec): string {
   // This test measures the extrusion multiplier, so it always prints at exactly 1.0: the
   // measured ratio is then the absolute value to set, with no back-multiplication.
-  const filament: FilamentProfile = { ...rawFilament, extrusionMultiplier: 1 }
+  const filament = emPrintFilament(rawFilament)
   const g = emCouponGeometry(spec)
   const { ox, oy } = couponOrigin(
     profile,
@@ -123,7 +126,14 @@ function emitEmGcode(profile: PrinterProfile, rawFilament: FilamentProfile, spec
 
   const nominal = spec.nominalLineWidthMm
   const holes: Box[] = fiducialHoleBoxes(g.fiducials, g.fiducialSizeMm, ox, oy)
-  const e: Emitter = { lines: [], x: 0, y: 0 }
+  // The comb rows sit in two open windows, one on each side of the center rail.
+  const combWindows: Box[] = [
+    { x0: ox + g.frameBandMm, y0: oy + g.topRowY0Mm, x1: ox + g.couponWidthMm - g.frameBandMm, y1: oy + g.topRowY1Mm },
+    { x0: ox + g.frameBandMm, y0: oy + g.bottomRowY0Mm, x1: ox + g.couponWidthMm - g.frameBandMm, y1: oy + g.bottomRowY1Mm },
+  ]
+  // A contrasting base is solid apart from the fiducial holes; the coupon layers above it
+  // (or on the bed) also leave the comb windows open.
+  const e = newEmitter(holes)
   const L = e.lines
   L.push(
     ...setupPreamble(profile, filament, [
@@ -145,6 +155,7 @@ function emitEmGcode(profile: PrinterProfile, rawFilament: FilamentProfile, spec
     filamentSwapPause(e, profile)
   }
 
+  e.openAreas = [...holes, ...combWindows]
   for (let layer = 0; layer < totalLayers; layer++) {
     const z = profile.layerHeightMm * (layer + 1) + zOffsetMm
     // Bracket the layer change: retract before the Z push, travel to the frame corner where
@@ -210,7 +221,6 @@ function emitEmGcode(profile: PrinterProfile, rawFilament: FilamentProfile, spec
     }
   }
 
-  retract(e, profile, 1)
-  L.push(...teardownLines(profile, filament))
+  finishCoupon(e, profile, filament, EM_OVERRIDDEN_SETTINGS)
   return L.join('\n') + '\n'
 }

@@ -14,6 +14,9 @@ const PA: PaSettings = {
   lineCount: 16,
   slowSpeedMmS: 25,
   fastSpeedMmS: 120,
+  smoothTimeStart: 0.02,
+  smoothTimeEnd: 0.05,
+  smoothTimeFixedAdvance: 0.045,
 }
 const EM: EmSettings = {
   pitchMinMm: 0.7,
@@ -60,6 +63,49 @@ describe('per-flow settings stores', () => {
     const id = addProfile()
     usePaSettings().save(PA)
     expect(JSON.parse(localStorage.getItem('scanntune.settings.pa')!)).toEqual({ [id]: PA })
+  })
+
+  it('round-trips the smooth time sweep and its fixed pressure advance for the selected profile', () => {
+    // The smooth time coupon is analyzed against these after a reload, so they must come back
+    // exactly as generated, not as the defaults.
+    const id = addProfile()
+    usePaSettings().save(PA)
+    setActivePinia(createPinia())
+    usePrinterProfiles().select(id)
+    const reloaded = usePaSettings().settings
+    expect(reloaded?.smoothTimeStart).toBe(0.02)
+    expect(reloaded?.smoothTimeEnd).toBe(0.05)
+    expect(reloaded?.smoothTimeFixedAdvance).toBe(0.045)
+  })
+
+  it('loads a pressure advance entry stored before the smooth time fields existed', () => {
+    const id = addProfile()
+    const older = {
+      paStart: 0.02,
+      paEnd: 0.08,
+      lineCount: 16,
+      slowSpeedMmS: 25,
+      fastSpeedMmS: 120,
+    }
+    localStorage.setItem('scanntune.settings.pa', JSON.stringify({ [id]: older }))
+    setActivePinia(createPinia())
+    usePrinterProfiles().select(id)
+    expect(usePaSettings().settings).toEqual({
+      ...older,
+      smoothTimeStart: null,
+      smoothTimeEnd: null,
+      smoothTimeFixedAdvance: null,
+    })
+  })
+
+  it('reset removes the stored smooth time sweep with the rest of the pressure advance entry', () => {
+    addProfile()
+    const settings = usePaSettings()
+    settings.save(PA)
+    settings.reset()
+    expect(settings.hasStored).toBe(false)
+    expect(settings.settings).toBeNull()
+    expect(localStorage.getItem('scanntune.settings.pa')).toBeNull()
   })
 
   it('flow settings are keyed by profile id under scanntune.settings.em', () => {

@@ -298,8 +298,9 @@ function refusedAxis(
 /**
  * Ladder-specific guidance on a refused axis: when every line whose fitted ring amplitude
  * the scan can resolve sits on a faster rung than every line it cannot, the coupon
- * self-ranged and the remedy is a faster ladder. Null when the sweep replaced the ladder
- * or the amplitude pattern does not show that split.
+ * self-ranged and the remedy is a faster ladder. The line speed bounds the corner speed
+ * (validateIsSpec), so the advice says when the line speed has to rise with it. Null when
+ * the sweep replaced the ladder or the amplitude pattern does not show that split.
  */
 export function ladderAdvice(
   spec: IsTestSpec,
@@ -314,15 +315,26 @@ export function ladderAdvice(
   const slowestResolvable = Math.min(...resolvable.map((l) => l.cornerSpeedMmS))
   const fastestUnresolvable = Math.max(...unresolvable.map((l) => l.cornerSpeedMmS))
   if (slowestResolvable <= fastestUnresolvable) return null
+  const lineSpeedMmS = Math.min(...spec.speedsMmS)
+  const raise =
+    spec.cornerSpeedMmS >= lineSpeedMmS
+      ? 'Raise the corner speed and the line speed together, then reprint. The line speed ' +
+        'must stay at least as fast as the corner speed.'
+      : `Raise the corner speed and reprint. If the new corner speed exceeds the ` +
+        `${lineSpeedMmS} mm/s line speed, raise the line speed to at least the corner speed.`
   return (
-    'Raise the corner speed and reprint. Only the lines with the fastest corner speeds ' +
-    'carried ringing the scan can resolve.'
+    `${raise} Only the lines with the fastest corner speeds carried ringing the scan can ` +
+    'resolve.'
   )
 }
 
 const NOT_TRACED_REASON =
   'The line could not be traced in the scan. It may be damaged, incompletely printed, or ' +
   'partly outside the scan area.'
+
+const FREQUENCY_OUTLIER_REASON =
+  'The ringing frequency fitted on this line lies far from the other lines, so the line was ' +
+  'left out of the joint fit. The trace may be corrupted by print defects or scan artifacts.'
 
 function measureGroup(
   cv: OpenCv,
@@ -438,18 +450,31 @@ function measureGroup(
     outcome.frequencyHz = fit.params?.frequencyHz ?? null
     outcome.amplitudeMm =
       (status.usedInJointFit ? status.amplitudeMm : null) ?? fit.params?.ringAmpMm ?? null
-    // A line "counts" when it entered the joint fit of an axis that produced a measurement;
-    // the screening label stays as the reason on every line that did not.
+    // A line "counts" when it entered the joint fit of an axis that produced a measurement.
     outcome.accepted = status.usedInJointFit && pool.accepted
-    outcome.refusalReason = outcome.accepted ? null : fit.refusalReason
-    outcome.refusalCategory = outcome.accepted ? null : fit.refusalCategory
+    // Only a line left out of the joint fit was refused: a line in it was measured through
+    // the joint fit even when the axis verdict refused, so its screening label (a weak or
+    // poorly fitting line on its own) is no refusal and is never counted as one.
+    if (status.usedInJointFit) {
+      outcome.refusalReason = null
+      outcome.refusalCategory = null
+    } else if (status.exclusion === 'frequency-outlier') {
+      outcome.refusalReason = FREQUENCY_OUTLIER_REASON
+      outcome.refusalCategory = 'frequency-outlier'
+    } else {
+      outcome.refusalReason = fit.refusalReason
+      outcome.refusalCategory = fit.refusalCategory
+    }
   }
 
   if (!pool.accepted) {
-    const r = refusedAxis(group.axis, pool.refusals, tracedIndices.length, scanIndex, lines)
+    const r = refusedAxis(group.axis, [...pool.refusals], tracedIndices.length, scanIndex, lines)
     r.linesUsed = pool.linesUsed
     r.fStatistic = pool.fStatistic
-    const advice = ladderAdvice(spec, lines, AMPLITUDE_RESOLUTION_PX / lateralPxPerMm)
+    // A remedy specific to the coupon replaces the generic rescan advice instead of
+    // competing with it.
+    const advice =
+      ladderAdvice(spec, lines, AMPLITUDE_RESOLUTION_PX / lateralPxPerMm) ?? pool.rescanAdvice
     if (advice !== null) r.refusals.push(advice)
     return r
   }

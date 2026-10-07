@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { defaultPrinterProfile } from '../../../src/engine/pa/types'
+import { defaultFilamentProfile, defaultPrinterProfile } from '../../../src/engine/pa/types'
 import {
   accelRampMm,
   defaultEmTestSpec,
@@ -85,9 +85,14 @@ describe('emCouponGeometry', () => {
 })
 
 describe('warning helpers', () => {
-  it('computes volumetric flow as speed * width * layer height', () => {
-    const spec = { ...defaultEmTestSpec(defaultPrinterProfile()), printSpeedMmS: 100 }
-    expect(volumetricFlowMm3S(spec, 0.2)).toBeCloseTo(100 * spec.nominalLineWidthMm * 0.2, 9)
+  it('reports the comb flow the generator commands, at the pinned 1.0 extrusion multiplier', () => {
+    const profile = defaultPrinterProfile()
+    const spec = { ...defaultEmTestSpec(profile), printSpeedMmS: 100 }
+    // Hand-derived: 100 mm/s x 0.42 mm nominal width x 0.2 mm layer = 8.4 mm^3/s. The test
+    // prints at exactly 1.0, so a filament multiplier never changes the commanded flow.
+    expect(volumetricFlowMm3S(spec, profile, defaultFilamentProfile())).toBeCloseTo(8.4, 9)
+    const rich = { ...defaultFilamentProfile(), extrusionMultiplier: 1.25 }
+    expect(volumetricFlowMm3S(spec, profile, rich)).toBeCloseTo(8.4, 9)
   })
   it('computes the acceleration ramp distance v^2 / (2a)', () => {
     expect(accelRampMm(100, 5000)).toBeCloseTo(1.0, 9)

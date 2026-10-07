@@ -2,15 +2,17 @@ import type { FilamentProfile, PrinterProfile } from '../gcode/profileTypes'
 import {
   baseLayers,
   couponOrigin,
+  couponOverriddenSettings,
   EDGE_MARGIN_MM,
   fiducialHoleBoxes,
   filamentSwapPause,
+  finishCoupon,
   firstLayerSpeedCap,
   layerZBracket,
+  type OverriddenSetting,
   prepareProfile,
   setupPreamble,
   shellSlicerContext,
-  teardownLines,
 } from '../gcode/couponShell'
 import {
   BASE_LAYERS,
@@ -20,9 +22,10 @@ import {
   type Emitter,
   type ExtrudeFn,
   extrude,
-  flowWarningLimitMm3S,
   frameBandInfill,
   HIGH_FLOW_WARNING_THRESHOLD_MM3_S,
+  highFlowWarning,
+  newEmitter,
   NOMINAL_WIDTH_FACTOR,
   PEDESTAL_LAYERS,
   PEDESTAL_WIDTH_FACTOR,
@@ -36,15 +39,43 @@ import {
   sweepPeakSpeedMmS,
 } from './couponGeometry'
 import { dipsForMove, extrudeWithDips, type PrintedBead } from './crossings'
-import {
-  disableShapingCommands,
-  isMotionLimitCommands,
-  restoreMotionLimitNote,
-  restoreShapingCommands,
-} from './firmwareMotion'
-import { fitSpecToBed, type IsTestSpec, rampWarnings, validateIsSpec } from './types'
+import { disableShapingCommands, isMotionLimitCommands } from './firmwareMotion'
+import { fitSpecToPrinter, type IsTestSpec, rampWarnings, validateIsSpec } from './types'
 
 export { EDGE_MARGIN_MM, HIGH_FLOW_WARNING_THRESHOLD_MM3_S }
+
+/**
+ * Firmware state the test leaves changed: shaping and pressure advance are switched off and
+ * the motion limits are raised for the whole print; a firmware restart brings all of it back.
+ */
+export const IS_OVERRIDDEN_SETTINGS: readonly OverriddenSetting[] = couponOverriddenSettings([
+  'inputShaping',
+  'pressureAdvance',
+])
+
+/**
+ * The high-flow warnings of a fitted spec: one per speed tier whose measured lines exceed the
+ * flow limit, and one for the resonance sweep, whose fastest chord runs at the vector sum of
+ * the corner speed and the peak lateral swing speed (about 18.75 mm/s under the
+ * accel_per_hz scaling), so at high corner speeds it can pass the limit even when every tier
+ * stays below it. Judged on the measured layers' nominal bead, extrusion multiplier included.
+ */
+export function isFlowWarnings(
+  profile: PrinterProfile,
+  filament: FilamentProfile,
+  fitted: IsTestSpec,
+): string[] {
+  const nominal = profile.nozzleDiameterMm * NOMINAL_WIDTH_FACTOR
+  const warnings = fitted.speedsMmS.map((speed) =>
+    highFlowWarning(profile, filament, nominal, speed, 'line speed'),
+  )
+  if (fitted.sweep) {
+    warnings.push(
+      highFlowWarning(profile, filament, nominal, sweepPeakSpeedMmS(fitted), 'corner speed'),
+    )
+  }
+  return warnings.filter((w): w is string => w !== null)
+}
 
 export function generateIsGcode(
   profile: PrinterProfile,
@@ -60,7 +91,7 @@ export function generateIsGcodeWithReport(
   spec: IsTestSpec,
 ): { gcode: string; unknownVariables: string[]; warnings: string[] } {
   validateIsSpec(spec)
-  const { spec: fitted, notes } = fitSpecToBed(spec, profile)
+  const { spec: fitted, notes } = fitSpecToPrinter(spec, profile)
 
   const g = isCouponGeometry(fitted)
   const { ox, oy } = couponOrigin(profile, g.couponWidthMm, g.couponHeightMm, spec.placement, EDGE_MARGIN_MM)
@@ -83,40 +114,7 @@ export function generateIsGcodeWithReport(
   } = prepareProfile(profile, filament, context, { includePause: spec.contrastBase })
   warnings.push(...notes)
   warnings.push(...rampWarnings(fitted))
-
-  const nominal = profile.nozzleDiameterMm * NOMINAL_WIDTH_FACTOR
-  const flowLimit = flowWarningLimitMm3S(filament)
-  for (const speed of fitted.speedsMmS) {
-    const flow = speed * nominal * profile.layerHeightMm
-    if (flow > flowLimit) {
-      warnings.push(
-        `The ${speed} mm/s tier extrudes ${flow.toFixed(1)} mm^3/s, above ` +
-          (filament.maxVolumetricFlowMm3S > 0
-            ? `the filament's configured ${flowLimit} mm^3/s maximum volumetric flow, `
-            : `the roughly ${flowLimit} mm^3/s a typical hotend melts, `) +
-          'so the lines print thinner. The ringing wavelength is still readable from ' +
-          'slightly thinned lines.',
-      )
-    }
-  }
-
-  // The sweep's fastest chord runs at the vector sum of the forward speed and the peak
-  // lateral swing speed (about 18.75 mm/s under the accel_per_hz scaling); at high
-  // corner speeds it can pass the hotend flow limit even when every tier stays below it.
-  if (fitted.sweep) {
-    const peak = sweepPeakSpeedMmS(fitted)
-    const flow = peak * nominal * profile.layerHeightMm
-    if (flow > flowLimit) {
-      warnings.push(
-        `The resonance sweep peaks at ${peak.toFixed(0)} mm/s, extruding ${flow.toFixed(1)} mm^3/s, above ` +
-          (filament.maxVolumetricFlowMm3S > 0
-            ? `the filament's configured ${flowLimit} mm^3/s maximum volumetric flow, `
-            : `the roughly ${flowLimit} mm^3/s a typical hotend melts, `) +
-          'so the sweep leg prints thinner near the swing extremes. The sweep leg is ' +
-          'not measured, and the ringing readout is unaffected.',
-      )
-    }
-  }
+  warnings.push(...isFlowWarnings(profile, filament, fitted))
 
   return { gcode: emitIsGcode(substituted, substitutedFilament, fitted), unknownVariables, warnings }
 }
@@ -146,14 +144,16 @@ function primeOnTheMove(
   lineWidthMm: number,
   x: number,
   y: number,
+  speedMmS: number,
 ): void {
   const len = Math.hypot(x - e.x, y - e.y)
   const eAmt = p.retractMm + beadExtrusionMm(p, f, len, lineWidthMm)
   e.lines.push(
-    `G1 X${x.toFixed(3)} Y${y.toFixed(3)} E${eAmt.toFixed(5)} F${Math.round(PRIME_SPEED_MM_S * 60)}`,
+    `G1 X${x.toFixed(3)} Y${y.toFixed(3)} E${eAmt.toFixed(5)} F${Math.round(speedMmS * 60)}`,
   )
   e.x = x
   e.y = y
+  e.retracted = false
 }
 
 /**
@@ -201,6 +201,7 @@ function finishLine(
   )
   e.x = wipeX
   e.y = wipeY
+  e.retracted = true
 }
 
 function emitIsGcode(profile: PrinterProfile, filament: FilamentProfile, spec: IsTestSpec): string {
@@ -215,8 +216,16 @@ function emitIsGcode(profile: PrinterProfile, filament: FilamentProfile, spec: I
 
   const nominal = profile.nozzleDiameterMm * NOMINAL_WIDTH_FACTOR
   const holes: Box[] = fiducialHoleBoxes(g.fiducials, g.fiducialSizeMm, ox, oy)
+  const windowBed: Box = {
+    x0: ox + g.windowBox.x0,
+    y0: oy + g.windowBox.y0,
+    x1: ox + g.windowBox.x1,
+    y1: oy + g.windowBox.y1,
+  }
 
-  const e: Emitter = { lines: [], x: 0, y: 0 }
+  // A contrasting base is solid apart from the fiducial holes; the coupon layers above it
+  // (or on the bed) also leave the window open.
+  const e = newEmitter(holes)
   const L = e.lines
   L.push(
     ...setupPreamble(
@@ -266,6 +275,7 @@ function emitIsGcode(profile: PrinterProfile, filament: FilamentProfile, spec: I
     filamentSwapPause(e, profile)
   }
 
+  e.openAreas = [...holes, windowBed]
   const totalLayers = PEDESTAL_LAYERS + IS_MEASURED_LAYERS
   for (let layer = 0; layer < totalLayers; layer++) {
     const z = profile.layerHeightMm * (layer + 1) + zOffsetMm
@@ -285,10 +295,13 @@ function emitIsGcode(profile: PrinterProfile, filament: FilamentProfile, spec: I
     // Nothing of this layer exists yet under the perimeters, so they extrude plainly; the
     // window box is the hole that turns the outline loops into a band frame.
     basePerimeters(e, profile, filament, nominal, ox, oy, g.couponWidthMm, g.couponHeightMm,
-      [{ x0: ox + g.windowBox.x0, y0: oy + g.windowBox.y0, x1: ox + g.windowBox.x1, y1: oy + g.windowBox.y1 }],
-      extrude, firstLayerSpeed)
-    // The test lines travel retracted and restore pressure with their moving primes.
+      [windowBed], extrude, firstLayerSpeed)
+    // The test lines travel retracted and restore pressure with their moving primes, which
+    // the pedestal layer caps at its first layer speed like every other bead on it.
     retract(e, profile, 1)
+    const primeSpeed = pedestal
+      ? Math.min(PRIME_SPEED_MM_S, profile.firstLayerSpeedMmS)
+      : PRIME_SPEED_MM_S
 
     // Each line is one continuous path from the coupon outer edge through the band, into
     // the window as the run-up, through the sharp corner, and across the window as the
@@ -326,7 +339,8 @@ function emitIsGcode(profile: PrinterProfile, filament: FilamentProfile, spec: I
             ? Math.min(1, profile.firstLayerSpeedMmS / sweepPeakSpeedMmS(spec))
             : 1
         travel(e, profile, ox + line.prime.x0, oy + line.prime.y0)
-        primeOnTheMove(e, profile, filament, width, ox + line.prime.x1, oy + line.prime.y1)
+        primeOnTheMove(e, profile, filament, width, ox + line.prime.x1, oy + line.prime.y1,
+          primeSpeed)
         // Full-flow run-up straight into the corner at the corner speed: under
         // the per-firmware junction limits this test emits (see isMotionLimitCommands for
         // the Klipper SCV, Marlin classic-jerk plus junction-deviation, and
@@ -337,10 +351,12 @@ function emitIsGcode(profile: PrinterProfile, filament: FilamentProfile, spec: I
         // Resonant run-up chords (empty without the sweep): the ramped zigzag of
         // Klipper's resonance tester, constant forward speed with a bang-bang lateral
         // acceleration. Each chord is commanded at its own average speed so every sweep
-        // cell lasts exactly one forcing period; adjacent chord velocities differ per
-        // axis by at most the profile's square corner velocity, so the planner blends
-        // them without junction slowdowns and the launch corner stays the only full
-        // velocity step. One continuous bead throughout, ending on the corner.
+        // cell lasts exactly one forcing period. Adjacent chords change each axis's velocity
+        // by at most the profile's square corner velocity, far below the corner limit this
+        // test emits, and no cell's lateral acceleration exceeds the test acceleration, so
+        // the planner's junction model gives no reason to brake between chords; that rests
+        // on the model and has not been checked on a toolhead trace. One continuous bead
+        // throughout, ending on the corner.
         for (const tooth of line.teeth) {
           extrude(e, profile, filament, width, ox + tooth.x1, oy + tooth.y1,
             tooth.speedMmS * pedestalScale)
@@ -376,19 +392,15 @@ function emitIsGcode(profile: PrinterProfile, filament: FilamentProfile, spec: I
       else extrude(e2, p2, f2, w2, x, y, s)
     }
 
-    // The lines left the nozzle retracted after their wipes, so the raster strips start
-    // on retracted hops (startRetracted skips the first strip's own retract) and cross
-    // the window without stringing.
+    // The lines left the nozzle retracted after their wipes, so the first raster strip
+    // starts on that retracted hop and every strip hop crosses the window without stringing.
     frameBandInfill(e, profile, filament, nominal, ox, oy, g.couponWidthMm, g.couponHeightMm,
-      g.frameBandMm, holes, layer % 2 === 0, bandExtrude, true, firstLayerSpeed)
+      g.frameBandMm, holes, layer % 2 === 0, bandExtrude, firstLayerSpeed)
   }
 
   // Hand the printer back: nothing is re-applied numerically. The user's own shaper,
   // pressure advance, and motion limit settings all come back with a firmware restart or
   // saved configuration, so no printer settings need to be stored for the restore.
-  L.push(...restoreShapingCommands(profile))
-  L.push(...restoreMotionLimitNote(profile))
-  retract(e, profile, 1)
-  L.push(...teardownLines(profile, filament))
+  finishCoupon(e, profile, filament, IS_OVERRIDDEN_SETTINGS)
   return L.join('\n') + '\n'
 }

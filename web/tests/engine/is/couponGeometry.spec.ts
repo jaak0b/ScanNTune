@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { defaultPrinterProfile } from '../../../src/engine/gcode/profileTypes'
-import { defaultIsTestSpec, fitSpecToBed, type IsTestSpec } from '../../../src/engine/is/types'
+import { defaultIsTestSpec, fitSpecToPrinter, type IsTestSpec } from '../../../src/engine/is/types'
 import {
   accelRampMm,
   ladderCornerSpeeds,
@@ -429,7 +429,7 @@ describe('corner-speed excitation ladder', () => {
   })
   it('shrinks a ladder coupon onto a small bed through the measured-line reduction', () => {
     const profile = { ...defaultPrinterProfile(), bedWidthMm: 100, bedDepthMm: 100 }
-    const { spec: fitted, notes } = fitSpecToBed(spec, profile)
+    const { spec: fitted, notes } = fitSpecToPrinter(spec, profile)
     expect(notes.some((n) => n.includes('shortened'))).toBe(true)
     expect(fitted.measuredLineMm).toBeLessThan(spec.measuredLineMm)
     const gf = isCouponGeometry(fitted)
@@ -719,8 +719,11 @@ describe('isCouponGeometry resonant run-up sweep', () => {
     expect(sweepLegMm(sweepSpec)).toBeCloseTo(29.35738350235176, 9)
     // The read-length constraint (RING_WAVELENGTHS_READ wavelengths of the 35 Hz band
     // edge at the 150 mm/s tier speed, 21.428571... mm) is tighter than the spec's 30 mm
-    // default, so the sweep coupon reads the shorter length: the non-sweep 125.91988...
-    // mm literal above minus the 8.571428... mm the read length gives up.
+    // default, so the sweep coupon reads the shorter length. Hand-derived from the non-sweep
+    // 105.7625 mm literal above: plus the 21.357383... mm the leg adds over the 8 mm run-up,
+    // minus the ladder's 1.2 mm extra ramp, (100^2 - 20^2) / (2 * 4000), which the single
+    // sweep corner speed drops, minus the 8.571428... mm the read length gives up:
+    // 105.7625 + 21.357384 - 1.2 - 8.571429 = 117.348455 mm.
     expect(effectiveMeasuredLineMm(sweepSpec)).toBeCloseTo(21.428571428571427, 9)
     expect(gs.couponWidthMm).toBeCloseTo(117.34845493092318, 9)
     expect(gs.couponHeightMm).toBeCloseTo(gs.couponWidthMm, 9)
@@ -777,5 +780,19 @@ describe('isCouponGeometry resonant run-up sweep', () => {
     expect(effectiveMeasuredLineMm(short)).toBeCloseTo(15, 9)
     // Off-sweep behavior is unchanged.
     expect(effectiveMeasuredLineMm(spec)).toBe(spec.measuredLineMm)
+  })
+
+  it('never shortens the read length below the 20 mm floor the spec itself must meet', () => {
+    // A 100 Hz band edge at a 100 mm/s line speed would ask for 5 * 100 / 100 = 5 mm, a
+    // quarter of the floor; the clamp holds it at 20 mm. The default sweep (21.43 mm) and
+    // the configured 30 mm stay as they were.
+    const highEdge: IsTestSpec = {
+      ...sweepSpec,
+      speedsMmS: [100],
+      cornerSpeedMmS: 100,
+      sweepFromHz: 100,
+    }
+    expect(effectiveMeasuredLineMm(highEdge)).toBe(20)
+    expect(effectiveMeasuredLineMm(sweepSpec)).toBeCloseTo(21.428571428571427, 9)
   })
 })

@@ -1,18 +1,29 @@
 import type { FilamentProfile, PrinterProfile, PaTestSpec } from './types'
-import { couponGeometry, KLIPPER_DEFAULT_SMOOTH_TIME, paValueForLine } from './types'
+import { couponGeometry, KLIPPER_DEFAULT_SMOOTH_TIME, paFlowWarning, paValueForLine } from './types'
 import {
   baseLayers,
   couponOrigin,
+  couponOverriddenSettings,
   fiducialHoleBoxes,
   filamentSwapPause,
+  finishCoupon,
+  type OverriddenSetting,
   prepareProfile,
   setupPreamble,
   shellSlicerContext,
-  teardownLines,
 } from '../gcode/couponShell'
-import { BASE_LAYERS, type Emitter, extrude, retract, travel } from '../gcode/emitter'
+import { BASE_LAYERS, extrude, newEmitter, retract, travel } from '../gcode/emitter'
 
 export { extrusionMm } from '../gcode/emitter'
+
+/**
+ * Firmware state the test leaves changed: pressure advance (and on Klipper the smooth time)
+ * stays at the last test line's value, and the preamble's motion limits stay in force; a
+ * firmware restart brings the configured values back.
+ */
+export const PA_OVERRIDDEN_SETTINGS: readonly OverriddenSetting[] = couponOverriddenSettings([
+  'pressureAdvance',
+])
 
 export function paCommand(firmware: PrinterProfile['firmware'], value: number): string {
   const v = value.toFixed(4)
@@ -71,6 +82,8 @@ export function generatePaGcodeWithReport(
     unknownVariables,
     warnings,
   } = prepareProfile(profile, filament, context)
+  const flowWarning = paFlowWarning(profile, filament, spec)
+  if (flowWarning !== null) warnings.push(flowWarning)
   return { gcode: emitPaGcode(substituted, substitutedFilament, spec), unknownVariables, warnings }
 }
 
@@ -80,7 +93,9 @@ function emitPaGcode(profile: PrinterProfile, filament: FilamentProfile, spec: P
   const { ox, oy } = couponOrigin(profile, g.baseWidthMm, g.baseHeightMm)
   const holes = fiducialHoleBoxes(g.fiducials, g.fiducialSizeMm, ox, oy)
 
-  const e: Emitter = { lines: [], x: 0, y: 0 }
+  // The base is solid apart from the fiducial holes, so they are the only open areas a
+  // travel can cross, on the base layers and on the line layer above them alike.
+  const e = newEmitter(holes)
   const L = e.lines
   L.push(...setupPreamble(profile, filament, ['; ScanNTune pressure advance test', '; fiducial holes preserved']))
 
@@ -128,7 +143,6 @@ function emitPaGcode(profile: PrinterProfile, filament: FilamentProfile, spec: P
     )
   }
 
-  retract(e, profile, 1)
-  L.push(...teardownLines(profile, filament))
+  finishCoupon(e, profile, filament, PA_OVERRIDDEN_SETTINGS)
   return L.join('\n') + '\n'
 }

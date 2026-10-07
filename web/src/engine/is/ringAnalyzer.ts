@@ -34,8 +34,9 @@ import type { TracedLine } from './lineTracer'
 //    (Golub & Pereyra 1973): for fixed (f, zeta) the linear solve is block-diagonal (one
 //    exact least-squares solve per line), so the projected functional is the sum of per-line
 //    residual sums. (f, zeta) are searched on a grid around the joint seed, then polished by
-//    Levenberg-Marquardt on the reduced two-parameter functional, re-solving the per-line
-//    linear systems at every perturbation (the Kaufman form of variable projection).
+//    Levenberg-Marquardt on the reduced two-parameter functional, whose Jacobian is a forward
+//    difference of the fully re-solved projected residual: a numerical form of the exact
+//    Golub-Pereyra variable projection Jacobian, not Kaufman's simplification of it.
 // 6. Acceptance: an extra-sum-of-squares F-test of the joint ring model against the nested
 //    per-line drift-only null (Seber & Wild, "Nonlinear Regression", 1989, ch. 5), so the
 //    axis verdict is a single significance test over all pooled samples instead of per-line
@@ -184,7 +185,14 @@ export type LineJointStatus =
 
 export interface AxisPool {
   accepted: boolean
+  /** The axis-level verdict of a refused axis; empty when accepted. */
   refusals: string[]
+  /**
+   * The generic rescan remedy that goes with a refusal (the scanner's lamp shadow is the
+   * usual cause), kept apart from the verdict so a remedy specific to the coupon can replace
+   * it; null when the refusal carries none.
+   */
+  rescanAdvice: string | null
   frequencyHz: number | null
   dampingRatio: number | null
   /** 95% confidence halfwidth of the jointly fitted frequency, Hz. */
@@ -799,8 +807,9 @@ export function jointAxisFit(
 
   // Levenberg-Marquardt polish of (f, zeta) on the reduced projected functional: the
   // Jacobian is a forward difference that re-solves the block linear systems at every
-  // perturbation (Kaufman's variable projection simplification), with the same
-  // multiplicative lambda control as the per-line polish.
+  // perturbation, so it differentiates the full projected residual (the exact Golub-Pereyra
+  // Jacobian, approximated numerically, not Kaufman's simplification that drops one of its
+  // terms), with the same multiplicative lambda control as the per-line polish.
   const clampTheta = (t: number[]): number[] => [
     Math.min(F_MAX_HZ, Math.max(F_MIN_HZ, t[0])),
     Math.min(ZETA_MAX, Math.max(ZETA_MIN, t[1])),
@@ -999,6 +1008,7 @@ export function poolAxisFits(
     amplitudeMm: null,
     linesUsed: included.length,
     lineJoint: statuses,
+    rescanAdvice: null,
   }
   // The pool's refusals carry only the axis-level verdict; the per-line reasons travel with
   // the per-line outcomes, where the UI summarizes them by category.
@@ -1010,21 +1020,22 @@ export function poolAxisFits(
   })
 
   if (included.length < MIN_ACCEPTED_LINES) {
-    // The advice depends on why lines were excluded: a majority of band-edge exclusions
+    // The remedy depends on why lines were excluded: a majority of band-edge exclusions
     // means the resonance is probably outside the searchable band, and anything else most
     // often points at the scanner's lamp shadow crossing the measured edges.
     const excluded = fits.filter((_, i) => !statuses[i].usedInJointFit)
     const bandEdgeCount = excluded.filter((f) => f.screening === 'out-of-band').length
-    const advice =
-      bandEdgeCount * 2 > excluded.length
-        ? 'The true resonance likely lies outside the measurable range.'
-        : `When most lines of a scan are refused, the scanner's lamp shadow is often falling ` +
-          `across the measured edges; rescan with the coupon rotated a half turn on the glass.`
-    return refuse(
+    const verdict =
       `Only ${included.length} of the axis's lines produced a usable ringing trace (at least ` +
-        `${MIN_ACCEPTED_LINES} are needed for a trustworthy estimate). ` +
-        advice,
-    )
+      `${MIN_ACCEPTED_LINES} are needed for a trustworthy estimate).`
+    if (bandEdgeCount * 2 > excluded.length) {
+      return refuse(`${verdict} The true resonance likely lies outside the measurable range.`)
+    }
+    return refuse(verdict, {
+      rescanAdvice:
+        `When most lines of a scan are refused, the scanner's lamp shadow is often falling ` +
+        `across the measured edges; rescan with the coupon rotated a half turn on the glass.`,
+    })
   }
 
   // Joint seed: the median per-line fitted frequency of the surviving lines, or the joint
@@ -1050,12 +1061,17 @@ export function poolAxisFits(
   // Acceptance: the extra-sum-of-squares F-test against the per-line drift-only null.
   if (!joint.significant) {
     // No excitation advice here: whether raising the corner speed would help is decided
-    // by the ladder split of the per-line amplitudes, judged where the rungs are known.
+    // by the ladder split of the per-line amplitudes, judged where the rungs are known,
+    // and that remedy then replaces this generic rescan advice.
     return refuse(
       'No statistically significant ringing was found on this axis: across all its lines, ' +
-        'the ringing model fits no better than plain drift. Rescan with the coupon rotated ' +
-        'a half turn on the glass, since lamp shadow can weaken the traced ringing.',
-      extras,
+        'the ringing model fits no better than plain drift.',
+      {
+        ...extras,
+        rescanAdvice:
+          'Rescan with the coupon rotated a half turn on the glass, since lamp shadow can ' +
+          'weaken the traced ringing.',
+      },
     )
   }
 
@@ -1158,5 +1174,6 @@ export function poolAxisFits(
     amplitudeMm: median(joint.amplitudesMm),
     linesUsed: included.length,
     lineJoint: statuses,
+    rescanAdvice: null,
   }
 }

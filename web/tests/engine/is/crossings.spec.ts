@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { defaultFilamentProfile, defaultPrinterProfile } from '../../../src/engine/pa/types'
-import { extrusionMm, type Emitter } from '../../../src/engine/gcode/emitter'
+import { extrusionMm, newEmitter, type Emitter } from '../../../src/engine/gcode/emitter'
 import { dipsForMove, extrudeWithDips } from '../../../src/engine/is/crossings'
 
 const profile = defaultPrinterProfile()
@@ -39,7 +39,7 @@ describe('extrudeWithDips', () => {
   const ePerMm = extrusionMm(1, width, profile.layerHeightMm, filament.filamentDiameterMm)
 
   function run(dips: Parameters<typeof extrudeWithDips>[7]): Emitter {
-    const e: Emitter = { lines: [], x: 0, y: 0 }
+    const e = newEmitter()
     extrudeWithDips(e, profile, filament, width, 10, 0, 100, dips)
     return e
   }

@@ -1,13 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import { defaultPrinterProfile } from '../../../src/engine/gcode/profileTypes'
+import type { Firmware } from '../../../src/engine/gcode/profileTypes'
 import {
   accelRampMm,
   defaultIsTestSpec,
-  fitSpecToBed,
+  fitSpecToPrinter,
   rampWarnings,
   validateIsSpec,
 } from '../../../src/engine/is/types'
-import { isCouponGeometry } from '../../../src/engine/is/couponGeometry'
+import { isCouponGeometry, ladderCornerSpeeds } from '../../../src/engine/is/couponGeometry'
 
 describe('defaultIsTestSpec', () => {
   it('uses the documented defaults', () => {
@@ -116,12 +117,61 @@ describe('rampWarnings', () => {
   })
 })
 
-describe('fitSpecToBed', () => {
+describe('fitSpecToPrinter firmware fit', () => {
+  const spec = defaultIsTestSpec(defaultPrinterProfile())
+  const withFirmware = (firmware: Firmware) => ({ ...defaultPrinterProfile(), firmware })
+
+  it('caps the Marlin corner speed where junction deviation stops, and says so', () => {
+    // At 4000 mm/s^2 a 0.3 mm junction deviation takes a 90 degree corner at most at
+    // sqrt(0.3 * 4000 * (sqrt(2) + 1)) = 53.82 mm/s (Marlin's planner junction formula),
+    // rounded down to 53.8.
+    const { spec: fitted, notes } = fitSpecToPrinter(spec, withFirmware('Marlin'))
+    expect(fitted.cornerSpeedMmS).toBe(53.8)
+    expect(notes).toEqual([
+      "The corner speed was limited to 53.8 mm/s because Marlin's junction deviation cannot " +
+        'express a faster corner at 4000 mm/s^2.',
+    ])
+  })
+
+  it('makes the capped speed the ladder top rung and keeps the 20 mm/s bottom rung', () => {
+    const { spec: fitted } = fitSpecToPrinter(spec, withFirmware('Marlin'))
+    const rungs = ladderCornerSpeeds(fitted)
+    expect(rungs[0]).toBe(20)
+    expect(rungs[rungs.length - 1]).toBeCloseTo(53.8, 9)
+  })
+
+  it('leaves a Marlin corner speed already under the cap untouched', () => {
+    const slow = { ...spec, cornerSpeedMmS: 50 }
+    expect(fitSpecToPrinter(slow, withFirmware('Marlin'))).toEqual({ spec: slow, notes: [] })
+    // The cap grows with the acceleration: 120.3 mm/s at 20000 mm/s^2 hosts the 100 default.
+    const hot = { ...spec, accelMmS2: 20000 }
+    expect(fitSpecToPrinter(hot, withFirmware('Marlin'))).toEqual({ spec: hot, notes: [] })
+  })
+
+  it('never caps Klipper or RepRapFirmware', () => {
+    for (const firmware of ['Klipper', 'RepRapFirmware'] as const) {
+      expect(fitSpecToPrinter(spec, withFirmware(firmware))).toEqual({ spec, notes: [] })
+    }
+  })
+
+  it('refuses a Marlin acceleration too low to express the 20 mm/s minimum corner', () => {
+    // 20^2 / (0.3 * (sqrt(2) + 1)) = 552.28 mm/s^2, rounded up to 553.
+    expect(() =>
+      fitSpecToPrinter({ ...spec, accelMmS2: 552, cornerSpeedMmS: 20, speedsMmS: [150] },
+        withFirmware('Marlin')),
+    ).toThrow(/at least 553 mm\/s\^2/)
+    expect(() =>
+      fitSpecToPrinter({ ...spec, accelMmS2: 553, cornerSpeedMmS: 20 }, withFirmware('Marlin')),
+    ).not.toThrow()
+  })
+})
+
+describe('fitSpecToPrinter bed fit', () => {
   const spec = defaultIsTestSpec(defaultPrinterProfile())
   it('leaves the default spec unchanged on the default 220 mm bed and on a 120 mm bed', () => {
     for (const bed of [220, 120]) {
       const p = { ...defaultPrinterProfile(), bedWidthMm: bed, bedDepthMm: bed }
-      const { spec: fitted, notes } = fitSpecToBed(spec, p)
+      const { spec: fitted, notes } = fitSpecToPrinter(spec, p)
       expect(fitted).toEqual(spec)
       expect(notes).toEqual([])
     }
@@ -129,7 +179,7 @@ describe('fitSpecToBed', () => {
   it('keeps the maximum line count unchanged on the default 220 mm bed', () => {
     // Fifteen lines widen the two-axis coupon to 139.5625 mm, well inside 220 mm.
     const max = { ...spec, linesPerSpeed: 15 }
-    const { spec: fitted, notes } = fitSpecToBed(max, defaultPrinterProfile())
+    const { spec: fitted, notes } = fitSpecToPrinter(max, defaultPrinterProfile())
     expect(fitted).toEqual(max)
     expect(notes).toEqual([])
   })
@@ -139,14 +189,14 @@ describe('fitSpecToBed', () => {
     // single tier leaves nothing else to drop.
     const max = { ...spec, linesPerSpeed: 15 }
     const p = { ...defaultPrinterProfile(), bedWidthMm: 120, bedDepthMm: 120 }
-    expect(() => fitSpecToBed(max, p)).toThrow(/does not fit/)
+    expect(() => fitSpecToPrinter(max, p)).toThrow(/does not fit/)
   })
   it('drops the fastest tier before shortening lines', () => {
     // A three-tier variant overflows a 160 mm bed; dropping the 300 mm/s tier shrinks the
     // field, the packed diagonal, and the band, back onto it at full read length.
     const three = { ...spec, speedsMmS: [150, 200, 300] }
     const p = { ...defaultPrinterProfile(), bedWidthMm: 160, bedDepthMm: 160 }
-    const { spec: fitted, notes } = fitSpecToBed(three, p)
+    const { spec: fitted, notes } = fitSpecToPrinter(three, p)
     expect(fitted.speedsMmS).toEqual([150, 200])
     expect(fitted.measuredLineMm).toBe(30)
     expect(notes).toHaveLength(1)
@@ -156,7 +206,7 @@ describe('fitSpecToBed', () => {
     // The default spec already has a single tier, so only the line shortening can act.
     const long = { ...spec, measuredLineMm: 60 }
     const p = { ...defaultPrinterProfile(), bedWidthMm: 110, bedDepthMm: 110 }
-    const { spec: fitted, notes } = fitSpecToBed(long, p)
+    const { spec: fitted, notes } = fitSpecToPrinter(long, p)
     expect(fitted.speedsMmS).toEqual([150])
     expect(fitted.measuredLineMm).toBeLessThan(60)
     expect(fitted.measuredLineMm).toBeGreaterThanOrEqual(20)
@@ -170,7 +220,7 @@ describe('fitSpecToBed', () => {
   })
   it('never shortens below the 20 mm floor and throws when the bed is genuinely too small', () => {
     const p = { ...defaultPrinterProfile(), bedWidthMm: 75, bedDepthMm: 75 }
-    expect(() => fitSpecToBed(spec, p)).toThrow(/does not fit/)
+    expect(() => fitSpecToPrinter(spec, p)).toThrow(/does not fit/)
   })
 })
 

@@ -15,17 +15,19 @@ import { resolutionRowValue } from '../util/scanResolution'
 import { analyzeEmScans } from '../workerClient'
 import type { EmProcessing } from '../workerClient'
 import { emCorrection, formatSlicerFlow } from '../engine/em/emCorrectionFormatter'
-import { generateEmGcodeWithReport } from '../engine/em/gcodeGenerator'
+import { EM_OVERRIDDEN_SETTINGS, generateEmGcodeWithReport } from '../engine/em/gcodeGenerator'
+import { restartNoteText } from '../engine/gcode/couponShell'
 import { unresolvedVariablesWarning } from '../engine/pa/slicerVariables'
 import {
   accelRampMm,
   defaultEmTestSpec,
   emCouponGeometry,
+  emFlowWarning,
   volumetricFlowMm3S,
   type EmProgress,
   type EmTestSpec,
 } from '../engine/em/types'
-import { fitsA4, flowWarningLimitMm3S } from '../engine/gcode/emitter'
+import { fitsA4 } from '../engine/gcode/emitter'
 import { defaultFilamentProfile } from '../engine/gcode/profileTypes'
 import { defaultPrinterProfile } from '../engine/pa/types'
 import PrinterProfileCard from './PrinterProfileCard.vue'
@@ -118,12 +120,16 @@ const footprintText = computed(
   () => `coupon ${Math.round(geometry.value.couponWidthMm)} x ${Math.round(geometry.value.couponHeightMm)} mm`,
 )
 const exceedsA4 = computed(() => !fitsA4(geometry.value.couponWidthMm, geometry.value.couponHeightMm))
-const layerHeight = computed(() => (store.selected ?? defaultPrinterProfile()).layerHeightMm)
-const flowText = computed(() => `${volumetricFlowMm3S(spec.value, layerHeight.value).toFixed(1)} mm^3/s`)
-const highFlow = computed(() => {
-  const f = store.selectedFilament ?? defaultFilamentProfile()
-  return volumetricFlowMm3S(spec.value, layerHeight.value) > flowWarningLimitMm3S(f)
-})
+// The flow figures are the generator's own, judged against the selected profile and filament,
+// or the defaults while none is selected.
+const flowProfile = computed(() => store.selected ?? defaultPrinterProfile())
+const flowFilament = computed(() => store.selectedFilament ?? defaultFilamentProfile())
+const flowText = computed(
+  () => `${volumetricFlowMm3S(spec.value, flowProfile.value, flowFilament.value).toFixed(1)} mm^3/s`,
+)
+const highFlowText = computed(
+  () => emFlowWarning(flowProfile.value, flowFilament.value, spec.value) ?? '',
+)
 const rampWarning = computed(() => {
   const p = store.selected
   if (!p) return false
@@ -133,6 +139,7 @@ const rampWarning = computed(() => {
 const generateError = ref('')
 const unknownVariables = ref<string[]>([])
 const templateWarnings = ref<string[]>([])
+const restartNote = restartNoteText(EM_OVERRIDDEN_SETTINGS)
 const canGenerate = computed(() => store.selected !== null && store.selectedFilament !== null)
 const unknownVariablesWarning = computed(() => unresolvedVariablesWarning(unknownVariables.value))
 
@@ -177,10 +184,11 @@ const progressText = ref('')
 // The user's CURRENT slicer flow, entered either as a factor (PrusaSlicer extrusion
 // multiplier / Orca flow ratio, e.g. 0.96) or as a percent (Cura-style, e.g. 96). Values
 // above 5 are read as percent; real factors live near 1 and real percents near 100, so the
-// two ranges cannot collide. The entry only chooses the display style the corrected value is
-// echoed back in: the coupon prints at 100 percent flow, so the number itself never enters
-// the arithmetic. Deliberately starts empty: analysis is blocked until the user has chosen
-// a style by entering their current setting.
+// two ranges cannot collide. The entry chooses the display style the corrected slicer flow is
+// echoed back in, and it scales the M221 command, which multiplies whatever the slicer
+// commands. The coupon prints at 100 percent flow, so the slicer flow value itself never
+// depends on it. Deliberately starts empty: analysis is blocked until the user has entered
+// their current setting.
 const currentFlow = ref<number | null>(null)
 const currentFlowValid = computed(() => currentFlow.value !== null && currentFlow.value > 0)
 
@@ -258,16 +266,18 @@ async function analyze(): Promise<void> {
 const result = computed(() => processing.value?.result ?? null)
 // The measured over/under-extrusion ratio, which is the absolute flow to set because the
 // coupon always prints at flow 100%. The M221 command and the slicer flow value below both
-// read this one result.
+// read this one result; the command is relative to the entered current flow, so it follows
+// that entry.
 const correction = computed(() => {
   const r = result.value
   const s = analyzedSpec.value
-  if (!r || !r.success || r.wMm === null || !s) return null
-  return emCorrection(store.selected?.firmware ?? 'Klipper', s.nominalLineWidthMm, r.wMm)
+  const entered = currentFlow.value
+  if (!r || !r.success || r.wMm === null || !s || entered === null || entered <= 0) return null
+  return emCorrection(store.selected?.firmware ?? 'Klipper', s.nominalLineWidthMm, r.wMm, entered)
 })
 
-// Corrected slicer flow: the same ratio as the M221 tile, echoed in the style the current
-// flow was entered in (factor or percent). The uncertainty is the standard error of the
+// Corrected slicer flow: the absolute measured ratio the M221 command also derives from,
+// echoed in the style the current flow was entered in (factor or percent). The uncertainty is the standard error of the
 // measured bead width (between-block spread of the analysis) relative to that width, applied
 // to the shown value. Presented the same way the input shaper states its frequency
 // confidence interval.
@@ -470,13 +480,13 @@ const scanCards = computed<ScanCard[]>(() => {
         text="The coupon is larger than A4. Most flatbed scanners cannot scan it in one pass. Reduce the block count or lines per block unless your scanner is larger."
       />
       <v-alert
-        v-if="highFlow"
+        v-if="highFlowText"
         type="warning"
         variant="tonal"
         density="compact"
         class="mt-3 soft-alert"
         data-testid="em-flow-warning"
-        text="This volumetric flow is intended for high-flow hotends. A standard hotend may under-extrude and mask the real result."
+        :text="highFlowText"
       />
       <v-alert
         v-if="rampWarning"
@@ -506,6 +516,7 @@ const scanCards = computed<ScanCard[]>(() => {
         </v-btn>
         <span v-if="filename" class="tip mt-0">{{ filename }}</span>
       </div>
+      <p class="tip mb-0" data-testid="em-restart-note">{{ restartNote }}</p>
       <v-alert
         v-if="generateError"
         type="error"
@@ -560,8 +571,8 @@ const scanCards = computed<ScanCard[]>(() => {
       </div>
       <p class="tip mb-3">
         Enter your current slicer flow as an extrusion multiplier / flow ratio (0.96) or as a
-        percentage (96). The result is shown in the same format, and the coupon always prints
-        at 100 percent flow, so the entry does not change its value.
+        percentage (96). The new slicer flow uses the same format, and the M221 command is
+        computed for G-code sliced at this flow.
       </p>
       <div class="scan-inputs mb-3">
         <label class="dropzone" :class="{ 'dropzone-disabled': !isCalibrated || analysisStarted }">

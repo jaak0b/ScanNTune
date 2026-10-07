@@ -38,21 +38,25 @@ function percent(v: number): string {
   return `${(100 * v).toFixed(1)}%`
 }
 
-// Per-line refusals are summarized as one labeled count per category, so a refused axis
-// reads as a short list of facts instead of repeated prose; each label describes what the
-// line looked like, not which internal gate refused it. The full per-line reason stays on
-// the line's overlay marker. Shown only for a refused axis: on a measured axis the per-line
-// outcomes are already visible on the scan cards and overlays.
+// The lines a refused axis left out of its joint fit are summarized in its alert as one
+// labeled count per category, so the alert reads as a short list of facts instead of
+// repeated prose; each label describes what the line looked like, not which internal gate
+// refused it. A line that entered the joint fit carries no refusal category, so the counts
+// cover exactly the lines the table below shows as "In joint fit: no". On a measured axis
+// the table alone shows the per-line outcomes.
 const CATEGORY_LABELS: Record<NonNullable<IsLineRefusalCategory>, string> = {
   'weak-ringing': 'No ringing visible above the scan noise',
   'irregular-trace': 'Trace too irregular to read as ringing',
   'out-of-band': `Ringing outside the ${F_MIN_HZ} to ${F_MAX_HZ} Hz measurable range`,
+  'frequency-outlier': 'Ringing frequency far from the other lines',
   'not-traced': 'Line not found in the scan',
 }
 
 // Per-line diagnostic rows: each underlying fact is its own labeled column with the exact
 // value (joint-fit membership as yes/no, the exclusion as a category label, frequency and
-// amplitude as numbers with units).
+// amplitude as numbers with units). The amplitude is the ring's at the start of the free
+// ringdown, from the joint fit for a line in it and from the line's own fit otherwise.
+// An axis never assigned a scan has no per-line measurements, so it gets no table.
 const EXCLUSION_LABELS: Record<IsLineExclusion, string> = {
   'no-free-response': 'No free ringdown after the corner',
   'out-of-band': `Fitted frequency at the edge of the ${F_MIN_HZ} to ${F_MAX_HZ} Hz search range`,
@@ -213,7 +217,7 @@ const snippet = computed(() => {
         </v-alert>
 
         <v-table
-          v-if="axis.lines.length > 0"
+          v-if="axis.scanIndex !== null && axis.lines.length > 0"
           density="compact"
           class="line-table mt-2"
           :data-testid="`is-line-detail-${axis.axis}`"
@@ -225,7 +229,7 @@ const snippet = computed(() => {
               <th>In joint fit</th>
               <th>Exclusion</th>
               <th>Frequency</th>
-              <th>Amplitude</th>
+              <th>Free ringdown amplitude</th>
             </tr>
           </thead>
           <tbody>

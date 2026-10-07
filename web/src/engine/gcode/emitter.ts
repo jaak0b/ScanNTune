@@ -1,14 +1,34 @@
 import type { FilamentProfile, PrinterProfile } from './profileTypes'
 
+export type Box = { x0: number; y0: number; x1: number; y1: number }
+
 export interface Emitter {
   lines: string[]
   x: number
   y: number
+  /** True while the filament is retracted. Every retract, un-retract, and priming move
+   *  updates it, so a travel knows whether it still has to retract. */
+  retracted: boolean
+  /**
+   * The regions of the layer being printed where no material lies under the nozzle path:
+   * the coupon's open fiducial holes, plus its open window on the coupon layers (a solid
+   * base layer backs the window). The generator sets them from the coupon's own geometry;
+   * `travel` retract-brackets every primed travel that crosses one of them.
+   */
+  openAreas: Box[]
 }
 
-export type Box = { x0: number; y0: number; x1: number; y1: number }
+/** A fresh emitter at the bed origin, primed, with the given open areas. */
+export function newEmitter(openAreas: Box[] = []): Emitter {
+  return { lines: [], x: 0, y: 0, retracted: false, openAreas }
+}
 
-/** Standard slicer volumetric flow: bead cross-section approximated as w * h. */
+/** Standard slicer bead cross-section, approximated as width times layer height, mm^2. */
+export function beadCrossSectionMm2(lineWidthMm: number, layerHeightMm: number): number {
+  return lineWidthMm * layerHeightMm
+}
+
+/** Standard slicer volumetric flow: the bead cross-section times its length, as filament. */
 export function extrusionMm(
   lengthMm: number,
   lineWidthMm: number,
@@ -16,13 +36,78 @@ export function extrusionMm(
   filamentDiameterMm: number,
 ): number {
   const filamentArea = Math.PI * (filamentDiameterMm / 2) ** 2
-  return (lineWidthMm * layerHeightMm * lengthMm) / filamentArea
+  return (beadCrossSectionMm2(lineWidthMm, layerHeightMm) * lengthMm) / filamentArea
 }
 
+/**
+ * The parameter interval [tMin, tMax] over which the line (bx, by) + t * (ux, uy) lies in
+ * the box (Liang-Barsky slab intersection), or null when the line misses it.
+ */
+function lineBoxInterval(
+  bx: number,
+  by: number,
+  ux: number,
+  uy: number,
+  box: Box,
+): [number, number] | null {
+  let tMin = -Infinity
+  let tMax = Infinity
+  const slabs: [number, number, number][] = [
+    [ux, box.x0 - bx, box.x1 - bx],
+    [uy, box.y0 - by, box.y1 - by],
+  ]
+  for (const [d, lo, hi] of slabs) {
+    if (Math.abs(d) < 1e-9) {
+      if (lo > 0 || hi < 0) return null
+    } else {
+      const t0 = lo / d
+      const t1 = hi / d
+      tMin = Math.max(tMin, Math.min(t0, t1))
+      tMax = Math.min(tMax, Math.max(t0, t1))
+    }
+  }
+  return tMin < tMax ? [tMin, tMax] : null
+}
+
+/** Below this length (mm) a path only grazes a box edge or corner; it is floating-point
+ *  noise, not a crossing. */
+const GRAZE_MM = 1e-6
+
+/**
+ * True when the straight path from (ax, ay) to (bx, by) passes through the box interior.
+ * A path running along an edge or touching a corner does not cross: the box boundary is
+ * where the surrounding material ends, not the opening itself.
+ */
+export function pathCrossesBox(ax: number, ay: number, bx: number, by: number, box: Box): boolean {
+  const len = Math.hypot(bx - ax, by - ay)
+  if (len < GRAZE_MM) return false
+  const ux = (bx - ax) / len
+  const uy = (by - ay) / len
+  const interval = lineBoxInterval(ax, ay, ux, uy, box)
+  if (interval === null) return false
+  const s0 = Math.max(interval[0], 0)
+  const s1 = Math.min(interval[1], len)
+  if (s1 - s0 < GRAZE_MM) return false
+  const mx = ax + ux * ((s0 + s1) / 2)
+  const my = ay + uy * ((s0 + s1) / 2)
+  return mx > box.x0 && mx < box.x1 && my > box.y0 && my < box.y1
+}
+
+/**
+ * Rapid travel to (x, y). A primed travel whose path crosses one of the emitter's open
+ * areas is retract-bracketed (retract, travel, un-retract), so the pressurized nozzle
+ * cannot string a film across the opening; the bracket hands the nozzle back primed, the
+ * state it found. A travel made while already retracted, or one over printed area or area
+ * the layer is about to fill, stays a plain travel: the standard slicer rule of retracting
+ * only where the move leaves the part.
+ */
 export function travel(e: Emitter, p: PrinterProfile, x: number, y: number): void {
+  const bracket = !e.retracted && e.openAreas.some((b) => pathCrossesBox(e.x, e.y, x, y, b))
+  if (bracket) retract(e, p, 1)
   e.lines.push(`G0 X${x.toFixed(3)} Y${y.toFixed(3)} F${Math.round(p.travelSpeedMmS * 60)}`)
   e.x = x
   e.y = y
+  if (bracket) retract(e, p, -1)
 }
 
 /** One bead's filament length: the geometric extrusion scaled by the filament's
@@ -38,10 +123,50 @@ export function beadExtrusionMm(
   return f.extrusionMultiplier * extrusionMm(lengthMm, lineWidthMm, p.layerHeightMm, f.filamentDiameterMm)
 }
 
+/**
+ * The volumetric flow a bead commands at `speedMmS`, mm^3/s: the cross-section extrusionMm
+ * deposits, scaled by the filament's extrusion multiplier exactly as beadExtrusionMm scales
+ * every printing move, times the speed. A generator that pins the multiplier passes the same
+ * pinned filament it prints with.
+ */
+export function beadVolumetricFlowMm3S(
+  p: PrinterProfile,
+  f: FilamentProfile,
+  lineWidthMm: number,
+  speedMmS: number,
+): number {
+  return f.extrusionMultiplier * beadCrossSectionMm2(lineWidthMm, p.layerHeightMm) * speedMmS
+}
+
 /** The volumetric flow above which a high-flow warning fires: the filament's configured
  *  maximum when set, else the conservative typical-hotend default. */
 export function flowWarningLimitMm3S(f: FilamentProfile): number {
   return f.maxVolumetricFlowMm3S > 0 ? f.maxVolumetricFlowMm3S : HIGH_FLOW_WARNING_THRESHOLD_MM3_S
+}
+
+/**
+ * The one high-flow warning every coupon shows, or null when the bead stays within the flow
+ * limit: the two remedies, then what happens past the limit. `speedName` is the settings
+ * field that sets the speed, as the page labels it ("fast speed", "line speed").
+ */
+export function highFlowWarning(
+  p: PrinterProfile,
+  f: FilamentProfile,
+  lineWidthMm: number,
+  speedMmS: number,
+  speedName: string,
+): string | null {
+  const flow = beadVolumetricFlowMm3S(p, f, lineWidthMm, speedMmS)
+  const limit = flowWarningLimitMm3S(f)
+  if (flow <= limit) return null
+  const limitText =
+    f.maxVolumetricFlowMm3S > 0
+      ? `the filament's ${limit} mm^3/s max volumetric flow`
+      : `the ${limit} mm^3/s a typical hotend melts`
+  return (
+    `Lower the ${speedName}, or raise the filament's max volumetric flow only if the hotend ` +
+    `can melt ${flow.toFixed(1)} mm^3/s. Above ${limitText}, the lines under-extrude.`
+  )
 }
 
 export function extrude(
@@ -62,8 +187,10 @@ export function extrude(
   e.y = y
 }
 
+/** A stationary retract (sign 1) or un-retract (sign -1) by the profile's retraction. */
 export function retract(e: Emitter, p: PrinterProfile, sign: 1 | -1): void {
   e.lines.push(`G1 E${(sign * -p.retractMm).toFixed(3)} F${Math.round(p.retractSpeedMmS * 60)}`)
+  e.retracted = sign === 1
 }
 
 /**
@@ -91,25 +218,9 @@ function clipRangeAgainstBox(
   b: number,
   box: Box,
 ): [number, number][] {
-  // Liang-Barsky style slab intersection of the parametric line with the box.
-  let tMin = -Infinity
-  let tMax = Infinity
-  let parallelOutside = false
-  const slabs: [number, number, number][] = [
-    [ux, box.x0 - bx, box.x1 - bx],
-    [uy, box.y0 - by, box.y1 - by],
-  ]
-  for (const [d, lo, hi] of slabs) {
-    if (Math.abs(d) < 1e-9) {
-      if (lo > 0 || hi < 0) parallelOutside = true
-    } else {
-      const t0 = lo / d
-      const t1 = hi / d
-      tMin = Math.max(tMin, Math.min(t0, t1))
-      tMax = Math.min(tMax, Math.max(t0, t1))
-    }
-  }
-  if (parallelOutside || tMin >= tMax) return [[a, b]] // no intersection with the box
+  const interval = lineBoxInterval(bx, by, ux, uy, box)
+  if (interval === null) return [[a, b]] // no intersection with the box
+  const [tMin, tMax] = interval
   // Clip the intersection interval [tMin, tMax] to [a, b] and remove it.
   const iMin = Math.max(tMin, a)
   const iMax = Math.min(tMax, b)
@@ -256,19 +367,17 @@ export function rasterBase(
     // Serpentine: odd scanlines print back toward the previous scanline's end.
     const ordered: [number, number][] =
       scanIndex % 2 === 1 ? [...ranges].reverse().map(([a, b]) => [b, a]) : ranges
-    // A scanline splits into more than one sub-range only where a fiducial hole clipped it
-    // (the rectangle bounds always yield one contiguous interval). The first sub-range's hop
-    // is the serpentine connector to the previous row; every later hop jumps across the hole
-    // that split the row, so it retracts and un-retracts around the travel like the strip hops
-    // do, or the pressurized nozzle strings a film across the open hole.
-    let emittedInRow = false
+    // Every hop, the serpentine connector to the previous row and a jump between the
+    // sub-ranges a hole split this row into alike, goes through travel, which retract-
+    // brackets exactly the hops whose path crosses an open hole. A hop that only cuts the
+    // clearance ring around a hole (the `holes` boxes here are grown by it) stays primed. A
+    // raster entered retracted (a band strip's approach) restores pressure right before its
+    // first bead.
     for (const [a, b] of ordered) {
       if (Math.abs(b - a) < lineWidthMm) continue
-      if (emittedInRow) retract(e, p, 1)
       travel(e, p, bx + a * ux, by + a * uy)
-      if (emittedInRow) retract(e, p, -1)
+      if (e.retracted) retract(e, p, -1)
       doExtrude(e, p, f, lineWidthMm, bx + b * ux, by + b * uy, speed)
-      emittedInRow = true
     }
     scanIndex++
   }
@@ -299,16 +408,16 @@ export function frameBandLayer(
   // The interior window is a hole box: it turns the solid fill into a frame band.
   const windowBox: Box = { x0: x0 + bandMm, y0: y0 + bandMm, x1: x0 + w - bandMm, y1: y0 + h - bandMm }
   basePerimeters(e, p, f, lineWidthMm, x0, y0, w, h, [windowBox], doExtrude, speedMmS)
-  frameBandInfill(e, p, f, lineWidthMm, x0, y0, w, h, bandMm, holes, angle45, doExtrude, false, speedMmS)
+  frameBandInfill(e, p, f, lineWidthMm, x0, y0, w, h, bandMm, holes, angle45, doExtrude, speedMmS)
 }
 
 /**
  * The infill half of a frame-band layer: the band raster strips followed by the fiducial
  * hole perimeters (see frameBandLayer for the reasoning behind that order). Split out so a
  * coupon generator can print its own geometry between the band perimeters and this fill.
- * Expects the nozzle primed on entry, like frameBandLayer after its perimeters; pass
- * `startRetracted` when the nozzle enters retracted, so the first strip hop does not
- * retract a second time.
+ * Each strip hop retracts (unless the nozzle already arrives retracted), travels straight to
+ * the strip's first scanline, and restores pressure there, so no strip starts with a primed
+ * approach along the band.
  */
 export function frameBandInfill(
   e: Emitter,
@@ -323,7 +432,6 @@ export function frameBandInfill(
   holes: Box[],
   angle45: boolean,
   doExtrude: ExtrudeFn = extrude,
-  startRetracted = false,
   speedMmS?: number,
 ): void {
   const infillInset = PERIMETER_LOOPS * lineWidthMm
@@ -344,12 +452,12 @@ export function frameBandInfill(
     { sx: x0 + infillInset, sy: y0 + bandMm - infillInset, w: bandMm - 2 * infillInset, h: h - 2 * bandMm + 2 * infillInset },
     { sx: x0 + w - bandMm + infillInset, sy: y0 + bandMm - infillInset, w: bandMm - 2 * infillInset, h: h - 2 * bandMm + 2 * infillInset },
   ]
-  strips.forEach((s, i) => {
-    if (!(startRetracted && i === 0)) retract(e, p, 1)
-    travel(e, p, s.sx, s.sy)
-    retract(e, p, -1)
+  for (const s of strips) {
+    // The raster's first travel is the strip hop itself, made retracted; rasterBase restores
+    // pressure on arrival at the first scanline.
+    if (!e.retracted) retract(e, p, 1)
     rasterBase(e, p, f, lineWidthMm, s.sx, s.sy, s.w, s.h, angle45, expanded, doExtrude, speedMmS)
-  })
+  }
   for (const hole of holes) {
     for (let k = 0; k < HOLE_PERIMETER_LOOPS; k++) {
       const out = (k + 0.5) * lineWidthMm

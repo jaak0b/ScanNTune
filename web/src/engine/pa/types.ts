@@ -1,3 +1,6 @@
+import type { FilamentProfile, PrinterProfile } from '../gcode/profileTypes'
+import { highFlowWarning } from '../gcode/emitter'
+
 export type { Firmware, FilamentProfile, PrinterProfile } from '../gcode/profileTypes'
 export { defaultFilamentProfile, defaultPrinterProfile } from '../gcode/profileTypes'
 
@@ -161,10 +164,18 @@ export function maxLineCountForHeight(spec: PaTestSpec, maxHeightMm: number): nu
   return Math.floor((maxHeightMm - 2 * spec.marginMm) / spec.linePitchMm) + 1
 }
 
-/** Volumetric flow of the fast segment, the segment whose extrusion the PA measurement
- *  depends on: exceeding the melt limit there under-extrudes it and corrupts the result. */
-export function paVolumetricFlowMm3S(spec: PaTestSpec, layerHeightMm: number): number {
-  return spec.fastSpeedMmS * spec.lineWidthMm * layerHeightMm
+/**
+ * The high-flow warning for the fast segment, the coupon's fastest bead and the one whose
+ * extrusion the measurement depends on (under-extruding it corrupts the result); null when
+ * it stays within the flow limit. Judged on the bead the generator commands, extrusion
+ * multiplier included.
+ */
+export function paFlowWarning(
+  profile: PrinterProfile,
+  filament: FilamentProfile,
+  spec: PaTestSpec,
+): string | null {
+  return highFlowWarning(profile, filament, spec.lineWidthMm, spec.fastSpeedMmS, 'fast speed')
 }
 
 export function couponGeometry(spec: PaTestSpec): CouponGeometry {
