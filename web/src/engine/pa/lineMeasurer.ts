@@ -1,5 +1,5 @@
 import type { Mat, OpenCv } from '../opencv'
-import type { PaTestSpec } from './types'
+import type { CouponGeometry, PaTestSpec } from './types'
 import { couponGeometry } from './types'
 import type { PaAlignment } from './fiducialAligner'
 import { mmToPx } from './fiducialAligner'
@@ -56,7 +56,6 @@ export function measureLineWidthProfile(
   const cols = gray.cols
 
   const g = couponGeometry(spec)
-  const lineLenMm = 2 * spec.slowSegmentMm + spec.fastSegmentMm
   const yMm = g.lineStartYMm(lineIndex)
 
   // The perpendicular to the line (coupon +Y) mapped through the affine's linear part; its length
@@ -76,7 +75,7 @@ export function measureLineWidthProfile(
   )
   const samples: WidthSample[] = []
   const profile = new Float64Array(profileLen)
-  for (let xMm = END_SKIP_MM; xMm <= lineLenMm - END_SKIP_MM + 1e-9; xMm += SAMPLE_STEP_MM) {
+  for (const xMm of measuredXsMm(g, SAMPLE_STEP_MM)) {
     const centre = mmToPx(alignment, g.lineStartXMm + xMm, yMm)
     const widthMm =
       measureAt(data, cols, rows, centre.x, centre.y, ux, uy, s0, profileLen, profile, boundSamples) /
@@ -84,6 +83,18 @@ export function measureLineWidthProfile(
     samples.push({ xMm, widthMm })
   }
   return samples
+}
+
+// Line-local sample positions along the printed line, at least END_SKIP_MM inside its ends. They
+// sit on a fixed grid of the given step anchored at the line-local origin, so the samples keep
+// their positions relative to the transitions, and each transition window the same sample set,
+// whatever the printed extent.
+function measuredXsMm(g: CouponGeometry, stepMm: number): number[] {
+  const [startXMm, endXMm] = g.lineExtentXsMm
+  const xs: number[] = []
+  const first = Math.ceil((startXMm + END_SKIP_MM) / stepMm - 1e-9)
+  for (let k = first; k * stepMm <= endXMm - END_SKIP_MM + 1e-9; k++) xs.push(k * stepMm)
+  return xs
 }
 
 /** Scan-pixel positions (fractional, bilinear-read) the line backdrop gate samples. */
@@ -100,14 +111,14 @@ export interface LineGatePositions {
 export function lineGatePositions(alignment: PaAlignment, spec: PaTestSpec): LineGatePositions {
   if (!alignment.success) throw new Error('Cannot assess the backdrop without a successful alignment.')
   const g = couponGeometry(spec)
-  const lineLenMm = 2 * spec.slowSegmentMm + spec.fastSegmentMm
+  // A 1 mm step (coarser than the width profiler's 0.25 mm) suffices here: the medians only
+  // need a representative tone sample, not sub-pixel coverage.
+  const xsMm = measuredXsMm(g, 1)
   const line: { x: number; y: number }[] = []
   const base: { x: number; y: number }[] = []
   for (let i = 0; i < spec.lineCount; i++) {
     const yMm = g.lineStartYMm(i)
-    // A 1 mm step (coarser than the width profiler's 0.25 mm) suffices here: the medians only
-    // need a representative tone sample, not sub-pixel coverage.
-    for (let xMm = END_SKIP_MM; xMm <= lineLenMm - END_SKIP_MM + 1e-9; xMm += 1) {
+    for (const xMm of xsMm) {
       line.push(mmToPx(alignment, g.lineStartXMm + xMm, yMm))
       base.push(mmToPx(alignment, g.lineStartXMm + xMm, yMm + spec.linePitchMm / 2))
     }

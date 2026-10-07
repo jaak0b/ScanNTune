@@ -40,6 +40,34 @@ describe('pa types', () => {
     expect(g.transitionXsMm).toEqual([spec.slowSegmentMm, spec.slowSegmentMm + spec.fastSegmentMm])
   })
 
+  it('shortens every default test line at both ends to keep its bead clear of the fiducial holes', () => {
+    // Line-local x runs from the 8 mm margin. The top-left hole spans coupon x 4 to 9; the two
+    // 0.45 mm perimeter loops around it reach 0.9 mm further and the bead's half width adds
+    // 0.225 mm, so the first and last lines (y 8 and 68) may start no earlier than coupon x 10.125:
+    // line-local 2.125. The right holes start at coupon x 87, so the lines end at 87 - 1.125 =
+    // 85.875: line-local 77.875. The transitions stay at 20 and 60.
+    const g = couponGeometry(defaultPaTestSpec())
+    expect(g.lineExtentXsMm[0]).toBeCloseTo(2.125, 9)
+    expect(g.lineExtentXsMm[1]).toBeCloseTo(77.875, 9)
+    expect(g.transitionXsMm).toEqual([20, 60])
+  })
+
+  it('leaves the test lines whole when the margin already keeps them clear of the holes', () => {
+    // A 12 mm margin: the lowest line (y 12) sits above the bottom-right hole's keep-out band,
+    // which ends at y 9 + 1.125 = 10.125, and the top line (y 72) below the top holes' band,
+    // which starts at 75 - 1.125 = 73.875 on the 84 mm tall coupon.
+    const g = couponGeometry({ ...defaultPaTestSpec(), marginMm: 12 })
+    expect(g.lineExtentXsMm).toEqual([0, 80])
+  })
+
+  it('refuses slow segments too short to reach past the holes', () => {
+    // 2 mm slow segments put the first transition at line-local 2, before the 2.125 mm start
+    // the top-left hole forces.
+    expect(() => couponGeometry({ ...defaultPaTestSpec(), slowSegmentMm: 2 })).toThrow(
+      'The fiducial holes leave no slow segment before or after the speed transitions.',
+    )
+  })
+
   it('provides sane printer defaults with one default filament', () => {
     const p = defaultPrinterProfile()
     expect(p.firmware).toBe('Klipper')

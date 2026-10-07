@@ -4,7 +4,14 @@ import {
   generatePaGcodeWithReport,
   extrusionMm,
 } from '../../../src/engine/pa/gcodeGenerator'
-import { defaultFilamentProfile, defaultPrinterProfile, defaultPaTestSpec, paValueForLine, couponGeometry } from '../../../src/engine/pa/types'
+import {
+  defaultFilamentProfile,
+  defaultPrinterProfile,
+  defaultPaTestSpec,
+  defaultSmoothTimeTestSpec,
+  paValueForLine,
+  couponGeometry,
+} from '../../../src/engine/pa/types'
 
 describe('extrusionMm', () => {
   it('computes E along the PrusaSlicer flow chain', () => {
@@ -219,6 +226,25 @@ describe('generatePaGcode', () => {
     expect(retractedCrossings).toBeGreaterThan(0)
   })
 
+  it('prints each test line from x 72.125 to 147.875, switching speed at x 90 and x 130', () => {
+    // The default 96 x 76 mm coupon sits at bed origin (62, 72), so line 0 runs at y 72 + 8 = 80.
+    // The nominal line spans coupon x 8 to 88 with its transitions at 28 and 68 (bed 90 and 130).
+    // The top-left hole spans coupon x 4 to 9, its two 0.45 mm perimeter loops reach 0.9 mm past
+    // it, and the bead's half width adds 0.225 mm, so the line starts at coupon 10.125 (bed
+    // 72.125); the right holes start at coupon 87, so it ends at 85.875 (bed 147.875). At
+    // 0.0338488 mm of filament per mm of bead (the extrusionMm case above), the 17.875 mm slow
+    // segments take E 0.60505 and the 40 mm fast segment E 1.35395.
+    const lines = generatePaGcode(profile, filament, spec).split('\n')
+    const start = lines.indexOf('G0 X72.125 Y80.000 F9000')
+    expect(start).toBeGreaterThan(0)
+    expect(lines.slice(start + 1, start + 5)).toEqual([
+      'G1 E0.800 F2100',
+      'G1 X90.000 Y80.000 E0.60505 F1500',
+      'G1 X130.000 Y80.000 E1.35395 F6000',
+      'G1 X147.875 Y80.000 E0.60505 F1500',
+    ])
+  })
+
   it('notes after the last test line that the motion limits come back with a firmware restart', () => {
     // The preamble set the profile's acceleration and corner limit, replacing what the
     // firmware had configured, so the end-of-print comments name the motion limits too.
@@ -306,6 +332,75 @@ describe('generatePaGcode', () => {
     }
     const g = generatePaGcode(p, defaultFilamentProfile(), spec)
     expect(g).toContain('PRINT_START BED=60 HOTEND=210 FILAMENT_TYPE=PLA CHAMBER_TEMP=0')
+  })
+})
+
+describe('test line clearance from the fiducial holes', () => {
+  type Box = { x0: number; y0: number; x1: number; y1: number }
+  type Segment = { from: [number, number]; to: [number, number]; line: string }
+
+  // The extrusion moves of the line layer (everything printed after the filament swap), each
+  // with the position it starts from.
+  function lineLayerExtrusions(gcode: string): Segment[] {
+    let x = 0
+    let y = 0
+    let afterSwap = false
+    const segments: Segment[] = []
+    for (const l of gcode.split('\n')) {
+      if (l === 'PAUSE') afterSwap = true
+      const m = l.match(/^G([01]) X(-?[\d.]+) Y(-?[\d.]+)( E([\d.]+))?/)
+      if (!m) continue
+      const nx = Number(m[2])
+      const ny = Number(m[3])
+      if (afterSwap && m[1] === '1' && m[5] !== undefined) {
+        segments.push({ from: [x, y], to: [nx, ny], line: l })
+      }
+      x = nx
+      y = ny
+    }
+    return segments
+  }
+
+  // True when a point of the path lies strictly inside the box, sampled every 0.01 mm.
+  function entersBox(s: Segment, b: Box): boolean {
+    const n = Math.max(2, Math.ceil(Math.hypot(s.to[0] - s.from[0], s.to[1] - s.from[1]) / 0.01))
+    for (let k = 0; k <= n; k++) {
+      const px = s.from[0] + ((s.to[0] - s.from[0]) * k) / n
+      const py = s.from[1] + ((s.to[1] - s.from[1]) * k) / n
+      if (px > b.x0 && px < b.x1 && py > b.y0 && py < b.y1) return true
+    }
+    return false
+  }
+
+  // Each 5 mm hole grown by the 0.9 mm band of the two 0.45 mm perimeter loops around it, plus
+  // the 0.225 mm half width of a bead: a path inside one of these boxes lays its bead on the hole
+  // or on its loops. The default 96 x 76 mm coupon sits at bed origin (62, 72), its holes at bed
+  // x 149 to 154 (right) and 66 to 71 (left), y 76 to 81 (bottom) and 139 to 144 (top).
+  const DEFAULT_KEEP_OUT: Box[] = [
+    { x0: 147.875, y0: 74.875, x1: 155.125, y1: 82.125 },
+    { x0: 147.875, y0: 137.875, x1: 155.125, y1: 145.125 },
+    { x0: 64.875, y0: 137.875, x1: 72.125, y1: 145.125 },
+  ]
+  // The 10 line coupon is 96 x 52 mm at bed origin (62, 84): holes at y 88 to 93 and 127 to 132.
+  const TEN_LINE_KEEP_OUT: Box[] = [
+    { x0: 147.875, y0: 86.875, x1: 155.125, y1: 94.125 },
+    { x0: 147.875, y0: 125.875, x1: 155.125, y1: 133.125 },
+    { x0: 64.875, y0: 125.875, x1: 72.125, y1: 133.125 },
+  ]
+
+  // Moves per coupon: the prime line plus three segments per test line.
+  it.each([
+    ['the default advance sweep', defaultPaTestSpec(), DEFAULT_KEEP_OUT, 49],
+    ['the smooth time sweep', defaultSmoothTimeTestSpec(0.03), DEFAULT_KEEP_OUT, 49],
+    ['a 10 line advance sweep', { ...defaultPaTestSpec(), lineCount: 10 }, TEN_LINE_KEEP_OUT, 31],
+  ])('keeps every line layer bead of %s off the fiducial holes and their perimeter loops', (_, spec, keepOut, moves) => {
+    const g = generatePaGcode(defaultPrinterProfile(), defaultFilamentProfile(), spec)
+
+    const segments = lineLayerExtrusions(g)
+    const intrusions = segments.filter((s) => keepOut.some((b) => entersBox(s, b))).map((s) => s.line)
+
+    expect(segments).toHaveLength(moves)
+    expect(intrusions).toEqual([])
   })
 })
 

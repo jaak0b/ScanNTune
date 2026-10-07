@@ -31,7 +31,7 @@ export function renderPaOverlayMat(
   const canvas = toBgr(cv, image)
   const thickness = strokeThickness(image)
   const g = couponGeometry(spec)
-  const lineLenMm = 2 * spec.slowSegmentMm + spec.fastSegmentMm
+  const [startXMm, endXMm] = g.lineExtentXsMm
 
   // Normalize the finite measured scores to [0, 1] for the green-to-red tint.
   const finite = result.lines.filter((l) => l.measured && Number.isFinite(l.score))
@@ -52,9 +52,9 @@ export function renderPaOverlayMat(
       cv,
       canvas,
       alignment,
-      g.lineStartXMm,
+      g.lineStartXMm + startXMm,
       yMm - halfMm,
-      g.lineStartXMm + lineLenMm,
+      g.lineStartXMm + endXMm,
       yMm + halfMm,
       color,
       isBest ? thickness + 1 : thickness,

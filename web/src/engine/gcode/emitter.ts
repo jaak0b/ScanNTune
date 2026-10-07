@@ -324,6 +324,15 @@ export const MEASURED_LAYERS = 2
 /** Volumetric flow above which typical hotends under-extrude; generators warn past it. */
 export const HIGH_FLOW_WARNING_THRESHOLD_MM3_S = 12
 
+/**
+ * How far `loops` perimeter loops reach from the boundary they follow, mm: the far edge of the
+ * last loop's bead, where the raster behind the loops begins. Also the clearance anything printed
+ * on top keeps when it must stay off a fiducial hole's perimeters.
+ */
+export function perimeterBandMm(loops: number, lineWidthMm: number): number {
+  return loops * lineWidthMm
+}
+
 /** The shell/perimeter print speed used by every base-layer perimeter and raster fill that
  *  takes no explicit speed override (see `basePerimeters`, `rasterBase`, `frameBandLayer`,
  *  `frameBandInfill`): a fraction of the profile's travel speed. The single source for what a
@@ -512,9 +521,9 @@ export function frameBandInfill(
   doExtrude: ExtrudeFn = extrude,
   speedMmS?: number,
 ): void {
-  const infillInset = PERIMETER_LOOPS * lineWidthMm
+  const infillInset = perimeterBandMm(PERIMETER_LOOPS, lineWidthMm)
   // Raster clearance around a fiducial hole: past the outermost of its perimeter loops.
-  const holeClearance = HOLE_PERIMETER_LOOPS * lineWidthMm
+  const holeClearance = perimeterBandMm(HOLE_PERIMETER_LOOPS, lineWidthMm)
   const expanded = holes.map((b) => ({
     x0: b.x0 - holeClearance,
     y0: b.y0 - holeClearance,

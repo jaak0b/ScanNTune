@@ -9,6 +9,7 @@ import {
   extrude,
   motionLimitCommands,
   PERIMETER_LOOPS,
+  perimeterBandMm,
   rasterBase,
   retract,
   shellSpeedMmS,
@@ -282,7 +283,7 @@ export function baseLayers(
   heightMm: number,
   holes: Box[],
 ): void {
-  const infillInset = PERIMETER_LOOPS * lineWidthMm
+  const infillInset = perimeterBandMm(PERIMETER_LOOPS, lineWidthMm)
   const rasterHoles = holes.map((h) => ({
     x0: h.x0 - infillInset,
     y0: h.y0 - infillInset,

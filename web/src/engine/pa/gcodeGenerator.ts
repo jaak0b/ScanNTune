@@ -114,33 +114,20 @@ function emitPaGcode(profile: PrinterProfile, filament: FilamentProfile, spec: P
   travel(e, profile, ox + 2, oy + 1.5)
   extrude(e, profile, filament, spec.lineWidthMm, ox + g.baseWidthMm - 2, oy + 1.5, spec.slowSpeedMmS)
 
-  // Test lines.
+  // Test lines: slow up to the first transition, fast to the second, slow to the end, over the
+  // line extent that keeps every bead clear of the fiducial holes.
+  const [startXMm, endXMm] = g.lineExtentXsMm
+  const [accelXMm, decelXMm] = g.transitionXsMm
   for (let i = 0; i < spec.lineCount; i++) {
     L.push(sweepCommand(profile, spec, paValueForLine(spec, i)))
     const y = oy + g.lineStartYMm(i)
     const x0 = ox + g.lineStartXMm
     retract(e, profile, 1)
-    travel(e, profile, x0, y)
+    travel(e, profile, x0 + startXMm, y)
     retract(e, profile, -1)
-    extrude(e, profile, filament, spec.lineWidthMm, x0 + spec.slowSegmentMm, y, spec.slowSpeedMmS)
-    extrude(
-      e,
-      profile,
-      filament,
-      spec.lineWidthMm,
-      x0 + spec.slowSegmentMm + spec.fastSegmentMm,
-      y,
-      spec.fastSpeedMmS,
-    )
-    extrude(
-      e,
-      profile,
-      filament,
-      spec.lineWidthMm,
-      x0 + 2 * spec.slowSegmentMm + spec.fastSegmentMm,
-      y,
-      spec.slowSpeedMmS,
-    )
+    extrude(e, profile, filament, spec.lineWidthMm, x0 + accelXMm, y, spec.slowSpeedMmS)
+    extrude(e, profile, filament, spec.lineWidthMm, x0 + decelXMm, y, spec.fastSpeedMmS)
+    extrude(e, profile, filament, spec.lineWidthMm, x0 + endXMm, y, spec.slowSpeedMmS)
   }
 
   finishCoupon(e, profile, filament, PA_OVERRIDDEN_SETTINGS)

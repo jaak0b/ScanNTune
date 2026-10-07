@@ -1,5 +1,6 @@
 import type { FilamentProfile, PrinterProfile } from '../gcode/profileTypes'
-import { highFlowWarning } from '../gcode/emitter'
+import { highFlowWarning, PERIMETER_LOOPS, perimeterBandMm } from '../gcode/emitter'
+import { fiducialHoleBoxes } from '../gcode/couponShell'
 
 export type { Firmware, FilamentProfile, PrinterProfile } from '../gcode/profileTypes'
 export { defaultFilamentProfile, defaultPrinterProfile } from '../gcode/profileTypes'
@@ -50,8 +51,14 @@ export interface CouponGeometry {
   fiducials: Fiducial[]
   /** Line-local x of the two speed transitions. */
   transitionXsMm: [number, number]
-  /** Origin (min-x, min-y in coupon frame) of line i's start point. */
+  /**
+   * Line-local x where every test line starts and ends printing. The same for all lines; inside
+   * the nominal slow-fast-slow line, trimmed where a line would reach a fiducial hole.
+   */
+  lineExtentXsMm: [number, number]
+  /** Coupon-frame x of the line-local origin: the start of the nominal, untrimmed line. */
   lineStartXMm: number
+  /** Coupon-frame y of line i. */
   lineStartYMm: (index: number) => number
 }
 
@@ -184,19 +191,60 @@ export function couponGeometry(spec: PaTestSpec): CouponGeometry {
   const baseHeightMm = (spec.lineCount - 1) * spec.linePitchMm + 2 * spec.marginMm
   const inset = 4
   const size = 5
+  // Hole centers; the (min-x, min-y) origin corner deliberately has none.
+  const fiducials: Fiducial[] = [
+    { xMm: baseWidthMm - inset - size / 2, yMm: inset + size / 2 },
+    { xMm: baseWidthMm - inset - size / 2, yMm: baseHeightMm - inset - size / 2 },
+    { xMm: inset + size / 2, yMm: baseHeightMm - inset - size / 2 },
+  ]
+  const transitionXsMm: [number, number] = [spec.slowSegmentMm, spec.slowSegmentMm + spec.fastSegmentMm]
+  const lineStartXMm = spec.marginMm
+  const lineStartYMm = (index: number) => spec.marginMm + index * spec.linePitchMm
   return {
     baseWidthMm,
     baseHeightMm,
     fiducialInsetMm: inset,
     fiducialSizeMm: size,
-    // Hole centers; the (min-x, min-y) origin corner deliberately has none.
-    fiducials: [
-      { xMm: baseWidthMm - inset - size / 2, yMm: inset + size / 2 },
-      { xMm: baseWidthMm - inset - size / 2, yMm: baseHeightMm - inset - size / 2 },
-      { xMm: inset + size / 2, yMm: baseHeightMm - inset - size / 2 },
-    ],
-    transitionXsMm: [spec.slowSegmentMm, spec.slowSegmentMm + spec.fastSegmentMm],
-    lineStartXMm: spec.marginMm,
-    lineStartYMm: (index: number) => spec.marginMm + index * spec.linePitchMm,
+    fiducials,
+    transitionXsMm,
+    lineExtentXsMm: lineExtentXsMm(spec, fiducials, size, lineStartXMm, lineStartYMm, transitionXsMm),
+    lineStartXMm,
+    lineStartYMm,
   }
+}
+
+/**
+ * The line-local x range every test line prints over. A line's bead (half the line width either
+ * side of its path, and past its end) stays clear of each fiducial hole grown by the band of the
+ * base's perimeter loops around it, so no line bridges a hole, covers its rim, or prints over its
+ * perimeters. Where any line would come too close to a hole, the nominal line is shortened at
+ * that end, and every line shares the shortened range: all lines print the same path apart from
+ * the swept parameter, and the speed transitions stay where they are.
+ */
+function lineExtentXsMm(
+  spec: PaTestSpec,
+  fiducials: Fiducial[],
+  fiducialSizeMm: number,
+  lineStartXMm: number,
+  lineStartYMm: (index: number) => number,
+  transitionXsMm: [number, number],
+): [number, number] {
+  const lineLen = 2 * spec.slowSegmentMm + spec.fastSegmentMm
+  const keepOutMm = perimeterBandMm(PERIMETER_LOOPS, spec.lineWidthMm) + spec.lineWidthMm / 2
+  const lineYs = Array.from({ length: spec.lineCount }, (_, i) => lineStartYMm(i))
+  let start = 0
+  let end = lineLen
+  for (const hole of fiducialHoleBoxes(fiducials, fiducialSizeMm, 0, 0)) {
+    if (!lineYs.some((y) => y > hole.y0 - keepOutMm && y < hole.y1 + keepOutMm)) continue
+    // A hole left of the line's middle shortens its start, one right of it its end.
+    if (hole.x0 + hole.x1 < 2 * lineStartXMm + lineLen) {
+      start = Math.max(start, hole.x1 + keepOutMm - lineStartXMm)
+    } else {
+      end = Math.min(end, hole.x0 - keepOutMm - lineStartXMm)
+    }
+  }
+  if (start >= transitionXsMm[0] || end <= transitionXsMm[1]) {
+    throw new Error('The fiducial holes leave no slow segment before or after the speed transitions.')
+  }
+  return [start, end]
 }

@@ -202,13 +202,14 @@ function sampleGray(
       return o.backgroundGray
     }
   }
-  // Test lines: check distance from each line's centerline with modeled width.
-  const lineLen = 2 * o.spec.slowSegmentMm + o.spec.fastSegmentMm
+  // Test lines: check distance from each line's centerline with modeled width, over the printed
+  // extent.
+  const [startXMm, endXMm] = g.lineExtentXsMm
   for (let i = 0; i < o.spec.lineCount; i++) {
     const yc = g.lineStartYMm(i)
     if (Math.abs(y - yc) > o.spec.linePitchMm / 2) continue
     const lx = x - g.lineStartXMm
-    if (lx < 0 || lx > lineLen) break
+    if (lx < startXMm || lx > endXMm) break
     const halfNominal = o.spec.lineWidthMm / 2
     let half: number
     if (o.spec.sweep === 'smoothTime') {
