@@ -44,6 +44,26 @@ export function roundedBeadCrossSectionMm2(lineWidthMm: number, layerHeightMm: n
   return Math.fround(h * (w - h * (1 - 0.25 * Math.PI)))
 }
 
+/**
+ * The centre distance at which adjacent rounded beads fill a layer solid, mm (PrusaSlicer
+ * Flow::rounded_rectangle_extrusion_spacing): the width less the h * (1 - pi / 4) the
+ * semicircular ends leave open, evaluated in float as PrusaSlicer does. Throws where the
+ * spacing is not positive (PrusaSlicer's FlowErrorNegativeSpacing): a bead that narrow for its
+ * layer height cannot fill a layer.
+ */
+export function roundedRectangleExtrusionSpacingMm(lineWidthMm: number, layerHeightMm: number): number {
+  const w = Math.fround(lineWidthMm)
+  const h = Math.fround(layerHeightMm)
+  const spacing = Math.fround(w - Math.fround(h * Math.fround(1 - 0.25 * Math.PI)))
+  if (spacing <= 0) {
+    throw new Error(
+      `Use a wider line or a lower layer height. A ${lineWidthMm} mm line is too narrow to ` +
+        `fill a ${layerHeightMm} mm layer.`,
+    )
+  }
+  return spacing
+}
+
 /** The bead cross-section every coupon commands, mm^2: the rounded bead, as PrusaSlicer
  *  commands it. */
 export function beadCrossSectionMm2(lineWidthMm: number, layerHeightMm: number): number {
@@ -289,8 +309,6 @@ function clipRangeAgainstBox(
 }
 
 export const BASE_LAYERS = 2
-/** Raster line pitch as a fraction of line width, for a slight overlap giving a solid layer. */
-export const RASTER_STEP_FACTOR = 0.9
 /** Raster fill speed as a fraction of the profile's travel speed. */
 export const RASTER_SPEED_FACTOR = 1 / 3
 /** Concentric perimeter loops around the part outline and each fiducial hole. */
@@ -378,7 +396,9 @@ export function rasterBase(
   speedMmS?: number,
 ): void {
   const speed = speedMmS ?? shellSpeedMmS(p)
-  const step = lineWidthMm * RASTER_STEP_FACTOR
+  // Adjacent scanlines sit one bead spacing apart, measured perpendicular to them, so the
+  // rounded beads fill the layer solid with no void and no overlap ridge.
+  const spacing = roundedRectangleExtrusionSpacingMm(lineWidthMm, p.layerHeightMm)
   // Diagonal raster: iterate scanlines along the diagonal direction. Each
   // scanline is clipped against the rectangle and split around holes.
   const dir = angle45 ? { dx: 1, dy: 1 } : { dx: -1, dy: 1 }
@@ -388,7 +408,8 @@ export function rasterBase(
   // Perpendicular offsets covering the rectangle's diagonal extent.
   const diag = w + h
   let scanIndex = 0
-  for (let c = -diag; c <= diag; c += step / norm) {
+  for (let k = 0; -diag + k * spacing <= diag; k++) {
+    const c = -diag + k * spacing
     // Line: points q with (q - corner) . perpendicular = c. Parameterize and
     // clip to the rectangle by intersecting with its four edges.
     const px = -uy

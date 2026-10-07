@@ -9,6 +9,7 @@ import {
   quantizeE,
   rasterBase,
   roundedBeadCrossSectionMm2,
+  roundedRectangleExtrusionSpacingMm,
   travel,
 } from '../../../src/engine/gcode/emitter'
 
@@ -139,6 +140,43 @@ describe('rasterBase retract bracketing', () => {
     )
     expect(across.length).toBeGreaterThan(0)
     expect(across.every((h) => h.retracted)).toBe(true)
+  })
+})
+
+describe('roundedRectangleExtrusionSpacingMm', () => {
+  it('returns PrusaSlicer Flow::rounded_rectangle_extrusion_spacing in float', () => {
+    // float(0.42) - float(float(0.2) x float(1 - pi / 4)) = 0.41999998688697815 -
+    // float(0.20000000298 x 0.21460182965) = 0.41999998688697815 - 0.04292036592960358 =
+    // 0.3770796060562134 as a float.
+    expect(roundedRectangleExtrusionSpacingMm(0.42, 0.2)).toBe(0.3770796060562134)
+  })
+
+  it('refuses a line too narrow to fill its layer, as PrusaSlicer does', () => {
+    // 0.04 - 0.0429204 is negative: rounded beads that narrow cannot fill a 0.2 mm layer.
+    expect(() => roundedRectangleExtrusionSpacingMm(0.04, 0.2)).toThrow(
+      'Use a wider line or a lower layer height. A 0.04 mm line is too narrow to fill a 0.2 mm layer.',
+    )
+  })
+})
+
+describe('rasterBase spacing', () => {
+  it('places adjacent scanlines one rounded bead spacing apart, measured perpendicular to them', () => {
+    const e = newEmitter()
+    rasterBase(e, profile, filament, nominal, RECT.x0, RECT.y0, RECT.w, RECT.h, true, [])
+    // Every extrusion of the 45 degree raster lies on one scanline; its perpendicular offset
+    // is (y - x) / sqrt(2) at its end point.
+    const offsets = e.lines
+      .map((l) => l.match(/^G1 X(-?[\d.]+) Y(-?[\d.]+) E/))
+      .filter((m): m is RegExpMatchArray => m !== null)
+      .map((m) => (Number(m[2]) - Number(m[1])) / Math.SQRT2)
+      .sort((a, b) => a - b)
+    // Offsets within one scanline differ only by the coordinate rounding (under 0.001 mm).
+    const scanlines = 1 + offsets.filter((o, i) => i > 0 && o - offsets[i - 1] > 0.1).length
+    // The mean over the whole raster averages out the 3-decimal coordinate rounding: the
+    // spacing is 0.3770796 mm for a 0.42 x 0.2 mm bead (PrusaSlicer's spacing), not the
+    // 0.535 mm (0.9 x 0.42 / cos 45 degrees) the raster used to step.
+    const meanSpacing = (offsets[offsets.length - 1] - offsets[0]) / (scanlines - 1)
+    expect(meanSpacing).toBeCloseTo(0.37708, 4)
   })
 })
 
