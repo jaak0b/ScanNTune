@@ -1108,11 +1108,6 @@ function getCoupon(file: string): void {
           <p v-if="shrinkageFix?.hint" class="tip mt-0">{{ shrinkageFix.hint }}</p>
         </div>
       </div>
-
-      <p class="tip mt-3" data-testid="verify-fix-tip">
-        To confirm the fix, print the plate again with the correction active and scan it; the skew
-        should now read near zero.
-      </p>
     </section>
   </v-container>
 
