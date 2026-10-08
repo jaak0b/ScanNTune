@@ -339,6 +339,17 @@ describe('poolAxisFits checks', () => {
     expect(Math.abs(p.frequencyHz! - 60)).toBeLessThan(0.5)
   })
 
+  it('accepts a ring whose fitted damping ratio sits at the upper bound of the range', () => {
+    // Truth 70 Hz at zeta 0.42, above the 0.4 bound, 0.8 mm on the top rung: the joint fit stops
+    // at the bound. The frequency's 95% halfwidth is about 3.3 Hz here (a standard error near
+    // 1.7 Hz), so 5 Hz is three standard errors.
+    const p = pool(twoTier, simulate(twoTier, { noise: IID, ring: { frequencyHz: 70, dampingRatio: 0.42, ampMm: 0.8 } }))
+    expect(p.dampingRatio).toBe(0.4)
+    expect(p.refusals).toEqual([])
+    expect(p.accepted).toBe(true)
+    expect(Math.abs(p.frequencyHz! - 70)).toBeLessThan(5)
+  })
+
   it('refuses a forced tone because it does not grow with the corner speed', () => {
     // A 100 Hz tone fixed in time, 0.002 mm on every line with a random phase: it keeps its
     // frequency at both speeds, so only input proportionality can tell it from ringing.

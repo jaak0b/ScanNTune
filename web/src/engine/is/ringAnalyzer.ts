@@ -1523,13 +1523,8 @@ function verdict(result: AxisPool): AxisPool {
         'lies outside the measurable range.',
     )
   }
-  if (result.dampingRatio! >= ZETA_MAX) {
-    return refusal(
-      result,
-      "The damping ratio fitted across the axis's lines sits at the edge of the physically " +
-        'plausible range, so the fit cannot be trusted.',
-    )
-  }
+  // A damping ratio at ZETA_MAX is the fit's limit, not a measurement: the axis keeps its
+  // frequency, and the shaper recommendation leaves the damping ratio to the firmware default.
   const speed = result.speedCheck
   if (speed.state === 'changed') {
     return refusal(
