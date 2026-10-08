@@ -382,11 +382,19 @@ describe('placement', () => {
   })
 
   it('throws when a front/back placement pushes the coupon off the bed', () => {
+    // The coupon needs its height plus the 10 mm edge margin; one millimetre less overhangs
+    // the back edge on a front placement and the front edge on a back placement.
     const g = emCouponGeometry(spec)
     const tiny = { ...profile, bedDepthMm: g.couponHeightMm + EDGE_MARGIN_MM - 1 }
+    for (const placement of ['front', 'back'] as const) {
+      expect(() =>
+        generateEmGcodeWithReport(tiny, filament, { ...spec, placement }),
+      ).toThrow('Coupon does not fit on the configured bed')
+    }
+    const exact = { ...profile, bedDepthMm: g.couponHeightMm + EDGE_MARGIN_MM }
     expect(() =>
-      generateEmGcodeWithReport(tiny, filament, { ...spec, placement: 'back' }),
-    ).toThrow(/fit/i)
+      generateEmGcodeWithReport(exact, filament, { ...spec, placement: 'front' }),
+    ).not.toThrow()
   })
 })
 

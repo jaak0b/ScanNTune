@@ -89,7 +89,7 @@ export function generateIsGcodeWithReport(
   const { spec: fitted, notes } = fitSpecToPrinter(spec, profile)
 
   const g = isCouponGeometry(fitted)
-  const { ox, oy } = couponOrigin(profile, g.couponWidthMm, g.couponHeightMm, spec.placement, EDGE_MARGIN_MM)
+  const { ox, oy } = couponOrigin(profile, g.couponWidthMm, g.couponHeightMm, spec.placement)
   const nominalWallWidth = profile.nozzleDiameterMm * NOMINAL_WIDTH_FACTOR
   const context = shellSlicerContext(
     profile,
@@ -204,13 +204,7 @@ function finishLine(
 
 function emitIsGcode(profile: PrinterProfile, filament: FilamentProfile, spec: IsTestSpec): string {
   const g = isCouponGeometry(spec)
-  const { ox, oy } = couponOrigin(
-    profile,
-    g.couponWidthMm,
-    g.couponHeightMm,
-    spec.placement,
-    EDGE_MARGIN_MM,
-  )
+  const { ox, oy } = couponOrigin(profile, g.couponWidthMm, g.couponHeightMm, spec.placement)
 
   const nominal = profile.nozzleDiameterMm * NOMINAL_WIDTH_FACTOR
   const holes: Box[] = fiducialHoleBoxes(g.fiducials, g.fiducialSizeMm, ox, oy)

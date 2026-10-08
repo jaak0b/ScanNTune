@@ -6,6 +6,8 @@ import {
   type PrinterProfile,
 } from '../../../src/engine/gcode/profileTypes'
 import {
+  availableBedDepthMm,
+  couponOrigin,
   couponOverriddenSettings,
   finishCoupon,
   restartNoteComments,
@@ -116,5 +118,29 @@ describe('finishCoupon', () => {
       '; filament end',
       ...profile.endGcode.split('\n'),
     ])
+  })
+})
+
+describe('placement on the bed', () => {
+  // A 120 x 120 mm bed: the front and back placements keep a 10 mm margin to their edge.
+  const bed = { ...defaultPrinterProfile(), bedWidthMm: 120, bedDepthMm: 120 }
+
+  it('leaves the whole depth to a centered coupon and the depth less the edge margin otherwise', () => {
+    expect(availableBedDepthMm(bed, 'center')).toBe(120)
+    expect(availableBedDepthMm(bed, 'front')).toBe(110)
+    expect(availableBedDepthMm(bed, 'back')).toBe(110)
+  })
+
+  it('places a fitting coupon against the requested edge', () => {
+    expect(couponOrigin(bed, 100, 110, 'front')).toEqual({ ox: 10, oy: 10 })
+    expect(couponOrigin(bed, 100, 110, 'back')).toEqual({ ox: 10, oy: 0 })
+    expect(couponOrigin(bed, 100, 120, 'center')).toEqual({ ox: 10, oy: 0 })
+  })
+
+  it('refuses a front coupon that would overhang the far (back) edge', () => {
+    // 111 mm from a 10 mm front margin ends at 121 mm, past the 120 mm bed.
+    expect(() => couponOrigin(bed, 100, 111, 'front')).toThrow('Coupon does not fit on the configured bed')
+    expect(() => couponOrigin(bed, 100, 111, 'back')).toThrow('Coupon does not fit on the configured bed')
+    expect(() => couponOrigin(bed, 121, 100, 'center')).toThrow('Coupon does not fit on the configured bed')
   })
 })

@@ -82,7 +82,7 @@ export function generateEmGcodeWithReport(
   if (spec.nominalLineWidthMm <= 0) throw new Error('Nominal line width must be positive')
 
   const g = emCouponGeometry(spec)
-  const { ox, oy } = couponOrigin(profile, g.couponWidthMm, g.couponHeightMm, spec.placement, EDGE_MARGIN_MM)
+  const { ox, oy } = couponOrigin(profile, g.couponWidthMm, g.couponHeightMm, spec.placement)
   const context = shellSlicerContext(
     profile,
     spec.nominalLineWidthMm,
@@ -118,13 +118,7 @@ function emitEmGcode(profile: PrinterProfile, rawFilament: FilamentProfile, spec
   // measured ratio is then the absolute value to set, with no back-multiplication.
   const filament = emPrintFilament(rawFilament)
   const g = emCouponGeometry(spec)
-  const { ox, oy } = couponOrigin(
-    profile,
-    g.couponWidthMm,
-    g.couponHeightMm,
-    spec.placement,
-    EDGE_MARGIN_MM,
-  )
+  const { ox, oy } = couponOrigin(profile, g.couponWidthMm, g.couponHeightMm, spec.placement)
 
   const nominal = spec.nominalLineWidthMm
   const holes: Box[] = fiducialHoleBoxes(g.fiducials, g.fiducialSizeMm, ox, oy)

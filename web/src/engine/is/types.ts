@@ -1,5 +1,5 @@
 import type { PrinterProfile } from '../gcode/profileTypes'
-import type { CouponPlacement } from '../gcode/couponShell'
+import { availableBedDepthMm, type CouponPlacement } from '../gcode/couponShell'
 import { NOMINAL_WIDTH_FACTOR } from '../gcode/emitter'
 import { normalQuantile } from '../math'
 import {
@@ -442,17 +442,20 @@ function fitSpecToBed(
 
 /**
  * The longest clean read length, at most the spec's own and at least MIN_MEASURED_LINE_MM,
- * at which the coupon fits the bed, or null when none does. Inverts the interior formulas of
- * isCouponGeometry for the read length L: along a group's measured direction the interior is
- * margin + maxPackedRampMm + L, plus the crossing terms (margin + field + run-up) when both
- * axes are present. The band width and the packed ramp depend on the tiers and the ladder, not
- * on L, so they are constants here; the longest L each constrained bed dimension allows is
- * solved and the tighter one taken.
+ * at which the coupon fits the bed at its placement, or null when none does. The bed depth is
+ * the depth the placement leaves (availableBedDepthMm: a coupon pushed to the front or back
+ * edge keeps its edge margin). Inverts the interior formulas of isCouponGeometry for the read
+ * length L: along a group's measured direction the interior is margin + maxPackedRampMm + L,
+ * plus the crossing terms (margin + field + run-up) when both axes are present. The band width
+ * and the packed ramp depend on the tiers and the ladder, not on L, so they are constants
+ * here; the longest L each constrained bed dimension allows is solved and the tighter one
+ * taken.
  */
 function longestFittingReadMm(spec: IsTestSpec, profile: PrinterProfile): number | null {
+  const depthMm = availableBedDepthMm(profile, spec.placement)
   const fits = (s: IsTestSpec): boolean => {
     const g = isCouponGeometry(s)
-    return g.couponWidthMm <= profile.bedWidthMm && g.couponHeightMm <= profile.bedDepthMm
+    return g.couponWidthMm <= profile.bedWidthMm && g.couponHeightMm <= depthMm
   }
   if (fits(spec)) return spec.measuredLineMm
   const band = frameBandMm(spec)
@@ -462,7 +465,7 @@ function longestFittingReadMm(spec: IsTestSpec, profile: PrinterProfile): number
   const fixed = 2 * band + INNER_MARGIN_MM + maxPackedRampMm(spec) + crossTerm
   const limits: number[] = []
   if (spec.axes.includes('y')) limits.push(profile.bedWidthMm - fixed)
-  if (spec.axes.includes('x')) limits.push(profile.bedDepthMm - fixed)
+  if (spec.axes.includes('x')) limits.push(depthMm - fixed)
   const read = Math.min(spec.measuredLineMm, Math.floor(Math.min(...limits)))
   if (read < MIN_MEASURED_LINE_MM) return null
   return fits({ ...spec, measuredLineMm: read }) ? read : null

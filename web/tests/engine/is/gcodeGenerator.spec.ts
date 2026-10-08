@@ -770,6 +770,18 @@ describe('bed fitting', () => {
     expect(r.gcode).toMatch(/^G1 X.* E[\d.]+ F9000$/m)
   })
 
+  it('generates a front-placed coupon that ends inside the far edge of a 120 mm bed', () => {
+    const bed120: PrinterProfile = { ...profile, bedWidthMm: 120, bedDepthMm: 120 }
+    const r = generateIsGcodeWithReport(bed120, filament, { ...spec, placement: 'front' })
+    expect(r.warnings).toContain(
+      'The measured lines were shortened from 30 mm to 25 mm so the coupon fits the configured bed.',
+    )
+    const ys = [...r.gcode.matchAll(/^G[01] X(-?[\d.]+) Y(-?[\d.]+)/gm)].map((m) => Number(m[2]))
+    // The 109.806 mm coupon starts at the 10 mm front margin and ends at 119.806 mm.
+    expect(Math.min(...ys)).toBeGreaterThanOrEqual(10)
+    expect(Math.max(...ys)).toBeLessThanOrEqual(119.806 + 0.001)
+  })
+
   it('throws when even the smallest coupon overflows the bed', () => {
     const tiny: PrinterProfile = { ...profile, bedWidthMm: 70, bedDepthMm: 70 }
     expect(() => generateIsGcodeWithReport(tiny, filament, spec)).toThrow(/fit/i)

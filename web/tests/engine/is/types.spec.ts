@@ -242,6 +242,18 @@ describe('fitSpecToPrinter bed fit', () => {
       expect(notes).toEqual([])
     }
   })
+  it('fits a front or back placement into the depth its edge margin leaves', () => {
+    // Scan with the plate (front placement) on a 120 mm bed: 110 mm of depth remain, so
+    // 114.806 - 30 + L <= 110 gives L = 25 mm; the 120 mm width alone would allow 30.
+    for (const placement of ['front', 'back'] as const) {
+      const { spec, notes } = fitSpecToPrinter({ ...request, placement }, bed(120))
+      expect(spec.linesPerSpeed).toBe(5)
+      expect(spec.measuredLineMm).toBe(25)
+      expect(notes).toEqual([
+        'The measured lines were shortened from 30 mm to 25 mm so the coupon fits the configured bed.',
+      ])
+    }
+  })
   it('shortens the measured lines first, to the longest length that fits', () => {
     // 110 mm bed: 114.806 - 30 + L <= 110 gives L <= 25.194, so 25 mm.
     const { spec, notes } = fitSpecToPrinter(request, bed(110))

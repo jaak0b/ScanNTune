@@ -94,25 +94,36 @@ export type CouponPlacement = 'center' | 'front' | 'back'
 export const EDGE_MARGIN_MM = 10
 
 /**
+ * The bed depth a coupon may occupy at `placement`: the whole depth when centered, and the
+ * depth less EDGE_MARGIN_MM when the coupon sits against the front or back edge, which keeps
+ * that margin to the edge it is pushed against. Bed fits size a coupon against this, and
+ * couponOrigin refuses one that exceeds it.
+ */
+export function availableBedDepthMm(profile: PrinterProfile, placement: CouponPlacement): number {
+  return placement === 'center' ? profile.bedDepthMm : profile.bedDepthMm - EDGE_MARGIN_MM
+}
+
+/**
  * Bed origin (min-x, min-y) of the coupon: centered on X, placed on Y per `placement`
- * ('front'/'back' sit `edgeMarginMm` from the bed edge). Throws when the coupon overhangs
- * the configured bed.
+ * ('front'/'back' sit EDGE_MARGIN_MM from that bed edge). Throws when the coupon overhangs
+ * the configured bed at either edge, the far one included.
  */
 export function couponOrigin(
   profile: PrinterProfile,
   couponWidthMm: number,
   couponHeightMm: number,
   placement: CouponPlacement = 'center',
-  edgeMarginMm = 0,
 ): { ox: number; oy: number } {
   const ox = (profile.bedWidthMm - couponWidthMm) / 2
   const oy =
     placement === 'front'
-      ? edgeMarginMm
+      ? EDGE_MARGIN_MM
       : placement === 'back'
-        ? profile.bedDepthMm - couponHeightMm - edgeMarginMm
+        ? profile.bedDepthMm - couponHeightMm - EDGE_MARGIN_MM
         : (profile.bedDepthMm - couponHeightMm) / 2
-  if (ox < 0 || oy < 0) throw new Error('Coupon does not fit on the configured bed')
+  if (ox < 0 || couponHeightMm > availableBedDepthMm(profile, placement)) {
+    throw new Error('Coupon does not fit on the configured bed')
+  }
   return { ox, oy }
 }
 
