@@ -77,6 +77,9 @@ export function isCheckRows(a: IsAxisResult): CheckRow[] {
     rows.push({ label: `Corrected for ${other} axis ringing along the lines`, value: alongTrackLagText(a.alongTrackLag, other) })
   }
   rows.push({ label: 'Layer shift detected', value: yesNo(a.layerShiftDetected) })
+  if (a.outlierSamples !== null) {
+    rows.push({ label: 'Trace samples set aside as outliers', value: `${a.outlierSamples}` })
+  }
   if (a.secondModePBound !== null) {
     rows.push({ label: 'Second mode p-value bound', value: pBoundText(a.secondModePBound) })
   }

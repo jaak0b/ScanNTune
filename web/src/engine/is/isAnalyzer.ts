@@ -312,6 +312,7 @@ function refusedAxis(
     artifacts: [],
     cornerModel: null,
     alongTrackLag: null,
+    outlierSamples: null,
     linesUsed: 0,
     linesTraced,
     scanIndex,
@@ -531,6 +532,7 @@ function axisResult(group: IsLineGroup, traced: TracedAxisGroup, pool: AxisPool,
     artifacts: pool.artifacts,
     cornerModel: pool.cornerModel,
     alongTrackLag: pool.alongTrackLag,
+    outlierSamples: pool.outlierSamples,
   }
 
   if (!pool.accepted) {

@@ -50,6 +50,7 @@ import {
 import type { NullFit, RingPoint, RingRatio } from './ringLikelihood'
 import { gridCandidates, knownCandidates, searchStage } from './artifactSearch'
 import { proportionalityCheck } from './inputProportionality'
+import { lineAdditiveOutliers, withoutSamples } from './traceOutliers'
 import type { DetectedArtifact } from './artifactSearch'
 import type { CornerModelKind } from './ringRegressors'
 import { defaultMaxArOrder } from '../correlatedNoise'
@@ -64,9 +65,12 @@ import { tQuantile } from '../studentT'
 // anything. The stages, each an established method:
 //
 // 1. Fit window: the free ringdown, from the first zero crossing after the forced corner
-//    overshoot (found on the ISO 16610-21 Gaussian-detrended trace), never before the earliest
-//    exactly timed sample. Only samples the tracer actually read enter the statistics; the
-//    tracer's gap fill serves the window search alone.
+//    overshoot (found on the ISO 16610-21 Gaussian-detrended trace after Tukey's running median of
+//    three, so a speck of dust cannot pose as either), never before the earliest exactly timed
+//    sample. Only samples the tracer actually read enter the statistics; the tracer's gap fill
+//    serves the window search alone. Dust and hairs on the scan are then set aside as additive
+//    outliers in AR noise (Chang, Tiao and Chen 1988; Chen and Liu 1993; traceOutliers.ts),
+//    judged against the null fits, and become unread samples for every later stage.
 // 2. Model per line (ringGls.ts): a discrete cosine drift basis below DRIFT_CUTOFF_HZ (the SPM
 //    regression high-pass; Friston et al. 2007), which by Frisch-Waugh-Lovell acts as one linear
 //    prefilter applied identically to the data and every column; the corner model, either the
@@ -252,6 +256,9 @@ export interface AxisPool {
   /** The along-track lag correction of the estimate (poolCouponAxes); null when the axis was
    *  refused before its estimate or analyzed alone (poolAxisFits). */
   alongTrackLag: AlongTrackLagState | null
+  /** Trace samples set aside as additive outliers (dust, hairs) over the axis's lines; null when
+   *  the axis had too few lines to analyze. */
+  outlierSamples: number | null
   lines: LineVerdict[]
 }
 
@@ -304,11 +311,31 @@ export function gaussianTrend(
 }
 
 /**
- * Fit-window start: the free ringdown begins at the first zero crossing after the forced
- * corner-overshoot peak (the largest excursion of the early trace). Null when the trace never
- * crosses zero in its first half, i.e. there is no free response to fit.
+ * Tukey's running median of three (J. W. Tukey, "Exploratory Data Analysis", Addison-Wesley 1977,
+ * ch. 7) over the first `count` samples: each inner sample becomes the median of itself and its two
+ * neighbours, the end samples stay. A single-sample impulse (a speck of dust on the scan) never
+ * survives it, while every monotone stretch passes unchanged.
  */
-function freeResponseStart(y: Float64Array): number | null {
+function runningMedianOfThree(y: Float64Array, count: number): Float64Array {
+  const out = y.slice()
+  for (let i = 1; i < count - 1; i++) {
+    const a = y[i - 1]
+    const b = y[i]
+    const c = y[i + 1]
+    out[i] = Math.max(Math.min(a, b), Math.min(Math.max(a, b), c))
+  }
+  return out
+}
+
+/**
+ * Fit-window start: the free ringdown begins at the first zero crossing after the forced
+ * corner-overshoot peak (the largest excursion of the early trace). Both are located after Tukey's
+ * running median of three, so a speck of dust on the early trace can neither pose as the overshoot
+ * nor as a crossing and move the window. Null when the trace never crosses zero in its first half,
+ * i.e. there is no free response to fit.
+ */
+function freeResponseStart(detrended: Float64Array): number | null {
+  const y = runningMedianOfThree(detrended, Math.floor(detrended.length / 2))
   const n = y.length
   const peakSearchEnd = Math.floor(n / 4)
   if (peakSearchEnd < 1) return null
@@ -432,6 +459,25 @@ function nullFits(bases: LineBasis[], tauBounds: [number, number], fixedModes: R
   return bases.map((b, l) => nullHypothesisFit(b, plain[l].noise.fit, tau, slope, fixedModes))
 }
 
+/**
+ * The lines' fit windows with their additive outliers (traceOutliers.ts: dust and hairs on the
+ * scan) set aside as unread samples, how many each line lost, and, when none was found, the bases
+ * and null fits the detection starts from (the windows are then unchanged). The outliers are
+ * judged against the null fits the detection starts with (flow lag, no patterns).
+ */
+function withoutAdditiveOutliers(windows: LineRecord[]): {
+  windows: LineRecord[]
+  outliers: number[]
+  unchanged: { bases: LineBasis[]; fits: NullFit[] } | null
+} {
+  const bases = windows.map((w) => lineBasis(w))
+  const fits = nullFits(bases, tauRange(bases))
+  const flagged = bases.map((b, l) => lineAdditiveOutliers(b, fits[l]))
+  const outliers = flagged.map((f) => f.length)
+  if (outliers.every((n) => n === 0)) return { windows, outliers, unchanged: { bases, fits } }
+  return { windows: windows.map((w, l) => (flagged[l].length > 0 ? withoutSamples(w, flagged[l]) : w)), outliers, unchanged: null }
+}
+
 /** The raw residual of a line's null fit with its strongest held-noise ring candidate added. */
 function residualWithoutStrongestRing(basis: LineBasis, h0: NullFit): Float64Array {
   const field = heldNoiseField(basis, h0)
@@ -501,7 +547,8 @@ function carriedBases(
  * `found`: the known patterns first, then the spatial-frequency grid, each stage at half the
  * false-alarm level and repeated with every detection in the null design. `fixedModes` are fitted
  * rings carried in the null design during the search; with `search` false the found patterns are
- * only built in.
+ * only built in. `start` holds the bases and null fits of `windows` without patterns under the
+ * flow-lag model when they are already computed (withoutAdditiveOutliers).
  */
 function withArtifacts(
   windows: LineRecord[],
@@ -510,12 +557,13 @@ function withArtifacts(
   fixedModes: RingPoint[] = [],
   search = true,
   cornerModel: CornerModelKind = 'flow-lag',
+  start: { bases: LineBasis[]; fits: NullFit[] } | null = null,
 ): { bases: LineBasis[]; fits: NullFit[]; carried: CarriedArtifacts } {
   const carried: CarriedArtifacts = found
     ? { artifacts: found.artifacts.slice(), columns: found.columns.map((c) => c.slice()) }
     : { artifacts: [], columns: windows.map(() => []) }
-  let bases = carriedBases(windows, carried, cornerModel)
-  let fits = nullFits(bases, tauRange(bases), fixedModes)
+  let bases = start?.bases ?? carriedBases(windows, carried, cornerModel)
+  let fits = start?.fits ?? nullFits(bases, tauRange(bases), fixedModes)
   if (!search || speedsMmS.length < 2) return { bases, fits, carried }
   for (const known of [true, false]) {
     for (;;) {
@@ -1102,6 +1150,7 @@ function emptyPool(verdicts: LineVerdict[]): AxisPool {
     artifacts: [],
     cornerModel: null,
     alongTrackLag: null,
+    outlierSamples: null,
     lines: verdicts,
   }
 }
@@ -1145,12 +1194,15 @@ function detectAxis(
     return { refusal: tooFewLines(base, windowed.length, 0, fits.length - windowed.length) }
   }
 
-  const windows = windowed.map((i) => fits[i].window!)
-  const searched = withArtifacts(windows, speedsMmS, preset, [], preset === null)
+  // Dust and hairs on the scan are set aside first, so every later stage reads the cleaned lines.
+  const cleaned = withoutAdditiveOutliers(windowed.map((i) => fits[i].window!))
+  const windows = cleaned.windows
+  const searched = withArtifacts(windows, speedsMmS, preset, [], preset === null, 'flow-lag', preset === null ? cleaned.unchanged : null)
   const chosen = chooseCornerModel(windows, searched)
   const bases = chosen.bases
   const states = chosen.fits.map((h0, l) => lineState(bases[l], h0))
   base.artifacts = searched.carried.artifacts
+  base.outlierSamples = cleaned.outliers.reduce((sum, n) => sum + n, 0)
   base.cornerModel = { kind: chosen.kind, scale: chosen.fits[0].tauS }
   const all = bases.map((_, l) => l)
   const G = DETECTION_GRID.length
