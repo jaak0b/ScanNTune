@@ -118,6 +118,23 @@ function measuredChunk(lines: string[]): string[] {
   return chunks[chunks.length - 1]
 }
 
+/**
+ * Phase markers of one coupon layer: the perimeter loops start at the layer's first bare
+ * deretract, the test lines at the first stationary retract after it, and the band raster at
+ * the first bare deretract after the last wipe-on-retract (the lines' moving primes may carry
+ * a stationary deretract remainder of their own, so the raster is found past the lines).
+ */
+function phaseMarkers(chunk: string[]): { perimeterStart: number; linesStart: number; rasterStart: number } {
+  const perimeterStart = chunk.findIndex((l) => /^G1 E[\d.]/.test(l))
+  const linesStart = chunk.findIndex((l, i) => i > perimeterStart && /^G1 E-/.test(l))
+  let lastWipe = -1
+  chunk.forEach((l, i) => {
+    if (/^G1 X.* E-/.test(l)) lastWipe = i
+  })
+  const rasterStart = chunk.findIndex((l, i) => i > lastWipe && /^G1 E[\d.]/.test(l))
+  return { perimeterStart, linesStart, rasterStart }
+}
+
 interface Seg {
   len: number
   e: number | null
@@ -269,17 +286,19 @@ describe('generateIsGcodeWithReport (Klipper)', () => {
     }
   })
 
-  it('primes on the move at the leg start instead of a stationary un-retract', () => {
+  it("primes on the move at the leg start, capped at Klipper's extrusion cross-section limit", () => {
+    // The 3 mm prime carries the 0.8 mm deretract plus its own bead, 0.89406 mm of filament;
+    // Klipper's default max_extrude_cross_section (4 x 0.4^2 = 0.64 mm^2) allows 0.79824 mm
+    // over 3 mm, so the remaining 0.09582 mm is un-retracted standing still right before.
     const chunk = measuredChunk(lines)
     for (const line of allLines) {
       const idx = chunk.indexOf(cornerMoveStr(line))
-      // Backwards from the corner: moving prime, retracted travel.
+      // Backwards from the corner: moving prime, stationary remainder, retracted travel.
       expect(chunk[idx - 1], `prime of the ${line.speedMmS} mm/s line`).toMatch(
-        /^G1 X.* E[\d.]+ F1800$/,
+        /^G1 X.* E0\.79824 F1800$/,
       )
-      expect(chunk[idx - 2]).toMatch(/^G0 X/)
-      const primeE = Number(chunk[idx - 1].match(/E([\d.]+)/)![1])
-      expect(primeE).toBeGreaterThan(profile.retractMm)
+      expect(chunk[idx - 2]).toBe('G1 E0.09582 F2100')
+      expect(chunk[idx - 3]).toMatch(/^G0 X/)
     }
   })
 
@@ -339,14 +358,11 @@ describe('generateIsGcodeWithReport (Klipper)', () => {
 
   it('prints band perimeters, then the test lines, then the band raster on every layer', () => {
     for (const chunk of layerChunks(lines)) {
-      // Bare deretracts mark the phase starts: the first restores pressure for the
-      // perimeter loops, the second is the first raster strip's (its hop skips the
-      // retract because the lines left the nozzle retracted).
-      const deretracts = chunk.flatMap((l, i) => (/^G1 E[\d.]/.test(l) ? [i] : []))
-      const perimeterStart = deretracts[0]
-      // The stationary retract after the perimeters hands over to the test lines.
-      const linesStart = chunk.findIndex((l, i) => i > perimeterStart && /^G1 E-/.test(l))
-      const rasterStart = deretracts.find((i) => i > linesStart)!
+      // The first bare deretract restores pressure for the perimeter loops, the stationary
+      // retract after them hands over to the test lines, and the first raster strip's bare
+      // deretract follows the last line's wipe (its hop skips the retract because the lines
+      // left the nozzle retracted).
+      const { perimeterStart, linesStart, rasterStart } = phaseMarkers(chunk)
       expect(perimeterStart).toBeGreaterThanOrEqual(0)
       expect(linesStart).toBeGreaterThan(perimeterStart)
       expect(rasterStart).toBeGreaterThan(linesStart)
@@ -431,9 +447,7 @@ describe('generateIsGcodeWithReport (Klipper)', () => {
       // Phase markers as in the layer-order test: the fan turns on after the band
       // perimeters (which print with the fan off, like the raster) and off before the
       // raster starts.
-      const deretracts = chunk.flatMap((l, i) => (/^G1 E[\d.]/.test(l) ? [i] : []))
-      const linesStart = chunk.findIndex((l, i) => i > deretracts[0] && /^G1 E-/.test(l))
-      const rasterStart = deretracts.find((i) => i > linesStart)!
+      const { linesStart, rasterStart } = phaseMarkers(chunk)
       const firstCorner = Math.min(...allLines.map((l) => chunk.indexOf(cornerMoveStr(l))))
       expect(on).toBeGreaterThanOrEqual(linesStart)
       expect(on).toBeLessThan(firstCorner)
@@ -714,10 +728,7 @@ describe('contrastBase', () => {
     const chunks = chunksAfterPause()
     expect(chunks).toHaveLength(2)
     for (const chunk of chunks) {
-      const deretracts = chunk.flatMap((l, i) => (/^G1 E[\d.]/.test(l) ? [i] : []))
-      const perimeterStart = deretracts[0]
-      const linesStart = chunk.findIndex((l, i) => i > perimeterStart && /^G1 E-/.test(l))
-      const rasterStart = deretracts.find((i) => i > linesStart)!
+      const { perimeterStart, linesStart, rasterStart } = phaseMarkers(chunk)
       expect(perimeterStart).toBeGreaterThanOrEqual(0)
       expect(linesStart).toBeGreaterThan(perimeterStart)
       expect(rasterStart).toBeGreaterThan(linesStart)

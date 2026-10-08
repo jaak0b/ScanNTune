@@ -271,6 +271,61 @@ export function retract(e: Emitter, p: PrinterProfile, sign: 1 | -1): void {
 }
 
 /**
+ * Klipper's default max_extrude_cross_section is 4 * nozzle_diameter^2 (klippy/kinematics/
+ * extruder.py, def_max_cross_section). A move whose filament per mm of path, times the
+ * filament cross-section, exceeds it is refused with "Move exceeds maximum extrusion", which
+ * aborts the print. Marlin and RepRapFirmware have no such check, so staying under Klipper's
+ * default keeps a coupon printable on all three.
+ */
+export const KLIPPER_MAX_EXTRUDE_CROSS_SECTION_NOZZLE_FACTOR = 4
+
+/** Klipper's default max_extrude_cross_section for the profile's nozzle, mm^2. */
+export function maxExtrudeCrossSectionMm2(p: PrinterProfile): number {
+  return KLIPPER_MAX_EXTRUDE_CROSS_SECTION_NOZZLE_FACTOR * p.nozzleDiameterMm * p.nozzleDiameterMm
+}
+
+/** The filament cross-section, mm^2: the area E is measured in. */
+function filamentAreaMm2(f: FilamentProfile): number {
+  return f.filamentDiameterMm * f.filamentDiameterMm * 0.25 * Math.PI
+}
+
+/**
+ * Prime on the move to (x, y): the deretract is spread over a slow printing move together
+ * with the move's own bead, instead of a stationary un-retract, which piles a blob at the line
+ * start. The move's filament is capped at Klipper's default max_extrude_cross_section times
+ * the path length (see maxExtrudeCrossSectionMm2), so the moving prime is never refused; any
+ * deretract beyond the cap is restored by a stationary un-retract right before the move. The
+ * two together restore exactly the filament the single move would have carried.
+ */
+export function primeOnTheMove(
+  e: Emitter,
+  p: PrinterProfile,
+  f: FilamentProfile,
+  lineWidthMm: number,
+  x: number,
+  y: number,
+  speedMmS: number,
+): void {
+  // The bead's E over the printed segment plus the deretract, quantized once.
+  const len = printedSegmentLengthMm(e.x, e.y, x, y)
+  const total = quantizeE(p.retractMm + beadExtrusionMm(p, f, len, lineWidthMm))
+  // The cap in whole 1e-5 mm E steps, rounded down so the printed E stays under it.
+  const capSteps = Math.floor((maxExtrudeCrossSectionMm2(p) * len) / filamentAreaMm2(f) * 100000)
+  const totalSteps = Math.round(total * 100000)
+  const movingSteps = Math.min(totalSteps, capSteps)
+  if (totalSteps > movingSteps) {
+    const stationary = (totalSteps - movingSteps) / 100000
+    e.lines.push(`G1 E${stationary.toFixed(5)} F${Math.round(p.retractSpeedMmS * 60)}`)
+  }
+  e.lines.push(
+    `G1 X${x.toFixed(3)} Y${y.toFixed(3)} E${(movingSteps / 100000).toFixed(5)} F${Math.round(speedMmS * 60)}`,
+  )
+  e.x = x
+  e.y = y
+  e.retracted = false
+}
+
+/**
  * Pluggable extrusion move: the band emitters below accept one so a coupon generator can
  * modulate the flow (e.g. zero it over an already-printed bead) without changing the
  * default emission of the other generators. Defaults to `extrude` everywhere.

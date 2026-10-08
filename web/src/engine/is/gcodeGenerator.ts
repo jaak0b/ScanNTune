@@ -17,7 +17,6 @@ import {
 import {
   BASE_LAYERS,
   basePerimeters,
-  beadExtrusionMm,
   type Box,
   type Emitter,
   type ExtrudeFn,
@@ -29,8 +28,7 @@ import {
   NOMINAL_WIDTH_FACTOR,
   PEDESTAL_LAYERS,
   PEDESTAL_WIDTH_FACTOR,
-  printedSegmentLengthMm,
-  quantizeE,
+  primeOnTheMove,
   retract,
   travel,
 } from '../gcode/emitter'
@@ -129,30 +127,6 @@ const WIPE_MM = 2
  * halves the proud height while a single 0.2 mm bead still defines the silhouette edge.
  */
 export const IS_MEASURED_LAYERS = 1
-
-/**
- * Prime on the move: the deretract is spread over the first stretch of the run-up leg at
- * a slow feedrate instead of a stationary un-retract, which piles a blob at the line start.
- */
-function primeOnTheMove(
-  e: Emitter,
-  p: PrinterProfile,
-  f: FilamentProfile,
-  lineWidthMm: number,
-  x: number,
-  y: number,
-  speedMmS: number,
-): void {
-  // The bead's E over the printed segment, plus the deretract, quantized once as one move.
-  const len = printedSegmentLengthMm(e.x, e.y, x, y)
-  const eAmt = quantizeE(p.retractMm + beadExtrusionMm(p, f, len, lineWidthMm))
-  e.lines.push(
-    `G1 X${x.toFixed(3)} Y${y.toFixed(3)} E${eAmt.toFixed(5)} F${Math.round(speedMmS * 60)}`,
-  )
-  e.x = x
-  e.y = y
-  e.retracted = false
-}
 
 /**
  * End a test line inside the frame band: extrude the deceleration tail at the cruise

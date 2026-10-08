@@ -5,8 +5,10 @@ import {
   beadVolumetricFlowMm3S,
   extrude,
   highFlowWarning,
+  maxExtrudeCrossSectionMm2,
   newEmitter,
   perimeterBandMm,
+  primeOnTheMove,
   perimeterLoopInsetsMm,
   quantizeE,
   rasterBase,
@@ -15,6 +17,12 @@ import {
   travel,
   widestPerimeterBandMm,
 } from '../../../src/engine/gcode/emitter'
+import { generateIsGcodeWithReport } from '../../../src/engine/is/gcodeGenerator'
+import { defaultIsTestRequest } from '../../../src/engine/is/types'
+import { generatePaGcodeWithReport } from '../../../src/engine/pa/gcodeGenerator'
+import { defaultPaTestSpec } from '../../../src/engine/pa/types'
+import { generateEmGcodeWithReport } from '../../../src/engine/em/gcodeGenerator'
+import { defaultEmTestSpec } from '../../../src/engine/em/types'
 
 const profile = defaultPrinterProfile()
 const filament = defaultFilamentProfile()
@@ -329,5 +337,65 @@ describe('beadVolumetricFlowMm3S and highFlowWarning', () => {
       'Lower the line speed, or raise the filament\'s max volumetric flow only if the hotend can ' +
         'melt 12.8 mm^3/s. Above the 12 mm^3/s a typical hotend melts, the lines under-extrude.',
     )
+  })
+})
+
+describe('primeOnTheMove', () => {
+  it("names Klipper's default max_extrude_cross_section, 4 x nozzle^2", () => {
+    expect(maxExtrudeCrossSectionMm2(profile)).toBeCloseTo(0.64, 12)
+    expect(maxExtrudeCrossSectionMm2({ ...profile, nozzleDiameterMm: 0.6 })).toBeCloseTo(1.44, 12)
+  })
+
+  it('caps the moving prime at the cross-section limit and restores the rest standing still', () => {
+    // A 3 mm prime of a 0.42 x 0.2 mm bead with the default 0.8 mm deretract carries
+    // 0.8 + 3 x 0.03135430 = 0.89406 mm of filament, 0.715 mm^2 over 3 mm. The cap is
+    // 0.64 x 3 / 2.40528 = 0.79824 mm (rounded down), so 0.09582 mm is un-retracted first.
+    const e = newEmitter()
+    e.retracted = true
+    primeOnTheMove(e, profile, filament, 0.42, 3, 0, 30)
+    expect(e.lines).toEqual(['G1 E0.09582 F2100', 'G1 X3.000 Y0.000 E0.79824 F1800'])
+    expect(e.retracted).toBe(false)
+  })
+
+  it('keeps a prime under the limit as one moving move', () => {
+    // A 0.2 mm deretract: 0.2 + 0.09406 = 0.29406 mm over 3 mm, 0.236 mm^2.
+    const e = newEmitter()
+    primeOnTheMove(e, { ...profile, retractMm: 0.2 }, filament, 0.42, 3, 0, 30)
+    expect(e.lines).toEqual(['G1 X3.000 Y0.000 E0.29406 F1800'])
+  })
+})
+
+describe('extrusion cross-section of every coupon', () => {
+  /** The largest filament cross-section (E per mm of path times the filament area) of any
+   *  forward-extruding XY move in the G-code, the quantity Klipper's check compares. */
+  function maxCrossSectionMm2(gcode: string): number {
+    const area = filament.filamentDiameterMm ** 2 * 0.25 * Math.PI
+    let x = 0
+    let y = 0
+    let worst = 0
+    for (const line of gcode.split('\n')) {
+      const m = line.match(/^G[01] X(-?[\d.]+) Y(-?[\d.]+)(?: E(-?[\d.]+))?/)
+      if (!m) continue
+      const nx = Number(m[1])
+      const ny = Number(m[2])
+      const len = Math.hypot(nx - x, ny - y)
+      if (m[3] !== undefined && Number(m[3]) > 0 && len > 0) {
+        worst = Math.max(worst, (Number(m[3]) / len) * area)
+      }
+      x = nx
+      y = ny
+    }
+    return worst
+  }
+
+  it('stays at or below 0.64 mm^2 on the input shaper, pressure advance and flow coupons', () => {
+    const is = defaultIsTestRequest(profile)
+    const gcodes = [
+      generateIsGcodeWithReport(profile, filament, is).gcode,
+      generateIsGcodeWithReport(profile, filament, { ...is, contrastBase: true }).gcode,
+      generatePaGcodeWithReport(profile, filament, defaultPaTestSpec()).gcode,
+      generateEmGcodeWithReport(profile, filament, defaultEmTestSpec(profile)).gcode,
+    ]
+    for (const gcode of gcodes) expect(maxCrossSectionMm2(gcode)).toBeLessThanOrEqual(0.64)
   })
 })
