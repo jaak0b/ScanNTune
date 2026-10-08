@@ -117,8 +117,8 @@ recorded in `PROVENANCE.md` as which tier backs the value:
   messenger that displays the numbers the agent then copies.
 - **Owner-reviewed (when hardware validation is impossible).** For output that cannot be printed on
   hardware the owner has, the owner inspects the app's output and judges it correct from domain
-  knowledge. The concrete case is firmware formats for printers the owner does not own: the owner
-  runs Klipper, so Marlin and RepRapFirmware output is reviewed, not printed.
+  knowledge. The former concrete case, Marlin and RepRapFirmware output, was retired on 2026-10-08
+  when the app became Klipper only.
 
 What stays banned is freezing output that no human ever looked at and judged. Both tiers are real
 approval and both may be frozen; the tier is recorded so a later reader knows how strong the
@@ -250,14 +250,10 @@ backing is.
    explicitly so a flip fails. Like every other assertion, these values are the app's displayed
    output copied verbatim from the approved case, not recomputed.
 
-   All three firmwares live in the webtest layer, not in unit tests. Firmware is chosen per printer
-   profile before analysis; there is no post-analysis firmware toggle in the UI, so a measurement
-   webtest asserts every firmware's command by re-running the same owner-approved scan under each
-   firmware profile through a shared helper (for example `analyzeUnderFirmware`), never by shifting
-   firmware coverage into a unit test. Klipper commands are hardware-validated; Marlin and
-   RepRapFirmware commands are owner-reviewed and frozen. All three are asserted as exact command
-   strings with explicit sign, because a correct measured readout never substitutes for asserting
-   the command itself.
+   Firmware commands live in the webtest layer, not in unit tests. The app supports Klipper only
+   (2026-10-08), so a measurement webtest asserts the hardware-validated Klipper command as an exact
+   command string with explicit sign, because a correct measured readout never substitutes for
+   asserting the command itself.
 
 7. **Cover the failure paths users actually hit, not just the happy path.** At least one test per
    flow should upload a scan set the app must reject: two scans of the same angle, a mirror-flipped
@@ -311,8 +307,8 @@ Two features have no scan to analyze but are still driven as webtests through th
 output with no timestamps or randomness, so their output is frozen by an exact byte comparison to a
 golden gcode file the owner printed and verified. The webtest drives the real UI: select the
 printer profile, generate, download the file, and compare it byte-for-byte to the golden (through a
-shared helper, for example `downloadAndCompareGcode`). The owner's own firmware gcode golden is
-hardware-validated because it was printed; the other two firmwares' gcode goldens are owner-reviewed.
+shared helper, for example `downloadAndCompareGcode`). The Klipper gcode golden is hardware-validated
+because it was printed.
 There is no math: the comparison is file-equals-golden, and the golden was captured from an approved
 generation, never hand-derived. XY, XZ, and YZ have no gcode target, because that coupon is an STL
 the user slices, so gcode webtests exist only for PA, EM, and IS.
@@ -333,7 +329,7 @@ enough; this is not an exhaustive edge-case matrix.
   ```
   web/e2e/
     helpers/              cross-feature step helpers (uploadCard, seedCalibration,
-                          analyzeUnderFirmware, downloadAndCompareGcode)
+                          downloadAndCompareGcode)
     card-calibration/     card.spec.ts, card.flow.md, golden/ (card_300dpi.png, card_600dpi.png,
                           PROVENANCE.md)
     printer-management/   slicer-import.spec.ts, slicer-import.flow.md, golden/ (real orca + prusa
@@ -341,7 +337,7 @@ enough; this is not an exhaustive edge-case matrix.
     skew-shrinkage/       xy.spec.ts, xz.spec.ts, yz.spec.ts, xy-rejection.spec.ts, skew.flow.md,
                           golden/ (xy/xz/yz scans 300+600, PROVENANCE.md)
     pressure-advance/     pa.spec.ts, pa-gcode.spec.ts, pa-rejection.spec.ts, pa.flow.md,
-                          golden/ (scans + per-firmware gcode goldens, PROVENANCE.md)
+                          golden/ (scans + gcode goldens, PROVENANCE.md)
     flow/                 em.spec.ts, em-gcode.spec.ts, ..., golden/
     input-shaper/         is.spec.ts, is-gcode.spec.ts, ..., golden/
   ```

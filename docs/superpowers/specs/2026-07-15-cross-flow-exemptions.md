@@ -131,9 +131,8 @@ needs the reset.
 
 `web/src/engine/is/lineTracer.ts` maps each traced sample to a time since the corner from its
 commanded coupon-frame distance, the sample's position mapped back through the fiducial affine,
-and the commanded velocity profile (the trapezoid, and on Marlin also the quintic S-curve ramp
-candidate). This deliberately does not convert through the card `ScaleReference`: the printed
-coupon carries the printer's axis scale error and the plastic's shrinkage exactly as its
+and the commanded velocity profile (the trapezoid Klipper executes). This deliberately does not
+convert through the card `ScaleReference`: the printed coupon carries the printer's axis scale error and the plastic's shrinkage exactly as its
 fiducials do, so the affine-mapped distance is the distance the printer executed at the commanded
 speed, while a card conversion would bias the frequency by the shrinkage fraction. The lateral
 deviation, the ring itself, still converts through the card reference along its measurement

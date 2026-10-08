@@ -5,7 +5,7 @@
 
 **Caliper-free 3D printer calibration from a flatbed scanner: skew, shrinkage, pressure advance, input
 shaper, and extrusion multiplier.**
-Print a coupon, scan it on an ordinary office scanner, and get ready-to-paste firmware or slicer
+Print a coupon, scan it on an ordinary office scanner, and get ready-to-paste Klipper or slicer
 corrections. No calipers, no measuring, no eyeballing test prints, no typing numbers into a calculator.
 
 <div align="center">
@@ -37,7 +37,7 @@ corrections. No calipers, no measuring, no eyeballing test prints, no typing num
 3. **Scan each twice:** lay a plate on the scanner and scan it flat, then give it a quarter turn and scan it
    again. Repeat for any other plates.
 4. **Drop them all in:** open every scan in ScanNTune at once. It sorts them by plate automatically and gives
-   you the firmware or slicer snippet for X/Y/Z scale and skew.
+   you the Klipper or slicer snippet for X/Y/Z scale and skew.
 
 That's it. The whole thing takes a couple of minutes once the plates are printed.
 
@@ -56,8 +56,8 @@ lines and picking the one that "looks best".
    at the speed transitions. The line that stays most even wins, refined to a continuous value between the
    steps.
 
-The result is ready to paste: Klipper `SET_PRESSURE_ADVANCE`, Marlin `M900`, or RepRapFirmware `M572`.
-On Klipper there's an optional follow-up coupon that sweeps `smooth_time` the same way.
+The result is ready to paste as Klipper `SET_PRESSURE_ADVANCE`. An optional follow-up coupon sweeps
+`smooth_time` the same way.
 
 ## Input shaper
 
@@ -75,9 +75,8 @@ built into Klipper or eyeballing which shaper setting reduces ringing on a test 
 3. **Get the corrections back:** a recommended shaper type, chosen for robustness across a frequency
    tolerance band, plus the resulting maximum usable acceleration.
 
-The result is ready to paste: a Klipper `[input_shaper]` block for `printer.cfg`, Marlin `M593` (ZV,
-the only shaper Marlin implements), or RepRapFirmware `M593`. Like
-the other absolute-scale flows, it requires the one-time scanner card calibration.
+The result is ready to paste: a Klipper `[input_shaper]` block for `printer.cfg`. Like the other
+absolute-scale flows, it requires the one-time scanner card calibration.
 
 ## Extrusion multiplier / flow
 

@@ -14,10 +14,16 @@ skew/shrinkage (the ring coupon described here, also on the XZ and YZ planes), p
 extrusion multiplier / flow ratio, and input shaper. The last three print a G-code coupon generated in-app
 instead of an STL; each has its own section below.
 
+The app supports **Klipper only** (owner decision, 2026-10-08): every generated coupon and every firmware
+command it emits is Klipper G-code, and the firmware dropdowns list Klipper as their only option. Printer
+profiles stored with the retired Marlin or RepRapFirmware value load as Klipper, and slicer presets import
+as Klipper whatever G-code flavor they name. The slicer outputs (shrinkage compensation %, extrusion
+multiplier / flow ratio) are plain slicer settings.
+
 The measurement principle: ring **centres** give true X/Y scale and skew (centres are immune to
 over/under-extrusion, because extrusion changes a ring's wall width, not its centre). The correction math
-mirrors the Vector 3D "Califlower" calculator (Klipper `SET_SKEW`, Marlin `XY_SKEW_FACTOR`/steps-per-mm,
-Orca/Super shrinkage %, RRF `M556`).
+mirrors the Vector 3D "Califlower" calculator (Klipper `SET_SKEW`, rotation distance, Orca/Super
+shrinkage %).
 
 Orientation is automatic. The coupon's origin-corner ring **and its +X neighbour** are printed SOLID (no
 hole): a two-ring marker the software reads. `origin → neighbour` is the coupon's +X, which resolves
@@ -149,10 +155,9 @@ a real scan.
 ## Pressure advance calibration
 
 A second, independent calibration flow lives under `web/src/engine/pa/`: it estimates linear
-pressure advance (Klipper `PRESSURE_ADVANCE`, Marlin `M900 K`, RepRapFirmware `M572 S`) from a single
-scan of a printed test coupon, instead of the eyeballed "prints" the usual tools produce. The coupon
-is a two-layer base (a solid first layer, then a contrasting-color second layer for edge contrast) with
-16 straight test lines, each printed at a different stepped PA value and each containing a slow to fast
+pressure advance (Klipper `PRESSURE_ADVANCE`) from a single scan of a printed test coupon, instead of
+the eyeballed "prints" the usual tools produce. The coupon is a two-layer base (a solid first layer,
+then a contrasting-color second layer for edge contrast) with 16 straight test lines, each printed at a different stepped PA value and each containing a slow to fast
 to slow speed change so a PA mismatch bulges or starves the line at the two speed transitions. Three
 corner holes are fiducials; the fourth corner is left solid, so the missing hole marks the origin the
 same way the XYZ coupon's marker does. Measurement: `fiducialAligner` solves the affine from the three
@@ -210,7 +215,7 @@ truth; do not change the EM measurement math without keeping its render-recovery
 A fourth calibration flow lives under `web/src/engine/is/`: it measures each axis's resonance frequency
 and damping ratio from two scans of one coupon (face down, then a quarter turn on the glass; each axis is
 read from the scan whose sensor rows run along its measured lines) and recommends a shaper (a Klipper
-`[input_shaper]` block, Marlin `M593` with ZV, RepRapFirmware `M593`). The coupon (generated in-app,
+`[input_shaper]` block). The coupon (generated in-app,
 `is/gcodeGenerator.ts` and `is/couponGeometry.ts`) is a frame band with the same 3-hole +
 solid-origin-corner fiducial convention around an open window. Single test lines run in, turn a sharp
 90 degree corner, and cross the window as their measured segment, so the corner's velocity step leaves a
@@ -245,8 +250,8 @@ corrected by the other axis's fitted ring at the same corner
 speed (the along-track lag), kept only when the other axis is accepted. Validation contract:
 `web/tests/helpers/isTraceSim.ts` (seeded trace simulator) and `web/tests/helpers/isRender.ts` (coupon
 renderer) are the synthetic ground truth; `web/tests/helpers/plannerReplay.ts` is the planner oracle,
-replaying the generated G-code through planners ported from the Klipper, Marlin and RepRapFirmware
-sources without importing production code; the `web/tests/stats/` suite (`npm run test:stats`) holds the
+replaying the generated G-code through a planner ported from the Klipper sources without importing
+production code; the `web/tests/stats/` suite (`npm run test:stats`) holds the
 statistical calibration criteria; `web/tests/fixtures/is_default.gcode` pins the default coupon's G-code
 byte for byte. The design, its figures and its open items are in
 `docs/superpowers/specs/2026-10-08-is-ladder-two-tier-detection-design.md`. Do not change the IS

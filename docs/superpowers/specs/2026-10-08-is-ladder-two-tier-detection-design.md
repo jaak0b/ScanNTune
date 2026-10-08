@@ -144,8 +144,7 @@ A rung is followable when the smallest R exceeds half the nominal bead width (no
 slowest tier binds. The line count is the smallest n from 3 to 15 that leaves at least 3 followable rungs
 (`MIN_ACCEPTED_LINES`) on the slowest tier; when none does, 3 is used and `bandTopWarning` tells the user
 to raise the line speed or the acceleration to read a resonance near 150 Hz. Results: 5 for the default
-profile, 3 on Marlin (corner speed capped at 46.6 mm/s at 3000 mm/s^2), 6 for a 0.6 mm nozzle, 7 at
-1000 mm/s^2 on Klipper.
+profile, 6 for a 0.6 mm nozzle, 7 at 1000 mm/s^2.
 
 Changed from the plan: the redesign derived the count from the slow tier's cruise speed (a closed form
 that gave 7 for a 0.6 mm nozzle); amendment I9 moved it onto the commanded speed profile after the
@@ -154,7 +153,7 @@ speed setting (section 4); `IsTestRequest` still accepts a fixed count for engin
 
 ### 1.5 Per-line corner limits
 
-`junctionLimitCommands(profile, cornerSpeed, accel)` in `web/src/engine/is/firmwareMotion.ts` is the single
+`junctionLimitCommands(cornerSpeed)` in `web/src/engine/is/firmwareMotion.ts` is the single
 home of the mapping from a corner speed to the firmware's corner limit, used both to raise the limit for
 a test line and to set the profile's own value back. Values are rounded up to 3 decimals, so the printed
 limit never brakes the commanded corner.
@@ -162,30 +161,18 @@ limit never brakes the commanded corner.
 - **Klipper:** `SET_VELOCITY_LIMIT SQUARE_CORNER_VELOCITY=c`. A 90 degree junction entered at or below the
   square corner velocity passes unbraked; the command does not flush, and each queued move keeps the
   junction deviation current when it was queued.
-- **Marlin:** `M205 X c Y c` for classic jerk (per axis, per motor on CoreXY, where the reversal rule
-  counts max(|v_exit|, |v_entry|) = c for the reversing motor) and, on its own line so a classic build
-  rejecting it keeps the jerk values, `M205 J` with the junction deviation that passes the same corner,
-  J = c^2 / (a (sqrt(2) + 1)) from the planner's junction formula, clamped to the accepted 0.01 to 0.3 mm.
-- **RepRapFirmware:** `M566 X 60c Y 60c` (mm/min). RRF 3.5.4 applies jerk to the Cartesian move direction
-  also on CoreXY (DDA::MatchSpeeds works on the user-space direction vector; CoreKinematics limits only
-  speed and acceleration per motor), so no CoreXY adjustment is needed (amendment I15 a, verified from
-  source).
+- **Marlin and RepRapFirmware:** removed on 2026-10-08 by owner decision; the app supports Klipper only.
 
 Per line and per layer the generator emits: planner stop, travel, the stationary un-retract, planner
 stop, the first stretch, the raise to the line's commanded corner feed (round(60 c) / 60, and on the
 pedestal min(c, first layer speed)), the run-up, the measured segment, the tail, the coast, planner
-stop, the lower back to the profile's square corner velocity (plus the derived junction deviation on
-Marlin), and the wipe with its retract. The raise is emitted only once the first stretch is queued: its
+stop, the lower back to the profile's square corner velocity, and the wipe with its retract. The raise is emitted only once the first stretch is queued: its
 junction with the run-up is colinear, so the raised value governs the ringing corner alone, and every
 move that starts from rest (travel, first stretch, wipe) starts under the profile's own limit as in a
 normal print.
 
-The per-line scheme exists because of Marlin's classic-jerk planner (amendment M1): a block planned with
-an empty queue starts at safe_speed, the smaller of its nominal speed and the jerk, per axis (per motor
-on CoreXY), and after `G4 P0` the queue is always empty. A limit raised for the whole line phase would
-start every travel, first stretch and wipe at a top-rung kick. The stop between the stationary
-un-retract and the first stretch exists because an E-only block followed by the first stretch would
-otherwise let Marlin's junction deviation start that stretch at about 11 mm/s.
+The per-line scheme came from Marlin's classic-jerk planner (amendment M1). Marlin support was removed
+on 2026-10-08 by owner decision; the app supports Klipper only.
 
 Changed from the plan: the redesign raised the limit once for the whole line phase (its motor-safety
 item d); amendment M1 replaced that with the per-line raise and lower.
@@ -193,12 +180,10 @@ item d); amendment M1 replaced that with the per-line raise and lower.
 ### 1.6 Planner stops, speed factor reset, acceleration
 
 - **Planner stops** (`PLANNER_STOP = 'G4 P0'`), three per line per layer as listed above. Klipper's G4
-  flushes the lookahead queue to zero velocity (toolhead.dwell, get_last_move_time, lookahead.flush),
-  Marlin's G4 calls planner.synchronize(), and RepRapFirmware's G4 waits for standstill once motion was
-  commanded (DoDwell). Every corner kick lands on a motor at rest, never on a rotor still oscillating
+  flushes the lookahead queue to zero velocity (toolhead.dwell, get_last_move_time, lookahead.flush).
+  Every corner kick lands on a motor at rest, never on a rotor still oscillating
   from the previous kick, and the old 180 degree wipe reversal at speed is gone.
-- **Speed factor reset** (`SPEED_FACTOR_RESET = 'M220 S100'`, amendment M2) in the motion block on all
-  three firmwares. A persisted speed factor s scales every commanded feed rate, so the frequency would read
+- **Speed factor reset** (`SPEED_FACTOR_RESET = 'M220 S100'`, amendment M2) in the motion block. A persisted speed factor s scales every commanded feed rate, so the frequency would read
   as f / s on both tiers alike, which the speed check cannot detect. `IS_OVERRIDDEN_SETTINGS` gains the
   speed factor, so the end-of-print comment and the restart note say it resumes with the next firmware
   restart. This reset is in the input shaper coupon only (section 4).
@@ -207,8 +192,7 @@ item d); amendment M1 replaced that with the per-line raise and lower.
   excitation is the corner's velocity step, which the acceleration does not set, and extra acceleration
   only adds motor load after each corner.
 - **Motion block** (`isMotionLimitCommands`): Klipper `SET_VELOCITY_LIMIT VELOCITY ACCEL
-  MINIMUM_CRUISE_RATIO=0` (plain trapezoids); Marlin and RRF `M203`, `M201 X/Y` (the per-axis maximum
-  caps every move there) and `M204 P/T`; then `M220 S100`; then the profile's own corner limit. The
+  MINIMUM_CRUISE_RATIO=0` (plain trapezoids); then `M220 S100`; then the profile's own corner limit. The
   velocity ceiling is raised to the fastest commanded move. Input shaping and pressure advance are
   switched off before any extrusion. Nothing is restored numerically; a firmware restart brings the
   user's settings back.
@@ -219,21 +203,15 @@ item d); amendment M1 replaced that with the per-line raise and lower.
 acceleration, so the ladder's top rung, the ramps, the packing, the emitted limits and the analysis time
 base all agree with the corner the printer actually takes.
 
-- **Marlin:** the 0.3 mm junction deviation maximum caps a 90 degree corner at
-  sqrt(0.3 a (sqrt(2) + 1)), floored to 0.1 mm/s: 46.6 mm/s at 3000 mm/s^2. Classic-jerk builds get the
-  same corner speed. Below 553 mm/s^2 even the 20 mm/s rung is impossible and generation refuses with
-  "Raise the print acceleration in the printer profile to at least 553 mm/s^2 ..." (amendment I6, which
-  replaced the old "raise the test acceleration" text).
 - **Klipper:** `Move.calc_junction` also limits every junction by its approximated centripetal velocity,
   v^2 <= 0.5 d a at 90 degrees, over the shortest run-up move d = band + run-up - leg inset - prime
   (`shortestRunUpMoveMm`, 14 mm by default), floored to 0.1 mm/s (`klipperCentripetalCornerCapMmS`). It
   does not bind at 3000 mm/s^2; at 1000 mm/s^2 the band widens to 14.25 mm for the 150 mm/s tail, d is
   16.25 mm and the cap is 90.1 mm/s.
-- **RepRapFirmware:** no cap.
+- **Marlin and RepRapFirmware:** removed on 2026-10-08 by owner decision; the app supports Klipper only.
 
 Changed from the plan: the redesign estimated the Klipper cap at 83.7 mm/s for 1000 mm/s^2 assuming a
-12 mm band and rounding to nearest; the code uses the widened band and rounds down. The amendment's
-"about 552 mm/s^2" Marlin floor is 553 after rounding up.
+12 mm band and rounding to nearest; the code uses the widened band and rounds down.
 
 ### 1.8 Line start: stationary un-retract
 
@@ -263,8 +241,7 @@ and the planner oracle (section 1.11) keep stock Klipper's 0.64 mm^2 check only 
 ### 1.9 Bed fit and placement
 
 `fitSpecToPrinter` is the single place a spec is fitted and the only place a tier is dropped: first the
-tiers against the bottom rung, then the firmware caps (and `exactRampTiming`, false on Marlin), then the
-line count and the bed. The bed fit keeps the requested (or derived) line count and takes the longest
+tiers against the bottom rung, then the firmware cap, then the line count and the bed. The bed fit keeps the requested (or derived) line count and takes the longest
 read length, down to 20 mm, that fits; if none fits it reduces the lines per speed towards 3, taking the
 longest read length at each count; if that fails it drops the slower tier (with the note "With one tier,
 the analysis cannot tell print and scan patterns apart from ringing.") and repeats both reductions. Each
@@ -287,7 +264,6 @@ code:
 | Default | 106, 150 | 5 | 30 mm | 100 mm/s | 114.806 mm square |
 | 120 x 120 bed, centred | 106, 150 | 5 | 30 mm | 100 mm/s | 114.806 mm square |
 | 120 x 120 bed, front (scan with plate) | 106, 150 | 5 | 25 mm | 100 mm/s | 109.806 mm square |
-| Marlin, 3000 mm/s^2 | 106, 150 | 3 | 30 mm | 46.6 mm/s | 94.806 mm square |
 | Klipper, 1000 mm/s^2 | 106, 150 | 7 | 30 mm | 90.1 mm/s | 146.05 mm square |
 | 0.6 mm nozzle | 106, 150 | 6 | 30 mm | 100 mm/s | 124.806 mm square |
 | 80 x 80 bed | 150 | 4 | 23 mm | 100 mm/s | 79.683 mm square |
@@ -305,19 +281,14 @@ about 15 mm of growth at 1000 mm/s^2; the derived line count rises to 7 there, s
 
 ### 1.11 Planner oracle
 
-`web/tests/helpers/plannerReplay.ts` replays the generated G-code through planners ported from the
-firmware sources and imports no production code. Pinned sources: Klipper v0.13.0 (toolhead.py
+`web/tests/helpers/plannerReplay.ts` replays the generated G-code through a planner ported from the
+Klipper sources and imports no production code. Pinned source: Klipper v0.13.0 (toolhead.py
 `Move.calc_junction`, `LookAheadQueue.flush`, `SET_VELOCITY_LIMIT` without flush, `G4` through dwell to
-the lookahead flush; extruder.py `calc_junction` and the `max_extrude_cross_section` check), Marlin
-2.1.2.5 (planner.cpp junction deviation with E in the unit vector and in motor space on CoreXY,
-`JD_HANDLE_SMALL_SEGMENTS`, classic jerk with the empty-queue safe_speed branch, the reversal rule and the
-previous_safe_speed override, the reverse and forward passes; G4.cpp synchronize; stepper.cpp S-curve)
-and RepRapFirmware 3.5.4 (DDA.cpp `MatchSpeeds` and meld rules, CoreKinematics speed and acceleration
-limits, `DoDwell`).
+the lookahead flush; extruder.py `calc_junction` and the `max_extrude_cross_section` check). The Marlin
+and RepRapFirmware planners were removed on 2026-10-08 by owner decision; the app supports Klipper only.
 
-`web/tests/engine/is/plannerReplay.spec.ts` runs the default coupon through Klipper, Marlin junction
-deviation, Marlin classic jerk and RRF, each on Cartesian and CoreXY kinematics, centred and front
-placement, with and without contrast base: 32 cases, all passing, about 1.3 s. A 90% speed factor is
+`web/tests/engine/is/plannerReplay.spec.ts` runs the default coupon through Klipper on Cartesian and
+CoreXY kinematics, centred and front placement, with and without contrast base: 8 cases, all passing. A 90% speed factor is
 left set before each replay. Each case asserts:
 
 - no move exceeds Klipper's default extrusion cross-section (a sanity tripwire, section 1.8);
@@ -326,28 +297,24 @@ left set before each replay. Each case asserts:
 - the corner kicks never fall within a layer (fastest corners last);
 - the raised limit covers exactly each line's run-up, measured segment, tail and coast, and every other
   junction touching those moves has a zero Cartesian velocity step;
-- every move from rest starts at or below the profile's limit (0.05 mm/s, or the 5 mm/s jerk per motor
-  on classic-jerk Marlin);
+- every move from rest starts from standstill (at or below 0.05 mm/s);
 - each line's travel, first stretch and wipe begin a new planner segment (the planner came to rest);
 - after every corner the nozzle covers the measured move on the analysis time base, `timeAtDistance`,
-  within 1e-6 s (on Marlin also with an S-curve ramp, from the end of the ramp on).
+  within 1e-6 s.
 
 The emitted `M220 S100` itself is pinned by the firmware motion and generator specs, and the matrix
 guards its effect: each corner's speed and motor step, and the measured move's cruise, end speed and
-timing, are compared against the coupon's planned speeds (hand-pinned rung tables per firmware, F1200 to
-F6000 on Klipper and RRF and F1200 to F2796 on Marlin, capped at the 30 mm/s first layer speed on the
-pedestal, and the line's tier speed), never against the replayed feeds, which already include any speed
-factor. Removing `M220 S100` from the generated G-code fails all 32 cases; while the matrix compared
-against the replayed feeds, the same removal failed only the 8 classic-jerk Marlin cases.
+timing, are compared against the coupon's planned speeds (a hand-pinned rung table, F1200 to F6000,
+capped at the 30 mm/s first layer speed on the pedestal, and the line's tier speed), never against the
+replayed feeds, which already include any speed factor. Removing `M220 S100` from the generated G-code
+fails all 8 cases.
 
-Self-tests cover a Klipper corner at the square corner velocity, the centripetal limit v^2 = 0.5 L a, a
-classic-jerk reversal at the jerk value, the empty-queue safe speed, a junction deviation corner at
-sqrt(a J (sqrt(2) + 1)), RRF jerk on the Cartesian direction on CoreXY, the S-curve ramp ending at the
-trapezoid distance, the cross-section flag and M220 scaling. Mutations were checked: dropping the
-per-line raise fails every Klipper case, dropping the stop before the travel or before the wipe
-fails all 32, and removing `M220 S100` fails all 32. Stated limitations, not modelled: Klipper's `limited_cartesian` and `limited_corexy`
-`max_x_accel` and `max_y_accel`, Marlin's `M200 L` volumetric limit, finite lookahead buffers, step
-quantization, and Z moves (treated as planner boundaries; the coupon moves Z only between layers).
+Self-tests cover a Klipper corner at the square corner velocity, the centripetal limit v^2 = 0.5 L a,
+the cross-section flag and M220 scaling. Mutations were checked: dropping the per-line raise fails every
+case, dropping the stop before the travel or before the wipe fails every case, and removing `M220 S100`
+fails every case. Stated limitations, not modelled: Klipper's `limited_cartesian` and `limited_corexy`
+`max_x_accel` and `max_y_accel`, the finite lookahead buffer, step quantization, and Z moves (treated as
+planner boundaries; the coupon moves Z only between layers).
 
 ## 2. Analysis
 
@@ -380,11 +347,8 @@ fraction (0.5% shrinkage read 0.5% high). The tracer also exports, per sample, t
 millimetre along the line and the nominal across-image coordinate, which the JPEG and pixel-lock
 patterns need.
 
-On Marlin (`exactRampTiming` false) the fit window starts no earlier than the end of the post-corner ramp,
-(v - c) / a: an undetectable `S_CURVE_ACCELERATION` build replaces the ramp by the quintic Bezier
-v0 + dv (10 tau^3 - 15 tau^4 + 6 tau^5) of the same duration and distance (stepper.cpp
-`_calc_bezier_curve_coeffs`), so the nozzle trails the trapezoid inside the ramp (up to 0.198 mm at the
-20 mm/s rung) and both profiles agree after it. Klipper and RRF ramps are exact trapezoids.
+Klipper's ramps are exact trapezoids. The Marlin S-curve ramp-end fit window start was removed on
+2026-10-08 by owner decision; the app supports Klipper only.
 
 Changed from the plan, implementer change: the tracer samples every 1 px along the line instead of every
 0.5 px. Under the scanner's optical blur a sample between two pixel columns is almost exactly the mean of
@@ -393,16 +357,11 @@ the ring columns' sub-sample curvature into false detections (12% of noise-only 
 blur). The ring band lies below 0.06 cycles per pixel, so the pixel pitch loses nothing, and tracing is
 about three times faster.
 
-Changed from the plan: amendment I6 asked for two candidate Marlin time bases (trapezoid and quintic
-Bezier, selected by likelihood per print). Only the ramp-end window start is built; the Marlin fit always
-skips the ramp (43 ms on the 20 mm/s rung at 150 mm/s and 3000 mm/s^2).
-
 ### 2.2 Fit window
 
 `analyzeTracedLine` locates the free ringdown on the first half of the trace after a Gaussian regression
 filter detrend (ISO 16610-21 form, cutoff period 1 / `DRIFT_CUTOFF_HZ`): the window starts at the first
-zero crossing after the largest early excursion (the forced corner overshoot), and never before the first
-sample at or after `fitStartMinS`. Only samples the tracer actually read enter the statistics; the
+zero crossing after the largest early excursion (the forced corner overshoot). Only samples the tracer actually read enter the statistics; the
 tracer's linear gap fill serves the window search alone. A line without a window, or whose window leaves
 no residual degrees of freedom after the null and ring columns and the largest AR order, is reported and
 not fitted.
@@ -611,8 +570,8 @@ its worst residual vibration over a band of max(5%, the relative 95% halfwidth);
 (when none qualifies, the lowest worst residual). With a second mode whose proportionality check does
 not fail (a steady tone next to the ring does not shape the spectrum the shaper must cover), the choice
 follows Klipper's `shaper_calibrate.py` (`fit_shaper`, `find_best_shaper`) on a spectrum synthesized from
-the fitted modes (Lorentzian lines in acceleration, added incoherently). Marlin implements ZV only: it
-gets ZV at the dominant mode, and the residual vibration that ZV leaves at the second mode is reported.
+the fitted modes (Lorentzian lines in acceleration, added incoherently). The Marlin ZV output and its
+second-mode residual were removed on 2026-10-08 by owner decision; the app supports Klipper only.
 
 ### 2.11 Print and scan patterns (order tracking) and pixel locking
 
@@ -668,7 +627,7 @@ Per axis, raw rows (`web/src/components/isCheckRows.ts`): lines with ringing det
 p-value bound, decay demonstrated, grows with corner speed, speed independence (confirmed, changed with
 speed, not confirmed, not assessed), the frequency at each tier speed, replicate check, detection without
 any single line (one tier), layer shift detected, the second mode's p-value bound, frequency, damping
-ratio and proportionality, the ZV residual at the second mode, each detected pattern's period and source,
+ratio and proportionality, each detected pattern's period and source,
 and the corner model with its time constant or drag length. The line table shows each line's speed and
 whether ringing was detected on it.
 
@@ -715,13 +674,13 @@ within 0.02), faint field-regime ringing, self-ranging ladders, a coupon with no
 detection bound), replicate scatter (refused), a resonance just outside the band (refused), a wrong figure
 on the unused axis of a per-axis (CCD) reference (cannot leak into the frequency), two tiers disagreeing
 (refused) and agreeing (recovered), and order independence and orientation mismatch refusals. The time
-base cases at 75 Hz: a 0.5% shrunk coupon reads 75.010 Hz (the old card time base read 75.389 Hz), and a
-Marlin S-curve ramp with the ramp-end window reads 74.971 Hz (74.407 Hz without it); both are pinned within
-0.075 Hz (0.1%).
+base case at 75 Hz: a 0.5% shrunk coupon reads 75.010 Hz (the old card time base read 75.389 Hz), pinned
+within 0.075 Hz (0.1%). The Marlin S-curve case was removed on 2026-10-08 by owner decision; the app
+supports Klipper only.
 
 ### 3.3 Planner oracle and G-code
 
-32 of 32 planner cases pass (section 1.11). The G-code snapshot `is_default.gcode` was not changed by
+8 of 8 planner cases pass (section 1.11). The G-code snapshot `is_default.gcode` was not changed by
 stage 2. `web/tests/engine/is/gcodeGenerator.spec.ts` checks, among others, that the speed factor reset
 and the profile corner limit come before any extrusion, that each line raises the limit after its first
 stretch and lowers it before its wipe, that the planner comes to rest three times per line, that the lines
@@ -766,6 +725,8 @@ runners are estimated at 10 to 14 minutes and not yet measured.
   noise made the noise model nearly singular, nothing in the ringing band is lost, and tracing is about
   three times faster; section 2.1).
 - **Real-scan goldens come from fresh prints**; scans of the old sweep coupons are not ground truth.
+- **Klipper only (2026-10-08).** Marlin and RepRapFirmware support was removed from every flow; the
+  firmware dropdowns list Klipper as the only option.
 
 ## 5. Known limitations and open items
 
@@ -788,10 +749,8 @@ runners are estimated at 10 to 14 minutes and not yet measured.
   standard deviation grows from 0.11 Hz to about 0.3 Hz. The ISO 16610-31 robust Gaussian regression
   filter of the plan was not built.
 - **Firmware limits not modelled**: Klipper's `limited_cartesian` and `limited_corexy` `max_x_accel` and
-  `max_y_accel`, and Marlin's `M200 L` volumetric limit, can lower the real motion below the commanded
-  profile and so shift the time base. They are stated, not detected.
-- **Marlin time base**: the fit always skips the post-corner ramp; the two-candidate time base of
-  amendment I6 is not built (section 2.1).
+  `max_y_accel` can lower the real motion below the commanded profile and so shift the time base. They
+  are stated, not detected.
 - **Owner test print at the default speeds is a required merge step.** It is the hardware confirmation of
   the ladder, the per-line limits, the planner stops and the motor safety, which were verified from
   firmware source and the oracle, not on a printer.

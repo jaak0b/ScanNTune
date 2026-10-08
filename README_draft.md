@@ -31,15 +31,11 @@ You get the exact snippet your setup expects, ready to paste:
 | Target | Skew and shrinkage | Pressure advance | Input shaper | Extrusion multiplier |
 | --- | --- | --- | --- | --- |
 | Klipper | `SET_SKEW XY=...` | `SET_PRESSURE_ADVANCE ADVANCE=...` | `SET_INPUT_SHAPER ...` | `M221 S...` |
-| Marlin | `M852` (`XY_SKEW_FACTOR`), `M92` steps per mm | `M900 K...` | `M593 ...` | `M221 S...` |
-| RepRapFirmware | `M556 ...` | `M572 S...` | `M593 ...` | `M221 S...` |
 | Slicer | shrinkage compensation % | per-filament pressure advance (OrcaSlicer) | not applicable, firmware only | extrusion multiplier / flow ratio |
 
-The slicer-level outputs work with any printer regardless of firmware: shrinkage compensation percentage
-and extrusion multiplier / flow ratio are plain slicer settings, and pressure advance can also be entered
-as a per-filament setting in OrcaSlicer. The firmware commands, including input shaper, require a
-firmware that accepts G-code commands, which closed-firmware printers such as Bambu Lab machines may not
-expose.
+Shrinkage compensation percentage and extrusion multiplier / flow ratio are plain slicer settings, and
+pressure advance can also be entered as a per-filament setting in OrcaSlicer. The generated coupons and
+every firmware command, including input shaper, are Klipper G-code.
 
 > [!TIP]
 > **A flatbed scanner is required; camera photos and phone scanning apps do not work.** Any regular
@@ -71,8 +67,7 @@ instead.
 
 Once the plates are printed, the scanning takes a couple of minutes and the analysis itself runs in
 seconds in the browser. Print time depends on your printer. The result is ready to paste: Klipper
-`SET_SKEW`, Marlin `XY_SKEW_FACTOR` and steps per mm, RepRapFirmware `M556`, or a slicer shrinkage
-compensation percentage.
+`SET_SKEW` or a slicer shrinkage compensation percentage.
 
 ### Checked against the caliper workflow
 
@@ -101,9 +96,8 @@ Replaces squinting at a tower or a row of lines and picking the one that "looks 
    at the speed transitions. The line that stays most even wins, refined to a continuous value between the
    steps.
 
-The result is ready to paste: Klipper `SET_PRESSURE_ADVANCE`, Marlin `M900`, or RepRapFirmware `M572`.
-On Marlin, `M900` requires a firmware build with Linear Advance enabled. On Klipper there is an
-optional follow-up coupon that sweeps `smooth_time` the same way.
+The result is ready to paste as Klipper `SET_PRESSURE_ADVANCE`. An optional follow-up coupon sweeps
+`smooth_time` the same way.
 
 <!-- IMAGE REQUEST: the pressure advance results page showing the scored 16-line coupon overlay and the refined PA value with its ready-to-paste command -->
 
@@ -122,8 +116,8 @@ setting reduces ringing on a test print.
 3. **Get the corrections back:** a recommended shaper type, chosen for robustness across a frequency
    tolerance band, and the resulting maximum usable acceleration.
 
-The result is ready to paste: Klipper `SET_INPUT_SHAPER`, Marlin `M593`, or RepRapFirmware `M593`. Like
-the skew and shrinkage flow, it requires the one-time card calibration for absolute scale.
+The result is ready to paste as Klipper `SET_INPUT_SHAPER`. Like the skew and shrinkage flow, it
+requires the one-time card calibration for absolute scale.
 
 <!-- IMAGE REQUEST: the input shaper results page showing the two quarter-turned scans, the fitted per-axis frequency and damping, and the recommended shaper type with its ready-to-paste command -->
 
@@ -140,7 +134,7 @@ Replaces measuring a thin wall with calipers or judging a top surface by feel.
    command for prints that are already sliced.
 
 The result is ready to paste: an extrusion multiplier (PrusaSlicer) or flow ratio (OrcaSlicer) value, plus
-`M221 S` for Marlin and RepRapFirmware. Line centres do not move when beads print fatter or thinner, so
+a Klipper `M221 S` command. Line centres do not move when beads print fatter or thinner, so
 the measurement is immune to printer axis stretch and material shrinkage. Filament that will not come off
 the plate (TPU, PETG) can be printed at the bed's front edge and scanned together with the build plate.
 
@@ -189,8 +183,10 @@ fixture-backed tests that pin the math are in [`web/tests/`](web/tests), if you 
   validation as XY yet. Sanity-check the results before trusting them on your printer.
 - **The pressure advance coupon needs two filaments** that differ in brightness, and a printer that can
   pause for a filament swap.
-- **Input shaper has no slicer-level output:** the correction is a firmware setting, so it needs a
-  firmware that accepts `SET_INPUT_SHAPER` (Klipper) or `M593` (Marlin, RepRapFirmware).
+- **Input shaper has no slicer-level output:** the correction is a Klipper setting
+  (`SET_INPUT_SHAPER`).
+- **Firmware commands are Klipper only.** Marlin and RepRapFirmware are not supported: the generated
+  coupons and every firmware command are Klipper G-code.
 
 ## Building from source
 
