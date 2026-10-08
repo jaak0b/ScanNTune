@@ -147,6 +147,14 @@ export function speedTiersFor(lineSpeedMmS: number): number[] {
   return [Math.floor(lineSpeedMmS / TIER_SPEED_RATIO), lineSpeedMmS]
 }
 
+/**
+ * The slowest whole-number line speed that keeps both tiers: its derived slower tier
+ * (speedTiersFor) still reaches MIN_CORNER_SPEED_MM_S, the bottom rung of every tier's
+ * corner-speed ladder, ceil(MIN_CORNER_SPEED_MM_S * TIER_SPEED_RATIO) = 29 mm/s. Below it
+ * fitSpecToPrinter drops the slower tier.
+ */
+export const MIN_TWO_TIER_LINE_SPEED_MM_S = Math.ceil(MIN_CORNER_SPEED_MM_S * TIER_SPEED_RATIO)
+
 export const MIN_SPEED_TIERS = 1
 export const MAX_SPEED_TIERS = 2
 export const MIN_LINES_PER_SPEED = 3
@@ -395,9 +403,8 @@ function withoutSlowerTier<R extends Pick<IsTestSpec, 'speedsMmS'>>(
 /**
  * Drops the slower tier when it falls below MIN_CORNER_SPEED_MM_S, the bottom rung of every
  * tier's corner-speed ladder: such a tier cannot host its ladder. With the derived tiers of
- * speedTiersFor this happens below a line speed of ceil(MIN_CORNER_SPEED_MM_S *
- * TIER_SPEED_RATIO), 29 mm/s. The line speed itself never falls below the rung, because
- * validateIsSpec holds it to at least the corner speed.
+ * speedTiersFor this happens below MIN_TWO_TIER_LINE_SPEED_MM_S. The line speed itself never
+ * falls below the rung, because validateIsSpec holds it to at least the corner speed.
  */
 function fitTiersToLadder(request: IsTestRequest): { request: IsTestRequest; notes: string[] } {
   if (request.speedsMmS.length < 2 || Math.min(...request.speedsMmS) >= MIN_CORNER_SPEED_MM_S) {
@@ -407,11 +414,10 @@ function fitTiersToLadder(request: IsTestRequest): { request: IsTestRequest; not
     request,
     `because it is slower than the ${MIN_CORNER_SPEED_MM_S} mm/s lowest corner speed.`,
   )
-  const twoTierLineSpeed = Math.ceil(MIN_CORNER_SPEED_MM_S * TIER_SPEED_RATIO)
   return {
     request: oneTier.request,
     notes: [
-      `${oneTier.note} Raise the line speed to at least ${twoTierLineSpeed} mm/s to keep both tiers.`,
+      `${oneTier.note} Raise the line speed to at least ${MIN_TWO_TIER_LINE_SPEED_MM_S} mm/s to keep both tiers.`,
     ],
   }
 }

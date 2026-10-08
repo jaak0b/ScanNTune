@@ -350,7 +350,8 @@ describe('poolAxisFits checks', () => {
     expect(p.accepted).toBe(false)
     expect(p.refusals).toEqual([
       'The ringing found on this axis rests on a single line, so a print defect or dust on that ' +
-        'line could have caused it. Rescan the coupon, or reprint it with two speed tiers.',
+        'line could have caused it. Rescan the coupon, or reprint it at a line speed of at ' +
+        'least 29 mm/s on a bed large enough for both speed tiers.',
     ])
   })
 

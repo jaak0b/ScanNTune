@@ -6,6 +6,7 @@ import {
   F_MIN_HZ,
   MAX_CI95_REL,
   MIN_ACCEPTED_LINES,
+  MIN_TWO_TIER_LINE_SPEED_MM_S,
 } from './types'
 import {
   DETECTION_GRID,
@@ -1068,7 +1069,8 @@ function poolWithArtifacts(fits: LineFit[], speedsMmS: number[], preset: Carried
   if (result.influenceCheck === 'failed') {
     return refuse(
       'The ringing found on this axis rests on a single line, so a print defect or dust on ' +
-        'that line could have caused it. Rescan the coupon, or reprint it with two speed tiers.',
+        'that line could have caused it. Rescan the coupon, or reprint it at a line speed of at ' +
+        `least ${MIN_TWO_TIER_LINE_SPEED_MM_S} mm/s on a bed large enough for both speed tiers.`,
       result,
     )
   }
