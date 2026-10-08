@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  chiSquareSurvival,
   chiSquareSurvivalEvenDof,
   fCriticalValue,
   hampelOutliers,
@@ -166,6 +167,37 @@ describe('chiSquareSurvivalEvenDof', () => {
     expect(() => chiSquareSurvivalEvenDof(1, 3)).toThrow(/even dof/)
     expect(() => chiSquareSurvivalEvenDof(1, 0)).toThrow(/even dof/)
     expect(() => chiSquareSurvivalEvenDof(1, 2.5)).toThrow(/even dof/)
+  })
+})
+
+describe('chiSquareSurvival', () => {
+  it('returns the tail probability of the published odd-dof chi-square critical values', () => {
+    // Chi-square table critical values to six decimals: chi2_1(0.95) = 3.841459,
+    // chi2_1(0.999) = 10.827566, chi2_3(0.95) = 7.814728, chi2_9(0.999) = 27.877165.
+    expect(chiSquareSurvival(3.841459, 1)).toBeCloseTo(0.05, 6)
+    expect(chiSquareSurvival(10.827566, 1)).toBeCloseTo(0.001, 7)
+    expect(chiSquareSurvival(7.814728, 3)).toBeCloseTo(0.05, 6)
+    expect(chiSquareSurvival(27.877165, 9)).toBeCloseTo(0.001, 7)
+  })
+  it('matches erfc on both sides of the series and continued-fraction split', () => {
+    // 1 dof: P(X >= x) = erfc(sqrt(x / 2)); Python math.erfc(0.5) = 0.4795001221869534 and
+    // math.erfc(2) = 0.004677734981047265.
+    expect(chiSquareSurvival(0.5, 1)).toBeCloseTo(0.4795001221869535, 12)
+    expect(chiSquareSurvival(8, 1)).toBeCloseTo(0.004677734981047266, 13)
+  })
+  it('stays accurate deep in the tail for odd degrees of freedom', () => {
+    // P(chi2_31 >= 200) = 1.296916789468431e-26, by Simpson integration of the chi-square
+    // density over [200, 1200] in 10^6 steps (Python, math.lgamma), independent of the series.
+    expect(chiSquareSurvival(200, 31) / 1.296916789468431e-26).toBeCloseTo(1, 8)
+  })
+  it('agrees with the even closed form for even dof', () => {
+    // 4 dof at x = 2: 2 / e = 0.7357589 (hand-computed, as above).
+    expect(chiSquareSurvival(2, 4)).toBeCloseTo(0.7357589, 7)
+  })
+  it('is 1 at zero, 0 at infinity, and throws on a non-integer dof', () => {
+    expect(chiSquareSurvival(0, 3)).toBe(1)
+    expect(chiSquareSurvival(Infinity, 3)).toBe(0)
+    expect(() => chiSquareSurvival(1, 1.5)).toThrow(/positive integer dof/)
   })
 })
 

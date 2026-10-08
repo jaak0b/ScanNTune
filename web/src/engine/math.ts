@@ -235,6 +235,77 @@ export function chiSquareSurvivalEvenDof(x: number, dof: number): number {
   return Math.min(1, Math.exp(top + Math.log(sum)))
 }
 
+/** ln Gamma(1/2) = ln sqrt(pi), exact. */
+const LN_GAMMA_HALF = 0.5 * Math.log(Math.PI)
+
+/**
+ * Upper regularized incomplete gamma function Q(1/2, y) = erfc(sqrt(y)), by the series of the
+ * lower function for y < 3/2 and the Legendre continued fraction of the upper function (modified
+ * Lentz evaluation) otherwise (W. H. Press et al., "Numerical Recipes", 3rd ed., Cambridge 2007,
+ * s6.2, routines gser and gcf), with Gamma(1/2) = sqrt(pi) exact, so no log-gamma approximation
+ * enters.
+ */
+function upperGammaHalf(y: number): number {
+  if (y <= 0) return 1
+  const a = 0.5
+  const front = Math.exp(-y + a * Math.log(y) - LN_GAMMA_HALF)
+  if (y < a + 1) {
+    let term = 1 / a
+    let sum = term
+    for (let n = 1; n < 500; n++) {
+      term *= y / (a + n)
+      sum += term
+      if (Math.abs(term) < Math.abs(sum) * 1e-17) break
+    }
+    return 1 - sum * front
+  }
+  const FPMIN = 1e-300
+  let b = y + 1 - a
+  let c = 1 / FPMIN
+  let d = 1 / b
+  let h = d
+  for (let i = 1; i < 500; i++) {
+    const an = -i * (i - a)
+    b += 2
+    d = an * d + b
+    if (Math.abs(d) < FPMIN) d = FPMIN
+    c = b + an / c
+    if (Math.abs(c) < FPMIN) c = FPMIN
+    d = 1 / d
+    const del = d * c
+    h *= del
+    if (Math.abs(del - 1) < 1e-16) break
+  }
+  return front * h
+}
+
+/**
+ * Survival function P(X >= x) of the chi-square distribution with any positive integer number of
+ * degrees of freedom. Even dof use the closed form of chiSquareSurvivalEvenDof. Odd dof 2K + 1 are
+ * the upper regularized incomplete gamma Q(K + 1/2, x/2), reached from Q(1/2, y) = erfc(sqrt y)
+ * by the upward recurrence Q(a + 1, y) = Q(a, y) + y^a e^{-y} / Gamma(a + 1) (M. Abramowitz and
+ * I. A. Stegun, "Handbook of Mathematical Functions", 1964, 6.5.21 and 26.4.4), whose terms are
+ * accumulated in log space with Gamma(j + 3/2) built exactly from Gamma(1/2) = sqrt(pi).
+ */
+export function chiSquareSurvival(x: number, dof: number): number {
+  if (!(Number.isInteger(dof) && dof > 0)) {
+    throw new Error(`chiSquareSurvival needs a positive integer dof, got ${dof}`)
+  }
+  if (dof % 2 === 0) return chiSquareSurvivalEvenDof(x, dof)
+  if (Number.isNaN(x)) return NaN
+  if (x <= 0) return 1
+  if (x === Infinity) return 0
+  const y = x / 2
+  let q = upperGammaHalf(y)
+  let logGammaNext = LN_GAMMA_HALF
+  for (let j = 0; j < (dof - 1) / 2; j++) {
+    // Gamma(j + 3/2) = (j + 1/2) Gamma(j + 1/2).
+    logGammaNext += Math.log(j + 0.5)
+    q += Math.exp((j + 0.5) * Math.log(y) - y - logGammaNext)
+  }
+  return Math.min(1, q)
+}
+
 /**
  * Seedable deterministic PRNG (mulberry32, Tommy Ettinger's public-domain generator): a 32-bit
  * state hashed through two rounds of multiply-xorshift per draw, returning uniform floats in

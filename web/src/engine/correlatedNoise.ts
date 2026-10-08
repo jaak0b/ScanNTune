@@ -30,26 +30,46 @@ type BurgPath = ArFit[]
  * left to model and keeps the previous fit (k_m = 0).
  */
 function burgPath(x: readonly number[], maxOrder: number): BurgPath {
-  const n = x.length
-  const f = x.slice()
-  const b = x.slice()
+  return burgPathSegments([x], maxOrder)
+}
+
+/**
+ * Burg's recursion over several segments of one process (S. de Waele and P. M. T. Broersen, "The
+ * Burg algorithm for segments", IEEE Transactions on Signal Processing 48(10), 2000, 2876-2880):
+ * the forward and backward prediction errors are kept per segment, and each stage's reflection
+ * coefficient minimizes their power summed over all segments, so no prediction ever runs across
+ * the boundary between two segments. A segment shorter than the stage order no longer
+ * contributes. One segment is the plain Burg recursion.
+ */
+function burgPathSegments(segments: readonly (readonly number[])[], maxOrder: number): BurgPath {
+  const f = segments.map((s) => s.slice())
+  const b = segments.map((s) => s.slice())
+  const total = segments.reduce((s, x) => s + x.length, 0)
   let coefficients: number[] = []
-  let variance = x.reduce((s, v) => s + v * v, 0) / n
+  let variance = segments.reduce((s, x) => s + x.reduce((t, v) => t + v * v, 0), 0) / total
   const path: BurgPath = [{ coefficients, noiseVariance: variance }]
   for (let m = 1; m <= maxOrder; m++) {
     let num = 0
     let den = 0
-    for (let t = m; t < n; t++) {
-      num += f[t] * b[t - 1]
-      den += f[t] * f[t] + b[t - 1] * b[t - 1]
+    for (let g = 0; g < f.length; g++) {
+      const fg = f[g]
+      const bg = b[g]
+      for (let t = m; t < fg.length; t++) {
+        num += fg[t] * bg[t - 1]
+        den += fg[t] * fg[t] + bg[t - 1] * bg[t - 1]
+      }
     }
     const k = den > 0 ? (2 * num) / den : 0
-    // Descending t keeps b[t - 1] unmodified until stage t - 1 has read it.
-    for (let t = n - 1; t >= m; t--) {
-      const ft = f[t]
-      const bt1 = b[t - 1]
-      f[t] = ft - k * bt1
-      b[t] = bt1 - k * ft
+    for (let g = 0; g < f.length; g++) {
+      const fg = f[g]
+      const bg = b[g]
+      // Descending t keeps b[t - 1] unmodified until stage t - 1 has read it.
+      for (let t = fg.length - 1; t >= m; t--) {
+        const ft = fg[t]
+        const bt1 = bg[t - 1]
+        fg[t] = ft - k * bt1
+        bg[t] = bt1 - k * ft
+      }
     }
     const prev = coefficients
     coefficients = prev.map((phi, j) => phi - k * prev[m - 2 - j])
@@ -98,7 +118,11 @@ export function selectOrderAicc(
   if (maxOrder > n - 3) {
     throw new Error(`AICc needs the AR order below n - 2 (${n - 2}), got ${maxOrder}`)
   }
-  const path = burgPath(x, maxOrder)
+  return minimumAicc(burgPath(x, maxOrder), n)
+}
+
+/** The AICc-minimizing fit of a Burg path over n samples; ties keep the lower order. */
+function minimumAicc(path: BurgPath, n: number): ArFit {
   let best = path[0]
   let bestScore = Infinity
   path.forEach((fit, p) => {
@@ -109,6 +133,53 @@ export function selectOrderAicc(
     }
   })
   return best
+}
+
+/** Fits an AR model of the given order to several segments of one process (burgPathSegments). */
+export function burgArSegments(segments: readonly (readonly number[])[], order: number): ArFit {
+  const n = segments.reduce((s, x) => s + x.length, 0)
+  if (n === 0) throw new Error('An AR model needs at least one sample')
+  if (!(Number.isInteger(order) && order >= 0 && order < n)) {
+    throw new Error(`The AR order must be an integer from 0 to ${n - 1}, got ${order}`)
+  }
+  return burgPathSegments(segments, order)[order]
+}
+
+/**
+ * Selects the AR order by AICc (see selectOrderAicc) over the segment Burg fits of orders 0 to
+ * `maxOrder` (see burgPathSegments), with n the total sample count of the segments. This is the
+ * model of a series whose unreadable samples are left out: the segments are the runs of read
+ * samples, and no filled-in value enters the fit.
+ */
+export function selectOrderAiccSegments(
+  segments: readonly (readonly number[])[],
+  maxOrder?: number,
+): ArFit {
+  const n = segments.reduce((s, x) => s + x.length, 0)
+  if (n === 0) throw new Error('An AR model needs at least one sample')
+  const order = maxOrder ?? defaultMaxArOrder(n)
+  if (!(Number.isInteger(order) && order >= 0 && order <= n - 3)) {
+    throw new Error(`AICc needs an integer AR order from 0 to ${n - 3}, got ${order}`)
+  }
+  return minimumAicc(burgPathSegments(segments, order), n)
+}
+
+/**
+ * Splits observed values into the runs of consecutive lattice positions: the segments the
+ * segment Burg recursion takes.
+ */
+export function latticeSegments(values: ArrayLike<number>, lattice: ArrayLike<number>): number[][] {
+  const segments: number[][] = []
+  let current: number[] = []
+  for (let i = 0; i < values.length; i++) {
+    if (i > 0 && lattice[i] !== lattice[i - 1] + 1) {
+      segments.push(current)
+      current = []
+    }
+    current.push(values[i])
+  }
+  if (current.length > 0) segments.push(current)
+  return segments
 }
 
 /**
@@ -207,4 +278,200 @@ export function prewhiten(x: readonly number[], fit: ArFit): number[] {
     for (let j = 0; j < order; j++) e -= coefficients[j] * x[t - 1 - j]
     return e / Math.sqrt(predictionVariance[order])
   })
+}
+
+/** One lattice step of an irregular stretch of the whitening recursion. */
+interface StretchStep {
+  /** Observed-sample index at this lattice position, or -1 when the position was not read. */
+  sample: number
+  /** Kalman gain of the update (observed steps only). */
+  gain: Float64Array | null
+  /** Standard error of the one-step prediction (observed steps only). */
+  sd: number
+}
+
+/** A run of lattice positions whose predictors are not the plain order-p AR predictor. */
+interface Stretch {
+  /**
+   * Observed-sample indices holding the known state x(t0 - 1), x(t0 - 2), ..., x(t0 - p) just
+   * before the stretch's first position t0, or null at the start of the record, where the state
+   * starts from the stationary prior (mean zero, covariance Gamma_p).
+   */
+  init: number[] | null
+  steps: StretchStep[]
+}
+
+/**
+ * The exact whitening (innovations) operator of an AR fit observed on a subset of an evenly
+ * spaced lattice: each observed value minus its best linear prediction from ALL earlier observed
+ * values, divided by that prediction's standard error. Under the model the outputs are iid
+ * N(0, 1), so generalized least squares on whitened data and whitened regressor columns is exact
+ * even when some lattice positions were not read; no value is filled in.
+ */
+export interface ArWhitener {
+  readonly fit: ArFit
+  /** Number of observed samples the operator acts on. */
+  readonly length: number
+  /**
+   * True at an observed sample whose p preceding lattice positions were all observed (and lie in
+   * the record): its predictor is the plain AR predictor over the samples just before it, with
+   * error variance sigma^2.
+   */
+  readonly regular: Uint8Array
+  /** Sum of the log prediction-error variances: the log determinant of the observed covariance. */
+  readonly logDet: number
+  /** Whitens a real column given on the observed samples. */
+  whiten(x: ArrayLike<number>): Float64Array
+  /** Writes the whitened value of every non-regular observed sample of x into out. */
+  whitenIrregular(x: ArrayLike<number>, out: Float64Array): void
+}
+
+/**
+ * Builds the whitening operator of an AR fit for samples observed at the given strictly
+ * increasing lattice positions. Regular samples use the AR predictor directly. Elsewhere (the
+ * first p samples of the record and the samples after an unread position) the predictor comes
+ * from the Kalman filter of the AR model in state-space form, which skips the update at an unread
+ * position (R. H. Jones, "Maximum likelihood fitting of ARMA models to time series with missing
+ * observations", Technometrics 22(3), 1980, 389-395). Its gains do not depend on the data, so they
+ * are computed once here and every column costs O(n p). The state is
+ * (x_t, x_{t-1}, ..., x_{t-p+1}) with the companion transition; it is known exactly after p
+ * consecutive observations, from where the plain predictor applies again. Without unread
+ * positions the operator equals `prewhiten`.
+ */
+export function arWhitener(fit: ArFit, lattice: ArrayLike<number>): ArWhitener {
+  const m = lattice.length
+  if (m === 0) throw new Error('The whitening operator needs at least one observed sample')
+  for (let i = 1; i < m; i++) {
+    if (!(lattice[i] > lattice[i - 1])) throw new Error('Lattice positions must increase strictly')
+  }
+  if (!(fit.noiseVariance > 0)) throw new Error('Whitening needs a positive innovation variance')
+  const p = fit.coefficients.length
+  const phi = fit.coefficients
+  const sigma = Math.sqrt(fit.noiseVariance)
+  const first = lattice[0]
+  const last = lattice[m - 1]
+  // sampleAt[t - first] = observed-sample index at lattice position t, or -1.
+  const sampleAt = new Int32Array(last - first + 1).fill(-1)
+  for (let i = 0; i < m; i++) sampleAt[lattice[i] - first] = i
+  const observedAt = (t: number) => t >= first && t <= last && sampleAt[t - first] >= 0
+
+  const regular = new Uint8Array(m)
+  for (let i = 0; i < m; i++) {
+    const t = lattice[i]
+    let ok = t - first >= p
+    for (let j = 1; ok && j <= p; j++) ok = observedAt(t - j)
+    regular[i] = ok ? 1 : 0
+  }
+  let logDet = 0
+  for (let i = 0; i < m; i++) if (regular[i]) logDet += Math.log(fit.noiseVariance)
+
+  const stretches: Stretch[] = []
+  if (p > 0) {
+    const gamma = autocovariance(fit, p - 1)
+    // Walk the lattice. A stretch starts at the record start and at every unread position
+    // reached from a known state, and ends once p consecutive observations make the state known.
+    let t = first
+    while (t <= last) {
+      const atStart = t === first
+      if (!atStart && observedAt(t)) {
+        t++
+        continue
+      }
+      const P: number[][] = Array.from({ length: p }, (_, r) =>
+        Array.from({ length: p }, (_, c) => {
+          if (atStart) return gamma[Math.abs(r - c)]
+          return r === 0 && c === 0 ? fit.noiseVariance : 0
+        }),
+      )
+      const init = atStart ? null : Array.from({ length: p }, (_, j) => sampleAt[t - 1 - j - first])
+      const steps: StretchStep[] = []
+      let known = false
+      while (t <= last && !known) {
+        const sample = observedAt(t) ? sampleAt[t - first] : -1
+        if (sample >= 0) {
+          const F = P[0][0]
+          const col = P.map((row) => row[0])
+          const gain = new Float64Array(p)
+          for (let r = 0; r < p; r++) gain[r] = col[r] / F
+          for (let r = 0; r < p; r++) for (let c = 0; c < p; c++) P[r][c] -= (col[r] * col[c]) / F
+          steps.push({ sample, gain, sd: Math.sqrt(F) })
+          logDet += Math.log(F)
+          let all = t - first >= p - 1
+          for (let j = 1; all && j < p; j++) all = observedAt(t - j)
+          known = all
+        } else {
+          steps.push({ sample: -1, gain: null, sd: 0 })
+        }
+        predictCovariance(phi, P, fit.noiseVariance)
+        t++
+      }
+      stretches.push({ init, steps })
+    }
+  }
+
+  const whitenIrregular = (x: ArrayLike<number>, out: Float64Array): void => {
+    const a = new Float64Array(p)
+    const scratch = new Float64Array(p)
+    for (const stretch of stretches) {
+      if (stretch.init) {
+        for (let j = 0; j < p; j++) a[j] = x[stretch.init[j]]
+        // The known state sits one position before the stretch: predict it forward.
+        companionStep(phi, a, scratch)
+      } else {
+        a.fill(0)
+      }
+      for (const step of stretch.steps) {
+        if (step.sample >= 0) {
+          const innovation = x[step.sample] - a[0]
+          out[step.sample] = innovation / step.sd
+          for (let j = 0; j < p; j++) a[j] += step.gain![j] * innovation
+        }
+        companionStep(phi, a, scratch)
+      }
+    }
+  }
+
+  const whiten = (x: ArrayLike<number>): Float64Array => {
+    if (x.length !== m) throw new Error(`Expected ${m} observed values, got ${x.length}`)
+    const out = new Float64Array(m)
+    for (let i = 0; i < m; i++) {
+      if (!regular[i]) continue
+      let e = x[i]
+      for (let j = 0; j < p; j++) e -= phi[j] * x[i - 1 - j]
+      out[i] = e / sigma
+    }
+    whitenIrregular(x, out)
+    return out
+  }
+
+  return { fit, length: m, regular, logDet, whiten, whitenIrregular }
+}
+
+/** a <- T a for the AR companion matrix T (new first entry phi' a, the rest shifted down). */
+function companionStep(phi: readonly number[], a: Float64Array, scratch: Float64Array): void {
+  const p = phi.length
+  let s = 0
+  for (let k = 0; k < p; k++) s += phi[k] * a[k]
+  scratch[0] = s
+  for (let r = 1; r < p; r++) scratch[r] = a[r - 1]
+  a.set(scratch)
+}
+
+/** P <- T P T' + sigma^2 e1 e1' for the AR companion matrix T, in place. */
+function predictCovariance(phi: readonly number[], P: number[][], noiseVariance: number): void {
+  const p = phi.length
+  const TP: number[][] = Array.from({ length: p }, () => new Array<number>(p).fill(0))
+  for (let c = 0; c < p; c++) {
+    let s = 0
+    for (let k = 0; k < p; k++) s += phi[k] * P[k][c]
+    TP[0][c] = s
+    for (let r = 1; r < p; r++) TP[r][c] = P[r - 1][c]
+  }
+  for (let r = 0; r < p; r++) {
+    let s = 0
+    for (let k = 0; k < p; k++) s += TP[r][k] * phi[k]
+    P[r][0] = s
+    for (let c = 1; c < p; c++) P[r][c] = TP[r][c - 1]
+  }
+  P[0][0] += noiseVariance
 }
