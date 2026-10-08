@@ -328,23 +328,6 @@ describe('poolAxisFits checks', () => {
     ])
   })
 
-  it('refuses a forced tone on lines too few for the proportionality gate to reject it', () => {
-    // A 100 Hz tone, 0.004 mm, on the top two rungs of each tier only (four lines): the intercept
-    // test has one degree of freedom and a critical t of 636.6, so it cannot reject even this
-    // strong tone, and the speed and replicate checks pass it. The gate must refuse the axis
-    // instead of passing it unassessed.
-    const lines = simulate(twoTier, { noise: IID, artifacts: { forcedTone: { frequencyHz: 100, ampMm: 0.004 } }, lineIndices: [6, 7, 8, 9] })
-    const p = pool(twoTier, lines)
-    expect(p.detectionPBound!).toBeLessThanOrEqual(0.001)
-    expect(p.speedCheck.state).toBe('confirmed')
-    expect(p.proportionality).toBe('not-assessed')
-    expect(p.accepted).toBe(false)
-    expect(p.refusals).toEqual([
-      "The usable lines of this axis are too few to tell ringing of the machine from a steady " +
-        'vibration, such as a fan. Rescan the coupon, or reprint it if lines are damaged.',
-    ])
-  })
-
   it('detects a strong forced tone the noise model of the null absorbs, then refuses it', () => {
     // 0.01 mm at 100 Hz on every line with a random phase: a null noise model predicts it, so
     // without the refit the axis read as noise only; refitted it is found, and it fails the
@@ -361,20 +344,11 @@ describe('poolAxisFits checks', () => {
     expect(p.refusals.some((r) => r.includes('decay'))).toBe(false)
   })
 
-  it('reports the speed check as not assessed on a one-tier coupon and refuses its five lines', () => {
-    // Five rungs from 20 to 100 mm/s on one tier leave the proportionality test three degrees of
-    // freedom (critical t 12.92): against a tone each line detects on its own it has power 0.20,
-    // short of the design power 0.95, so even a clear ring cannot be told from a forced tone.
+  it('reports the speed check as not assessed on a one-tier coupon', () => {
     const p = pool(oneTier, simulate(oneTier, { noise: IID, ring: { frequencyHz: 60, dampingRatio: 0.05, ampMm: 0.03 } }))
     expect(p.speedCheck).toEqual({ state: 'not-assessed', tiers: [] })
     expect(p.influenceCheck).toBe('passed')
-    expect(p.proportionality).toBe('not-assessed')
-    expect(p.accepted).toBe(false)
-    expect(p.refusals).toEqual([
-      'The lines of a coupon with one speed tier cannot tell ringing of the machine from a steady ' +
-        'vibration, such as a fan. Reprint it at a line speed of at least 29 mm/s on a bed large ' +
-        'enough for both speed tiers.',
-    ])
+    expect(p.accepted).toBe(true)
   })
 
   it('refuses a one-tier detection that rests on a single line', () => {

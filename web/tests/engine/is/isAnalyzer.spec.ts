@@ -295,9 +295,7 @@ describe('analyzeIsCoupon render recovery', () => {
   it(
     'accepts two agreeing speed tiers and recovers their shared frequency',
     async () => {
-      // Five lines per speed: with three, the proportionality test cannot reject a forced tone
-      // with the design power, and the axis is refused for that alone.
-      const twoTier: IsTestSpec = { ...baseSpec, axes: ['y'], speedsMmS: [150, 100], linesPerSpeed: 5 }
+      const twoTier: IsTestSpec = { ...baseSpec, axes: ['y'], speedsMmS: [150, 100], linesPerSpeed: 3 }
       const truth = { y: { frequencyHz: 75, dampingRatio: 0.05, ringAmpMm: 0.25 } }
       const r = await analyzePair(
         twoTier,

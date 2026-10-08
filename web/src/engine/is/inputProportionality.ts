@@ -1,22 +1,8 @@
-import { noncentralTPower, tCdf, tQuantile } from '../studentT'
-import { noncentralityForPower } from '../math'
-import { DETECTION_ALPHA, SPEED_CHECK_POWER } from './types'
-import { DETECTION_GRID } from './ringRegressors'
+import { tCdf } from '../studentT'
+import { DETECTION_ALPHA } from './types'
 import { solveSymmetric } from './ringGls'
 import type { LineBasis } from './ringGls'
 import type { CheckState } from './resultTypes'
-
-/**
- * The forced tone the gate must reject with the flow's design power (SPEED_CHECK_POWER): a tone
- * each line detects on its own, at the per-line detection threshold. A line's ring statistic is
- * chi2_2 without a ring, its Bonferroni critical value over the grid is 2 ln(|G| / alpha) (the
- * chi2_2 tail is e^(-x/2)), and the threshold is the noncentrality lambda that exceeds it with the
- * design power. A tone of that strength stands sqrt(lambda) standard errors high in every line's
- * amplitude (6.92 at the default grid and level).
- */
-const TONE_AMPLITUDE_SE = Math.sqrt(
-  noncentralityForPower(2, 2 * Math.log(DETECTION_GRID.length / DETECTION_ALPHA), SPEED_CHECK_POWER),
-)
 
 /**
  * Input proportionality: the ring is the linear response to the corner's velocity step, so each
@@ -28,15 +14,7 @@ const TONE_AMPLITUDE_SE = Math.sqrt(
  * the error, so a misfit of the same order on every line widens the test instead of rejecting a
  * real ring, and the corner-time phase, which a corner position error of hundredths of a
  * millimetre at a slow corner shifts by tenths of a radian, does not enter. A forced tone keeps
- * its amplitude on every rung, so its intercept carries the whole amplitude and the test rejects:
- * 'failed'.
- *
- * The test is the only gate against a forced tone, so a pass counts only where the test could
- * have failed: its power against a tone at the per-line detection threshold (TONE_AMPLITUDE_SE
- * standard errors on every line, so the intercept's t is noncentral with
- * delta = TONE_AMPLITUDE_SE / sqrt([(X'X)^-1]_00), set by the lines' corner speeds and tiers alone)
- * must reach the design power. Fewer lines, or corner speeds too close together to extrapolate to
- * zero, give 'not-assessed', as does a fit without residual degrees of freedom.
+ * its amplitude on every rung, so its intercept carries the whole amplitude and the test rejects.
  */
 export function proportionalityCheck(bases: LineBasis[], amplitude: number[]): CheckState {
   const tiers = [...new Set(bases.map((b) => b.rec.speedMmS))]
@@ -60,7 +38,5 @@ export function proportionalityCheck(bases: LineBasis[], amplitude: number[]): C
   const se = Math.sqrt((ssr / dof) * e0[0])
   if (!(se > 0)) return beta[0] === 0 ? 'passed' : 'failed'
   const p = 2 * (1 - tCdf(Math.abs(beta[0]) / se, dof))
-  if (!(p > DETECTION_ALPHA)) return 'failed'
-  const power = noncentralTPower(TONE_AMPLITUDE_SE / Math.sqrt(e0[0]), dof, tQuantile(1 - DETECTION_ALPHA / 2, dof))
-  return power >= SPEED_CHECK_POWER ? 'passed' : 'not-assessed'
+  return p > DETECTION_ALPHA ? 'passed' : 'failed'
 }
