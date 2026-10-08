@@ -15,6 +15,35 @@ export type IsLineRefusalCategory = LineFitRefusalCategory | 'frequency-outlier'
  */
 export type IsLineExclusion = LineJointExclusion | 'not-traced'
 
+/** Outcome of a check: assessed and passed or failed, or not assessed (too little data, or the
+ *  coupon layout does not support it). */
+export type CheckState = 'passed' | 'failed' | 'not-assessed'
+
+/**
+ * The two-tier speed check: 'confirmed' when the frequency is demonstrably the same at both
+ * speeds (the arc-length pattern hypothesis rejected, no change detected), 'changed' when it
+ * demonstrably changed with the speed, 'not-confirmed' when a tier showed no ringing or the
+ * precision decides neither, 'not-assessed' with one tier.
+ */
+export type SpeedCheckState = 'confirmed' | 'changed' | 'not-confirmed' | 'not-assessed'
+
+/** One speed tier's part of the speed check. */
+export interface TierCheck {
+  speedMmS: number
+  /** True when the tier's own lines show the ringing near the axis estimate. */
+  detected: boolean
+  /** Bonferroni bound of the tier's local detection; null when the tier had no lines. */
+  detectionPBound: number | null
+  frequencyHz: number | null
+  frequencySeHz: number | null
+}
+
+export interface SpeedCheck {
+  state: SpeedCheckState
+  /** Slowest tier first; empty when not assessed. */
+  tiers: TierCheck[]
+}
+
 /** A point in scan-image pixels. Plain data so it survives the worker boundary. */
 export interface IsPointPx {
   x: number
@@ -50,7 +79,13 @@ export interface IsLineOutcome {
   refusalReason: string | null
   /** Category of refusalReason for counting and labeling; null exactly when it is null. */
   refusalCategory: IsLineRefusalCategory | null
-  /** The line's own fitted ringing frequency, Hz (diagnostic); null without a per-line fit. */
+  /** True when ringing is detected on this line alone (its detection bound at the flow's
+   *  false-alarm level). */
+  detected: boolean
+  /** Bonferroni bound of the line's own detection statistic; null without a fit window. */
+  detectionPBound: number | null
+  /** The line's own fitted ringing frequency, Hz (diagnostic); null for a line without
+   *  detected ringing. */
   frequencyHz: number | null
   /** The line's ring amplitude at the start of its free ringdown (its fit-window start), mm:
    *  from the joint fit when the line entered it, else from its own fit; null without
@@ -72,10 +107,24 @@ export interface IsAxisResult {
   dampingRatio: number | null
   /** 95% confidence halfwidth of the frequency, Hz. */
   frequencyCi95Hz: number | null
-  /** Standard error of the jointly fitted frequency, Hz. */
+  /** Standard error of the jointly fitted frequency, Hz (statistical error only). */
   frequencySeHz: number | null
-  /** Extra-sum-of-squares F statistic of the joint ring fit against drift only. */
-  fStatistic: number | null
+  /** Bonferroni bound of the axis detection over the whole search grid; null when no line had a
+   *  fit window. */
+  detectionPBound: number | null
+  /** Lines whose own detection bound passed the flow's false-alarm level. */
+  linesDetected: number
+  /** Whether the zeta = 0 boundary test found the ring decaying; null when not fitted. */
+  decayDemonstrated: boolean | null
+  /** Input proportionality: 'passed' when the ring grows with the corner speed. */
+  proportionality: CheckState
+  speedCheck: SpeedCheck
+  replicateCheck: CheckState
+  /** One-tier check that the detection survives leaving out any one line. */
+  influenceCheck: CheckState
+  /** Whether a change point in the lines' lateral offsets along the print order shows a layer
+   *  shift; null when too few lines were traced to test. */
+  layerShiftDetected: boolean | null
   /** Median over every line in the joint fit of that line's ring amplitude at the start of
    *  its fit window (the start of the free ringdown), mm (diagnostic). */
   amplitudeMm: number | null

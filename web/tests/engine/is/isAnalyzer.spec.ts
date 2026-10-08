@@ -170,13 +170,11 @@ describe('analyzeIsCoupon render recovery', () => {
   )
 
   it(
-    'refuses a coupon that shows no ringing, through the joint-fit significance test',
+    'refuses a coupon that shows no ringing, through the axis detection bound',
     async () => {
-      // The joint fit pools the coherent sub-pixel signal of every line, so any rendered
-      // ring amplitude above the resolvability floor is legitimately measurable in a
-      // synthetic scan (the old per-line amplitude gate refused 0.002 mm; the joint fit
-      // reads it). The refusal contract is therefore pinned at the true null: no ring at
-      // all, only noise and the renderer's own sub-pixel artifacts.
+      // The detection pools the coherent sub-pixel signal of every line, so any rendered ring
+      // is legitimately measurable in a synthetic scan. The refusal contract is therefore pinned
+      // at the true null: no ring at all, only noise and the renderer's own sub-pixel artifacts.
       const truth = { y: { frequencyHz: 75, dampingRatio: 0.05, ringAmpMm: 0, lobeAmpMm: 0 } }
       const r = await analyzePair(
         ySpec,
@@ -187,33 +185,25 @@ describe('analyzeIsCoupon render recovery', () => {
       const y = axisOf(r, 'y')
       expect(y.accepted).toBe(false)
       expect(y.frequencyHz).toBeNull()
-      // The refusal comes from the joint verdict: either no statistically significant
-      // shared ringing, or a significant component below the scan's resolvability floor
-      // (a sub-pixel sampling artifact); both mean there is no printable ringing.
-      expect(
-        y.refusals.some(
-          (m) => m.includes('statistically significant') || m.includes('smaller than the scan can resolve'),
-        ),
-      ).toBe(true)
+      expect(y.refusals[0]).toBe(
+        'No ringing was found on this axis. Across all its lines, the traces match drift and ' +
+          'scan noise.',
+      )
+      expect(y.detectionPBound!).toBeGreaterThan(0.001)
 
-      // Every line is reported individually with an image-space position the overlay can
-      // point at, and none is accepted. A line carries a refusal exactly when it was left out
-      // of the joint fit: a line in it was measured through the joint fit, so the alert's
-      // refusal counts and the table's joint-fit column cannot disagree. Lines without
-      // ringing read as weak on their own, and weak lines enter the joint fit, so most lines
-      // are in it and carry no refusal.
+      // Every line is reported individually with an image-space position the overlay can point
+      // at. No line shows ringing, none is accepted, and none carries a refusal of its own: the
+      // axis verdict refused, no line was excluded.
       expect(y.lines).toHaveLength(ySpec.speedsMmS.length * ySpec.linesPerSpeed)
-      expect(y.lines.every((l) => !l.accepted)).toBe(true)
-      expect(y.lines.every((l) => (l.refusalCategory === null) === l.usedInJointFit)).toBe(true)
-      expect(y.lines.every((l) => (l.refusalReason === null) === l.usedInJointFit)).toBe(true)
-      expect(y.lines.filter((l) => l.usedInJointFit).length * 2).toBeGreaterThan(y.lines.length)
+      expect(y.lines.every((l) => !l.accepted && !l.detected)).toBe(true)
+      expect(y.lines.every((l) => l.refusalCategory === null && l.refusalReason === null)).toBe(true)
       expect(y.lines.every((l) => l.startPx !== null && l.endPx !== null)).toBe(true)
     },
     240000,
   )
 
   it(
-    'refuses when the lines disagree on the frequency (replicate scatter)',
+    'fails the replicate check when the lines disagree on the frequency (replicate scatter)',
     async () => {
       const truth = {
         y: { frequencyHz: 75, dampingRatio: 0.05, ringAmpMm: 0.25, frequencySpreadHz: 30 },
@@ -227,7 +217,8 @@ describe('analyzeIsCoupon render recovery', () => {
       const y = axisOf(r, 'y')
       expect(y.accepted).toBe(false)
       expect(y.frequencyHz).toBeNull()
-      expect(y.refusals.some((m) => m.includes('disagree on the ringing frequency'))).toBe(true)
+      // The rendered spread runs 60 to 90 Hz along the field, so the lines fail Cochran's Q.
+      expect(y.replicateCheck).toBe('failed')
     },
     240000,
   )
@@ -288,7 +279,11 @@ describe('analyzeIsCoupon render recovery', () => {
       expect(r.aligned).toBe(true)
       const y = axisOf(r, 'y')
       expect(y.accepted).toBe(false)
-      expect(y.refusals.some((m) => m.includes('speed tiers disagree'))).toBe(true)
+      expect(y.speedCheck.state).toBe('changed')
+      expect(y.refusals[0]).toBe(
+        'The frequency changed with the line speed, the way a print or scan pattern does. ' +
+          'Ringing of the machine keeps its frequency at every speed, so no shaper is recommended.',
+      )
     },
     240000,
   )
@@ -505,8 +500,8 @@ describe('analyzeIsCoupon render recovery', () => {
     240000,
   )
 
-  it('advises raising the corner speed only when the resolvable lines split along the ladder', () => {
-    const outcome = (cornerSpeedMmS: number, amplitudeMm: number | null): IsLineOutcome => ({
+  it('advises a faster ladder only when ringing shows on the fastest corners alone', () => {
+    const outcome = (cornerSpeedMmS: number, detected: boolean): IsLineOutcome => ({
       lineIndex: 0,
       axis: 'y',
       speedMmS: 150,
@@ -517,30 +512,24 @@ describe('analyzeIsCoupon render recovery', () => {
       exclusion: null,
       refusalReason: null,
       refusalCategory: null,
+      detected,
+      detectionPBound: detected ? 1e-6 : 0.5,
       frequencyHz: null,
-      amplitudeMm,
+      amplitudeMm: null,
       startPx: null,
       endPx: null,
     })
-    const floor = 0.002
-    // Clean split: every resolvable amplitude sits on a faster rung than every
-    // unresolvable one, so the advice fires. The 100 mm/s corner sits below the 150 mm/s
-    // line speed, so the line speed only has to rise once the corner passes it.
-    const split = [outcome(20, 0.001), outcome(45, 0.0015), outcome(70, 0.003), outcome(100, 0.006)]
-    expect(ladderAdvice(ySpec, split, floor)).toBe(
-      'Raise the corner speed and reprint. If the new corner speed exceeds the 150 mm/s line ' +
-        'speed, raise the line speed to at least the corner speed. Only the lines with the ' +
-        'fastest corner speeds carried ringing the scan can resolve.',
+    // Clean split: every line with ringing sits on a faster rung than every line without.
+    const split = [outcome(20, false), outcome(45, false), outcome(70, true), outcome(100, true)]
+    expect(ladderAdvice(split)).toBe(
+      'Only the lines with the fastest corners showed ringing. Raise the corner speed in small ' +
+        'steps and reprint, and lower it again if the print shows a layer shift.',
     )
-    // A corner speed already at the line speed can only rise with it.
-    expect(ladderAdvice({ ...ySpec, speedsMmS: [100] }, split, floor)).toBe(
-      'Raise the corner speed and the line speed together, then reprint. The line speed must ' +
-        'stay at least as fast as the corner speed. Only the lines with the fastest corner ' +
-        'speeds carried ringing the scan can resolve.',
-    )
-    // No split (a slow rung resolved): no advice.
-    const mixed = [outcome(20, 0.003), outcome(45, 0.001), outcome(70, 0.003), outcome(100, 0.006)]
-    expect(ladderAdvice(ySpec, mixed, floor)).toBeNull()
+    // No split (a slow rung shows ringing, a faster one does not): no advice.
+    const mixed = [outcome(20, true), outcome(45, false), outcome(70, true), outcome(100, true)]
+    expect(ladderAdvice(mixed)).toBeNull()
+    // Ringing on every line: nothing to advise about the ladder.
+    expect(ladderAdvice([outcome(20, true), outcome(100, true)])).toBeNull()
   })
 
   it('reports a failed alignment with a reason on a blank image', async () => {

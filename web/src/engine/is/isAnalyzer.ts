@@ -7,11 +7,11 @@ import type { IsAlignment } from './isFiducialAligner'
 import { assessMeasurementBackdrop } from '../measurementBackdrop'
 import type { BackdropAssessment } from '../measurementBackdrop'
 import { imageDirection, measuredDirection, traceGroup, tracedSpanPx } from './lineTracer'
-import { AMPLITUDE_RESOLUTION_PX, analyzeTracedLine, poolAxisFits } from './ringAnalyzer'
+import { analyzeTracedLine, poolAxisFits } from './ringAnalyzer'
+import { layerShiftDetected } from './layerShift'
 import { recommendShapers } from './shaperRecommender'
 import type { IsAxisResult, IsLineOutcome, IsResult, IsScanInfo } from './resultTypes'
 import { sampleBgrTriples, selectMeasurementChannel } from '../cvUtils'
-import { median } from '../math'
 import { evaluateScanSetResolution } from '../resolutionGate'
 import { isUsableReference, isotropicPxPerMm } from '../scannerCalibration'
 import type { ScaleReference } from '../scannerCalibration'
@@ -175,9 +175,13 @@ export function analyzeIsCoupon(
     }
 
     const axes: IsAxisResult[] = []
-    for (const group of geometry.groups) {
-      axes.push(measureGroup(cv, grays, alignments, spec, group, scanReference))
-    }
+    geometry.groups.forEach((group, groupIndex) => {
+      // The group's lines in the order they print within the layer.
+      const printOrder = geometry.printOrder
+        .filter((ref) => ref.groupIndex === groupIndex)
+        .map((ref) => ref.lineIndex)
+      axes.push(measureGroup(cv, grays, alignments, spec, group, scanReference, printOrder))
+    })
 
     return {
       aligned: true,
@@ -284,8 +288,15 @@ function refusedAxis(
     dampingRatio: null,
     frequencyCi95Hz: null,
     frequencySeHz: null,
-    fStatistic: null,
     amplitudeMm: null,
+    detectionPBound: null,
+    linesDetected: 0,
+    decayDemonstrated: null,
+    proportionality: 'not-assessed',
+    speedCheck: { state: 'not-assessed', tiers: [] },
+    replicateCheck: 'not-assessed',
+    influenceCheck: 'not-assessed',
+    layerShiftDetected: null,
     linesUsed: 0,
     linesTraced,
     scanIndex,
@@ -296,36 +307,22 @@ function refusedAxis(
 }
 
 /**
- * Ladder-specific guidance on a refused axis: when every line whose fitted ring amplitude
- * the scan can resolve sits on a faster rung than every line it cannot, the coupon
- * self-ranged and the remedy is a faster ladder. The line speed bounds the corner speed
- * (validateIsSpec), so the advice says when the line speed has to rise with it. Null when
- * the amplitude pattern does not show that split.
+ * Ladder-specific guidance on a refused axis: when ringing is detected only on lines whose
+ * corners are faster than every line without it, the coupon self-ranged and the remedy is a
+ * faster ladder, raised in small steps because the fastest corners also load the motors
+ * hardest. Null when the detections do not show that split.
  */
-export function ladderAdvice(
-  spec: IsTestSpec,
-  lines: IsLineOutcome[],
-  amplitudeFloorMm: number,
-): string | null {
-  const withAmp = lines.filter((l) => l.amplitudeMm !== null)
-  const resolvable = withAmp.filter((l) => l.amplitudeMm! >= amplitudeFloorMm)
-  const unresolvable = withAmp.filter((l) => l.amplitudeMm! < amplitudeFloorMm)
-  if (resolvable.length === 0 || unresolvable.length === 0) return null
-  const slowestResolvable = Math.min(...resolvable.map((l) => l.cornerSpeedMmS))
-  const fastestUnresolvable = Math.max(...unresolvable.map((l) => l.cornerSpeedMmS))
-  if (slowestResolvable <= fastestUnresolvable) return null
-  // The line speed is the fastest tier: the one entered on the page, which bounds the corner
-  // speed (validateIsSpec); a slower tier is derived from it.
-  const lineSpeedMmS = Math.max(...spec.speedsMmS)
-  const raise =
-    spec.cornerSpeedMmS >= lineSpeedMmS
-      ? 'Raise the corner speed and the line speed together, then reprint. The line speed ' +
-        'must stay at least as fast as the corner speed.'
-      : `Raise the corner speed and reprint. If the new corner speed exceeds the ` +
-        `${lineSpeedMmS} mm/s line speed, raise the line speed to at least the corner speed.`
+export function ladderAdvice(lines: IsLineOutcome[]): string | null {
+  const traced = lines.filter((l) => l.traced && l.detectionPBound !== null)
+  const detected = traced.filter((l) => l.detected)
+  const silent = traced.filter((l) => !l.detected)
+  if (detected.length === 0 || silent.length === 0) return null
+  const slowestDetected = Math.min(...detected.map((l) => l.cornerSpeedMmS))
+  const fastestSilent = Math.max(...silent.map((l) => l.cornerSpeedMmS))
+  if (slowestDetected <= fastestSilent) return null
   return (
-    `${raise} Only the lines with the fastest corner speeds carried ringing the scan can ` +
-    'resolve.'
+    'Only the lines with the fastest corners showed ringing. Raise the corner speed in small ' +
+    'steps and reprint, and lower it again if the print shows a layer shift.'
   )
 }
 
@@ -337,6 +334,14 @@ const FREQUENCY_OUTLIER_REASON =
   'The ringing frequency fitted on this line lies far from the other lines, so the line was ' +
   'left out of the joint fit. The trace may be corrupted by print defects or scan artifacts.'
 
+const OUT_OF_BAND_REASON =
+  'The ringing frequency fitted on this line sits at the edge of the search range, so the ' +
+  'line was left out of the joint fit.'
+
+const ZETA_AT_BOUND_REASON =
+  'The damping ratio fitted on this line sits at the edge of the physically plausible range, ' +
+  'so the line was left out of the joint fit.'
+
 function measureGroup(
   cv: OpenCv,
   grays: Mat[],
@@ -344,6 +349,7 @@ function measureGroup(
   spec: IsTestSpec,
   group: IsLineGroup,
   scanReference: ScaleReference,
+  printOrder: number[],
 ): IsAxisResult {
   // Group-to-scan assignment: the scan in which the group's measured direction is most
   // sensor-row aligned, accepted only when that alignment is dominant.
@@ -371,6 +377,8 @@ function measureGroup(
       exclusion: null,
       refusalReason: null,
       refusalCategory: null,
+      detected: false,
+      detectionPBound: null,
       frequencyHz: null,
       amplitudeMm: null,
       startPx: null,
@@ -408,6 +416,8 @@ function measureGroup(
       exclusion: traced.traces[i] === null ? ('not-traced' as const) : null,
       refusalReason: traced.traces[i] === null ? NOT_TRACED_REASON : null,
       refusalCategory: traced.traces[i] === null ? ('not-traced' as const) : null,
+      detected: false,
+      detectionPBound: null,
       frequencyHz: null,
       amplitudeMm: null,
       startPx: span.start,
@@ -433,49 +443,66 @@ function measureGroup(
   }
 
   const fits = tracedIndices.map((i) => analyzeTracedLine(traced.traces[i]!))
-  // The amplitude resolvability floor, priced through the same lateral px/mm the tracer
-  // converted the amplitudes with, so both sides of the comparison share one scale source.
-  const lateralPxPerMm = median(tracedIndices.map((i) => traced.traces[i]!.lateralPxPerMm))
-  const pool = poolAxisFits(
-    fits,
-    spec.speedsMmS,
-    tracedIndices.map((i) => group.lines[i].speedMmS),
-    AMPLITUDE_RESOLUTION_PX / lateralPxPerMm,
-  )
+  const pool = poolAxisFits(fits, spec.speedsMmS)
   for (let k = 0; k < tracedIndices.length; k++) {
     const outcome = lines[tracedIndices[k]]
     const fit = fits[k]
-    const status = pool.lineJoint[k]
-    outcome.usedInJointFit = status.usedInJointFit
-    outcome.exclusion = status.usedInJointFit ? null : status.exclusion
-    outcome.frequencyHz = fit.params?.frequencyHz ?? null
-    outcome.amplitudeMm =
-      (status.usedInJointFit ? status.amplitudeMm : null) ?? fit.params?.ringAmpMm ?? null
+    const verdict = pool.lines[k]
+    outcome.usedInJointFit = verdict.usedInJointFit
+    outcome.exclusion = verdict.exclusion
+    outcome.detected = verdict.detected
+    outcome.detectionPBound = verdict.detectionPBound
+    outcome.frequencyHz = verdict.frequencyHz
+    outcome.amplitudeMm = verdict.amplitudeMm
     // A line "counts" when it entered the joint fit of an axis that produced a measurement.
-    outcome.accepted = status.usedInJointFit && pool.accepted
-    // Only a line left out of the joint fit was refused: a line in it was measured through
-    // the joint fit even when the axis verdict refused, so its screening label (a weak or
-    // poorly fitting line on its own) is no refusal and is never counted as one.
-    if (status.usedInJointFit) {
+    outcome.accepted = verdict.usedInJointFit && pool.accepted
+    // Only a line left out of the joint fit was refused; a line in it was measured through the
+    // joint fit even when the axis verdict refused.
+    if (verdict.exclusion === null) {
       outcome.refusalReason = null
       outcome.refusalCategory = null
-    } else if (status.exclusion === 'frequency-outlier') {
+    } else if (verdict.exclusion === 'frequency-outlier') {
       outcome.refusalReason = FREQUENCY_OUTLIER_REASON
       outcome.refusalCategory = 'frequency-outlier'
+    } else if (verdict.exclusion === 'out-of-band') {
+      outcome.refusalReason = OUT_OF_BAND_REASON
+      outcome.refusalCategory = 'out-of-band'
+    } else if (verdict.exclusion === 'zeta-at-bound') {
+      outcome.refusalReason = ZETA_AT_BOUND_REASON
+      outcome.refusalCategory = 'irregular-trace'
     } else {
       outcome.refusalReason = fit.refusalReason
       outcome.refusalCategory = fit.refusalCategory
     }
   }
 
+  // Lateral offsets of the traced lines in print order, for the layer-shift diagnostic.
+  const offsetByLine = new Map<number, number>()
+  tracedIndices.forEach((i, k) => {
+    const offset = fits[k].offsetMm
+    if (offset !== null) offsetByLine.set(i, offset)
+  })
+  // The group's lines are in field order, so a line's index is its slot across the field.
+  const printed = printOrder.filter((i) => offsetByLine.has(i))
+  const offsets = printed.map((i) => offsetByLine.get(i)!)
+  const checks = {
+    detectionPBound: pool.detectionPBound,
+    linesDetected: pool.linesDetected,
+    decayDemonstrated: pool.decayDemonstrated,
+    proportionality: pool.proportionality,
+    speedCheck: pool.speedCheck,
+    replicateCheck: pool.replicateCheck,
+    influenceCheck: pool.influenceCheck,
+    layerShiftDetected: layerShiftDetected(offsets, printed),
+  }
+
   if (!pool.accepted) {
     const r = refusedAxis(group.axis, [...pool.refusals], tracedIndices.length, scanIndex, lines)
+    Object.assign(r, checks)
     r.linesUsed = pool.linesUsed
-    r.fStatistic = pool.fStatistic
     // A remedy specific to the coupon replaces the generic rescan advice instead of
     // competing with it.
-    const advice =
-      ladderAdvice(spec, lines, AMPLITUDE_RESOLUTION_PX / lateralPxPerMm) ?? pool.rescanAdvice
+    const advice = ladderAdvice(lines) ?? pool.rescanAdvice
     if (advice !== null) r.refusals.push(advice)
     return r
   }
@@ -493,7 +520,7 @@ function measureGroup(
     dampingRatio: pool.dampingRatio,
     frequencyCi95Hz: pool.frequencyCi95Hz,
     frequencySeHz: pool.frequencySeHz,
-    fStatistic: pool.fStatistic,
+    ...checks,
     amplitudeMm: pool.amplitudeMm,
     linesUsed: pool.linesUsed,
     linesTraced: tracedIndices.length,

@@ -45,7 +45,6 @@ function percent(v: number): string {
 // cover exactly the lines the table below shows as "In joint fit: no". On a measured axis
 // the table alone shows the per-line outcomes.
 const CATEGORY_LABELS: Record<NonNullable<IsLineRefusalCategory>, string> = {
-  'weak-ringing': 'No ringing visible above the scan noise',
   'irregular-trace': 'Trace too irregular to read as ringing',
   'out-of-band': `Ringing outside the ${F_MIN_HZ} to ${F_MAX_HZ} Hz measurable range`,
   'frequency-outlier': 'Ringing frequency far from the other lines',
@@ -60,7 +59,6 @@ const CATEGORY_LABELS: Record<NonNullable<IsLineRefusalCategory>, string> = {
 const EXCLUSION_LABELS: Record<IsLineExclusion, string> = {
   'no-free-response': 'No free ringdown after the corner',
   'out-of-band': `Fitted frequency at the edge of the ${F_MIN_HZ} to ${F_MAX_HZ} Hz search range`,
-  'seed-disagreement': 'Fit and spectrum disagree on the frequency',
   'zeta-at-bound': 'Fitted damping at the edge of the physical range',
   'frequency-outlier': 'Fitted frequency is an outlier among the lines',
   'not-traced': 'Line not found in the scan',

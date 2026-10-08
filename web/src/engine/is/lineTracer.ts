@@ -45,19 +45,22 @@ import type { ScaleReference } from '../scannerCalibration'
 
 export interface TracedLine {
   speedMmS: number
+  /** The line's rung: the speed its run-up cruises into the ringing corner at, mm/s. */
+  cornerSpeedMmS: number
+  /** The commanded acceleration of the post-corner ramp, mm/s^2. */
+  accelMmS2: number
   /** Time since the corner of each sample, seconds: the commanded coupon-frame distance mapped
    *  through the commanded trapezoidal velocity profile. */
   tS: Float64Array
   /** Earliest time since the corner the ringing fit may start at, seconds: 0 when the ramp
    *  timing is exact, else the end of the post-corner acceleration ramp. */
   fitStartMinS: number
-  /** Lateral deviation from the nominal centerline of each sample, true mm. */
+  /** Lateral deviation from the nominal centerline of each sample, true mm. Samples the tracer
+   *  could not read are filled by linear interpolation between read neighbours, for locating
+   *  the free ringdown only; `observed` marks which samples were read. */
   lateralMm: Float64Array
-  /** Index where the noise-floor window starts: the last stretch of the clean read. */
-  noiseWindowStart: number
-  /** The px/mm this trace's lateral deviations were converted with (the card reference
-   *  along the lateral direction), so pixel-domain floors price through the same scale. */
-  lateralPxPerMm: number
+  /** 1 where the sample was read from the scan, 0 where it was filled in. */
+  observed: Uint8Array
 }
 
 export interface TracedGroup {
@@ -90,10 +93,6 @@ const CENTROID_THRESHOLD = 0.5
 const MIN_PEAK_DEVIATION = 8
 /** Fraction of samples that may fail before the whole line is dropped. */
 const MAX_INVALID_FRACTION = 0.1
-/** Last fraction of the clean read used as the noise-floor window (the ring has decayed
- *  there for any resonance and damping in the search range: at the slowest 20 Hz corner ring
- *  with damping 0.02, five read wavelengths in, the envelope is well below its start). */
-const NOISE_WINDOW_FRACTION = 0.25
 
 /** The unit coupon-frame direction of a line's measured segment. */
 export function measuredDirection(line: IsLine): { dx: number; dy: number } {
@@ -281,19 +280,21 @@ function traceLine(
 
   if (invalid > MAX_INVALID_FRACTION * count) return null
 
-  // Fill the few invalid samples by linear interpolation between valid neighbours so the
-  // downstream fit sees a gapless series (the invalid fraction is bounded above).
+  // Record which samples were read, then fill the few unread ones by linear interpolation
+  // between read neighbours for the free-ringdown search; the statistics use read samples only.
+  const observed = Uint8Array.from(lateralMm, (v) => (Number.isFinite(v) ? 1 : 0))
   interpolateGaps(lateralMm)
 
   return {
     speedMmS: line.speedMmS,
+    cornerSpeedMmS: line.cornerSpeedMmS,
+    accelMmS2: spec.accelMmS2,
     tS,
     fitStartMinS: spec.exactRampTiming
       ? 0
       : (line.speedMmS - line.cornerSpeedMmS) / spec.accelMmS2,
     lateralMm,
-    noiseWindowStart: Math.floor(count * (1 - NOISE_WINDOW_FRACTION)),
-    lateralPxPerMm: acrossPxPerMm,
+    observed,
   }
 }
 

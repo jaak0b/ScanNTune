@@ -374,11 +374,12 @@ export function simulateAxis(options: TraceSimOptions): SimLine[] {
 
     const trace: TracedLine = {
       speedMmS: v,
+      cornerSpeedMmS: c,
+      accelMmS2: a,
       tS: tTraced,
       fitStartMinS: spec.exactRampTiming ? 0 : (v - c) / a,
       lateralMm: lateral,
-      noiseWindowStart: Math.floor(count * 0.75),
-      lateralPxPerMm: pxPerMm,
+      observed: Uint8Array.from(observed, (o) => (o ? 1 : 0)),
     }
     return {
       trace,
