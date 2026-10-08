@@ -1,6 +1,7 @@
 name: Web CI
 
-# Builds, unit-tests, statistics-tests, and end-to-end-tests the Vue web app on every pull request and on pushes to master.
+# Builds, unit-tests, and end-to-end-tests the Vue web app on every pull request and on pushes to master, and
+# runs the statistics suite when a file it depends on changed (see the changes job).
 on:
   pull_request:
   push:
@@ -40,8 +41,85 @@ jobs:
       - run: npm run build
       - run: npm test
 
+  # Decides whether the stats job runs: the statistics suite takes minutes per file, so it runs only
+  # when a file it depends on changed. The comparison base depends on the trigger. A pull request
+  # compares its test merge commit with the merge base of that commit and the PR base branch. A push
+  # to master compares the pushed range, from the previous branch commit to the pushed one. A manual
+  # dispatch compares the dispatched commit with its merge base with origin/master, so a dispatch on
+  # master itself finds no change. When the push gives no previous commit to compare with (a new
+  # branch, or a force push whose old commit is not in the clone), the suite runs.
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      stats: ${{ steps.diff.outputs.stats }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # the comparison base of every trigger must be in the clone, origin/master included
+          filter: blob:none # listing changed paths needs only commits and trees, not file contents
+          lfs: false
+      - name: List the changed dependencies of the statistics suite
+        id: diff
+        working-directory: ${{ github.workspace }}
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_REF: ${{ github.base_ref }}
+          PUSH_BEFORE: ${{ github.event.before }}
+        run: |
+          # The files the statistics suite depends on. The list was derived by following the runtime
+          # imports of every file in web/tests/stats transitively into web/src (an import type is
+          # erased at compile time and loads nothing), plus the files that configure and run the
+          # suite. Update it whenever the suite gains a new dependency.
+          paths=(
+            web/src/engine/is/                    # the input shaper analysis under test
+            web/src/engine/correlatedNoise.ts     # imported by the ring fit and likelihood
+            web/src/engine/math.ts                # imported by the analysis and by statsSupport.ts
+            web/src/engine/studentT.ts            # imported by the ring analysis and proportionality check
+            web/src/engine/gcode/                 # imported by is/types.ts through couponShell.ts
+            web/src/engine/pa/slicerVariables.ts  # imported by gcode/couponShell.ts
+            web/src/engine/pa/orcaTemplate.ts     # imported by pa/slicerVariables.ts
+            web/tests/stats/                      # the suite itself
+            web/tests/helpers/isTraceSim.ts       # the simulated traces the suite feeds the analysis
+            web/vitest.stats.config.ts            # the suite's Vitest configuration
+            web/tsconfig.json                     # compiler options the TypeScript transform reads
+            web/package.json                      # the test:stats script and the Vitest version range
+            web/package-lock.json                 # the installed Vitest toolchain
+            .github/workflows/web-ci.yml          # this workflow: the stats job and this list
+          )
+          run_suite() {
+            echo "::notice title=Statistics suite::$1 The statistics suite runs."
+            echo "stats=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          }
+          case "$EVENT_NAME" in
+            pull_request)
+              base=$(git merge-base "origin/$PR_BASE_REF" HEAD) ||
+                run_suite "The merge base of the PR base branch $PR_BASE_REF and the test merge commit was not found." ;;
+            push)
+              if [ "$PUSH_BEFORE" = "0000000000000000000000000000000000000000" ]; then
+                run_suite "The push created the branch, so there is no previous commit to compare with."
+              fi
+              git cat-file -e "$PUSH_BEFORE^{commit}" 2>/dev/null ||
+                run_suite "The previous branch commit $PUSH_BEFORE is not in the clone, as after a force push."
+              base=$PUSH_BEFORE ;;
+            *)
+              base=$(git merge-base origin/master HEAD) ||
+                run_suite "The merge base of origin/master and the dispatched commit was not found." ;;
+          esac
+          changed=$(git diff --no-renames --name-only "$base" HEAD -- "${paths[@]}")
+          if [ -n "$changed" ]; then
+            echo "Changed dependencies of the statistics suite since $base:"
+            echo "$changed"
+            echo "stats=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No dependency of the statistics suite changed since $base, so the stats job is skipped."
+            echo "stats=false" >> "$GITHUB_OUTPUT"
+          fi
+
   # The statistical calibration suite of the input shaper analysis (web/tests/stats): fixed-seed
-  # simulations kept out of the default run because they take minutes, not seconds. The files run
+  # simulations kept out of the default run because they take minutes, not seconds. The job runs
+  # only when the changes job finds a changed dependency of the suite. The files run
   # in 13 shards, at most three files each at the current 38 files, and vitest starts one worker
   # per vCPU of the runner (four on the standard runner of a public repository), so every file of
   # a shard starts at once and a shard takes its slowest file plus about two minutes of setup.
@@ -49,6 +127,8 @@ jobs:
   # per-test budget (vitest.stats.config.ts) ends before the job timeout, so a hung file fails
   # under its own name. The suite needs no LFS fixtures.
   stats:
+    needs: changes
+    if: needs.changes.outputs.stats == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 25
     strategy:
