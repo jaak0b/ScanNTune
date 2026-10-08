@@ -64,8 +64,10 @@ On Klipper there's an optional follow-up coupon that sweeps `smooth_time` the sa
 ScanNTune also calibrates input shaping from a scan, instead of running the accelerometer-based tuning
 built into Klipper or eyeballing which shaper setting reduces ringing on a test print.
 
-1. **Print the coupon:** a small crossing-line coupon, about 105 mm with the default settings, that
-   excites each axis with sharp corners so any resonance shows up as ringing in the printed lines.
+1. **Generate and print the coupon** from your printer profile: a crossing-line coupon, about 115 mm
+   square with the default settings. Its lines turn sharp corners at rising corner speeds and print at
+   two line speeds, so any resonance shows up as ringing in the printed lines, and a real resonance can
+   be told apart from patterns in the print or the scan.
 2. **Scan it twice,** flat and then quarter-turned, the same way as the skew and shrinkage flow.
    ScanNTune reads the printed ringing along each axis and fits its frequency and damping with
    established estimation methods. A scan that cannot be read reliably is refused with a worded reason
@@ -73,7 +75,8 @@ built into Klipper or eyeballing which shaper setting reduces ringing on a test 
 3. **Get the corrections back:** a recommended shaper type, chosen for robustness across a frequency
    tolerance band, plus the resulting maximum usable acceleration.
 
-The result is ready to paste: Klipper `SET_INPUT_SHAPER`, Marlin `M593`, or RepRapFirmware `M593`. Like
+The result is ready to paste: a Klipper `[input_shaper]` block for `printer.cfg`, Marlin `M593` (ZV,
+the only shaper Marlin implements), or RepRapFirmware `M593`. Like
 the other absolute-scale flows, it requires the one-time scanner card calibration.
 
 ## Extrusion multiplier / flow
@@ -83,9 +86,10 @@ instead of you measuring a thin wall with calipers or judging a top surface by f
 
 1. **Generate and print the coupon** from your printer profile: a single-color part with rows of parallel
    single-bead lines at precisely known spacings.
-2. **Scan it once,** face down. ScanNTune measures the air gap between neighboring lines to sub-pixel
+2. **Scan it face down.** ScanNTune measures the air gap between neighboring lines to sub-pixel
    precision; since the line spacing is known exactly, the deposited bead width falls out of a single
-   subtraction, averaged over more than a hundred gaps.
+   subtraction, pooled over the 72 gaps of the default coupon. A second scan, rotated 180 degrees on the
+   glass, is optional and cancels the one-sided shading of the scanner lamp.
 3. **Enter your current slicer flow** and get the corrected value back in the same format, plus an `M221`
    command for prints that are already sliced.
 

@@ -9,6 +9,11 @@ calibration coupon: no manual caliper measurements. The user prints `calibration
 lattice of measurement rings), scans it, and the software reads the geometry with OpenCV.js and emits
 ready-to-paste firmware/slicer corrections.
 
+The same print, scan and measure approach covers four calibration flows, named as the UI names them:
+skew/shrinkage (the ring coupon described here, also on the XZ and YZ planes), pressure advance,
+extrusion multiplier / flow ratio, and input shaper. The last three print a G-code coupon generated in-app
+instead of an STL; each has its own section below.
+
 The measurement principle: ring **centres** give true X/Y scale and skew (centres are immune to
 over/under-extrusion, because extrusion changes a ring's wall width, not its centre). The correction math
 mirrors the Vector 3D "Califlower" calculator (Klipper `SET_SKEW`, Marlin `XY_SKEW_FACTOR`/steps-per-mm,
@@ -30,10 +35,11 @@ Commands (run inside `web/`):
 
 ```bash
 npm install
-npm run dev       # Vite dev server at http://localhost:5173/
-npm run build     # vue-tsc typecheck + production build to web/dist
-npm test          # Vitest: engine unit tests + fixture-backed CV tests
-npm run e2e       # Playwright end-to-end over the real scans in web/e2e/fixtures
+npm run dev          # Vite dev server at http://localhost:5173/
+npm run build        # vue-tsc typecheck + production build to web/dist
+npm test             # Vitest: engine unit tests + fixture-backed CV tests
+npm run test:stats   # Vitest: the input shaper statistics suite (web/tests/stats), not part of npm test
+npm run e2e          # Playwright end-to-end over the real scans in web/e2e/fixtures
 ```
 
 Structure:
@@ -43,13 +49,22 @@ Structure:
   the main bundle (it lives in the worker chunk, loaded on first analysis) and tests can inject it. Stages:
   `ringDetector`, `gridMapper`, `affineSolver`, `couponAnalyzer`, `scanCombiner`, `cardEdgeMeasurer`,
   `overlayRenderer`, `correctionFormatter`, plus `types`, `opencv` (loader), `imageData`, and shared
-  helpers `math`/`cvUtils`.
-- **`web/src/worker/`**: a Comlink Web Worker (`analysis.worker.ts`) exposing `analyzeTwoScans` and
-  `measureCardScan`; `decode.ts` decodes image bytes with `createImageBitmap` + `OffscreenCanvas` and
-  renders overlays back as `ImageBitmap`. `web/src/workerClient.ts` is the only thing the UI calls for CV.
-- **`web/src/components/`**: thin Vue pages (`ScanPage`, `CalibrationPage`, `ResultsPage`) plus the guide
-  diagrams and controls, over Pinia stores in `web/src/stores/` (`useApp` for navigation + payload,
-  `useCalibration` for the localStorage-backed scanner calibration).
+  helpers `math`/`cvUtils`. The other flows live in their own subfolders: `pa/` (pressure advance),
+  `em/` (extrusion multiplier / flow ratio) and `is/` (input shaper), whose coupon generators share
+  the G-code emitter and coupon shell in `gcode/`. Concerns shared across flows are top-level modules,
+  among them `scannerCalibration`, `resolutionGate`, `measurementBackdrop`, `cornerFiducialSolver`,
+  `plateFiducialLocator` and `correlatedNoise`.
+- **`web/src/worker/`**: a Comlink Web Worker (`analysis.worker.ts`) exposing `analyzeScan` (one
+  skew/shrinkage scan; `SkewPage` combines the scans on the main thread through
+  `multiPlaneCombiner.reconcileScans`), `analyzePaScan` (one scan), `analyzeEmScans` (one or two scans),
+  `analyzeIsScans` (two scans) and `measureCardScan`; `decode.ts` decodes image bytes with
+  `createImageBitmap` + `OffscreenCanvas` and renders overlays back as `ImageBitmap`.
+  `web/src/workerClient.ts` is the only thing the UI calls for CV.
+- **`web/src/components/`**: thin Vue pages, one per flow (`SkewPage`, `PaPage`, `EmPage`, `IsPage`),
+  plus `CalibrationPage` (the scanner card calibration) and `ProfilePage` (the printer profile editor),
+  the guide diagrams and controls, over Pinia stores in `web/src/stores/` (`useApp` for navigation +
+  payload, `useCalibration` for the localStorage-backed scanner calibration, `usePrinterProfiles`, and
+  one settings store per flow).
 - **Tests**: `web/tests/` (Vitest engine + fixture CV tests, with `tests/helpers/cv.ts` and
   `tests/fixtures/TestData_2solid.png`) and `web/e2e/` (Playwright over the real scans in
   `web/e2e/fixtures/`).
@@ -84,9 +99,10 @@ Two durable gotchas:
   time via the Vite `define` `__APP_VERSION__`.
 
 CI: `.github/workflows/web-ci.yml` builds, unit-tests, and e2e-tests the app on pull requests and on pushes
-to `master`; `.github/workflows/deploy-web.yml` builds `web/dist` and publishes it to GitHub Pages on every
-push to `master` (served at `https://scanntune.jaak0b.at/`). Note: push-triggered Pages deploys on this repo
-sometimes fail with "Deployment failed, try again later" (a GitHub-side flake, seen on both the old C# and the
+to `master`, and runs the input shaper statistics suite as its own `stats` job in four shards
+(`npm run test:stats -- --shard=N/4`); `.github/workflows/deploy-web.yml` builds `web/dist` and
+publishes it to GitHub Pages on every push to `master` (served at `https://scanntune.jaak0b.at/`).
+Note: push-triggered Pages deploys on this repo sometimes fail with "Deployment failed, try again later" (a GitHub-side flake, seen on both the old C# and the
 Vue deploy at the same commit); re-running the deploy via `workflow_dispatch` at the same commit succeeds.
 
 The measurement engine was ported 1:1 from a retired C# implementation and validated against the same
@@ -156,20 +172,30 @@ the render-recovery tests green (rule 1).
 ## Extrusion multiplier (flow) calibration
 
 A third calibration flow lives under `web/src/engine/em/`: it measures the deposited bead width from
-a single scan of a single-color coupon and emits the flow correction (slicer flow % and `M221 S`).
+one scan of a single-color coupon (a second scan of the same coupon rotated 180 degrees on the glass is
+optional) and emits the flow correction (slicer flow % and `M221 S`).
 The coupon (generated in-app, `em/gcodeGenerator.ts` over the shared `web/src/engine/gcode/emitter.ts`
 extracted from the PA generator) is a frame band with the same 3-hole + solid-origin-corner fiducial
-convention, a center rail, and two mirrored rows of 9 blocks of 7 parallel single-bead lines, each
-block at a different known pitch (defaults 0.70-1.10 mm, always above the bead width: a flatbed cannot
-read a slit much narrower than ~0.25 mm through the part's depth, so every gap must stay open). Lines
-are 3 layers tall (1 narrower pedestal layer absorbs z-offset squish, 2 measured layers define the
-scanned edge; scan top face down, lid closed) and overrun the band/rail by 1 mm so their tips weld onto
-perimeters. Measurement (`em/fiducialAligner`, `em/gapMeasurer`, `em/emAnalyzer`): per gap, the bead
+convention, a center rail, and two mirrored rows of 9 blocks of 5 parallel single-bead lines, each
+block at a different known pitch. The pitch range is derived from the nozzle (`defaultEmTestSpec`): the
+nominal bead width is 1.05 times the nozzle diameter, the tightest pitch keeps a 0.65 mm open gap even
+for beads 15% wider than nominal, and the sweep spans half a nominal width, so a 0.4 mm nozzle gets
+1.14 to 1.35 mm. The 0.65 mm floor (`MIN_OPEN_GAP_MM`) is the narrowest gap a flatbed reads without bias
+through the coupon's depth: diagnostic 600 dpi scans of dark and light coupons show the through-depth
+slit shadow inflating the measured bead width below it. It is scanner physics in absolute millimetres,
+so it does not scale with the nozzle. Lines are 3 layers tall (1 pedestal layer at 0.72 times the
+nominal width absorbs z-offset squish, 2 measured layers define the scanned edge; scan top face down,
+lines parallel to the lamp's travel) and overrun the band/rail by 2.5 mm (`ANCHOR_OVERLAP_MM`), long
+enough that the wall crossing sits past the acceleration ramp and the nozzle pressure lag after the
+travel, so each tip welds onto the perimeter at full bead width (a starved tip snaps off).
+Measurement (`em/fiducialAligner`, `em/gapMeasurer`, `em/emAnalyzer`): per gap, the bead
 width is the gap complement `w = measured local pitch - measured gap` (line centres are
 extrusion-immune, so printer axis stretch and material shrinkage cancel), edges located by a gradient
-centroid (center-of-gravity) sub-pixel estimator, samples pooled over both rows, MAD-cleaned, and
-summarized by the median. The flow output is expressed in the slicers' rounded bead model: the
-cross-section the coupon commanded over PrusaSlicer's `Flow::mm3_per_mm` (a rectangle with
+centroid (center-of-gravity) sub-pixel estimator, samples pooled over both rows and all blocks of a
+scan, MAD-cleaned, and summarized by the median. With two scans the per-scan medians are combined by
+their equal-weight mean, which cancels the lamp's one-sided shading. The flow output is expressed in
+the slicers' rounded bead model: the cross-section the coupon commanded over PrusaSlicer's
+`Flow::mm3_per_mm` (a rectangle with
 semicircular ends) at the measured width. Distances convert to true mm ONLY via the card calibration px/mm
 (`useCalibration`, a hard requirement for this flow); the affine is for locating features. The block
 separators are NOT a width reference (their air is `2 + nominal - w`, w-dependent); they provide the
@@ -178,6 +204,56 @@ diagnostic. Validation contract: `web/tests/helpers/emRender.ts` renders coupons
 truth; do not change the EM measurement math without keeping its render-recovery tests
 (`emAnalyzer.spec.ts`) green, and `tests/engine/em/realScan.spec.ts` + `e2e/em.spec.ts` pin a real
 600 dpi scan end to end (rule 1).
+
+## Input shaper calibration
+
+A fourth calibration flow lives under `web/src/engine/is/`: it measures each axis's resonance frequency
+and damping ratio from two scans of one coupon (face down, then a quarter turn on the glass; each axis is
+read from the scan whose sensor rows run along its measured lines) and recommends a shaper (a Klipper
+`[input_shaper]` block, Marlin `M593` with ZV, RepRapFirmware `M593`). The coupon (generated in-app,
+`is/gcodeGenerator.ts` and `is/couponGeometry.ts`) is a frame band with the same 3-hole +
+solid-origin-corner fiducial convention around an open window. Single test lines run in, turn a sharp
+90 degree corner, and cross the window as their measured segment, so the corner's velocity step leaves a
+decaying ring in the bead. Each axis prints two interleaved speed tiers, the line speed and a slower tier
+whose ratio is derived from the detection level and the confidence gate (`speedTiersFor`, ratio 1.40728;
+106 and 150 mm/s by default), and in each tier a corner-speed ladder of geometrically spaced rungs from
+20 mm/s up to the corner speed (100 mm/s by default), one rung per line, with the fastest corners
+printed last in every layer. The line
+count per speed is derived from bead followability (`ladderLinesPerSpeed`), 5 by default. Each line
+raises the firmware's corner limit to its own rung only for its run-up, measured segment, tail and coast,
+then sets the profile's own value back (`junctionLimitCommands`), with planner stops (`G4 P0`) between
+lines. The test runs at the profile's print acceleration and resets the speed factor with `M220 S100`,
+because a leftover speed factor would scale the frequency on both tiers alike. The default coupon is
+114.806 mm square. Measurement (`lineTracer`, `ringAnalyzer`, `ringGls`, `ringLikelihood`,
+`artifactSearch`, `inputProportionality`, `alongTrackLag`): each line's centre is traced to sub-pixel
+precision and its lateral deviation converts to true mm through the card `ScaleReference`. The time base
+is the deliberate exception: a sample's time since the corner comes from its commanded coupon-frame
+distance (the sample mapped back through the fiducial affine) and the commanded speed profile, so printer
+axis scale and plastic shrinkage cannot bias the frequency. Per axis, the lines share one damped ring
+(frequency and damping) over AR noise whitened exactly, fitted by generalized least squares variable
+projection. Detection is the generalized likelihood ratio with the noise model refitted under each
+hypothesis, summed over the lines, with the look-elsewhere effect over the 1,703-point frequency and
+damping grid paid by a Bonferroni bound at a 0.1% false-alarm level; the frequency interval is the
+profile-likelihood interval. With two tiers, an axis is accepted only when the two-speed check confirms
+the ring (a machine resonance keeps its frequency at both tiers, a print or scan pattern scales with the
+speed); a coupon left with one tier (a small bed, or a line speed below 29 mm/s) gets a leave-one-line-out
+influence check instead. The ring amplitude must also be proportional to the corner speed through zero
+(which rejects forced tones such as a fan), and the replicate check and the confidence gate must not
+fail. The two axes are then estimated jointly: the axis along one group's lines is the other group's
+measured axis and rings after its corner too, so each axis's ring is refitted on deposit times
+corrected by the other axis's fitted ring at the same corner
+speed (the along-track lag), kept only when the other axis is accepted. Validation contract:
+`web/tests/helpers/isTraceSim.ts` (seeded trace simulator) and `web/tests/helpers/isRender.ts` (coupon
+renderer) are the synthetic ground truth; `web/tests/helpers/plannerReplay.ts` is the planner oracle,
+replaying the generated G-code through planners ported from the Klipper, Marlin and RepRapFirmware
+sources without importing production code; the `web/tests/stats/` suite (`npm run test:stats`) holds the
+statistical calibration criteria; `web/tests/fixtures/is_default.gcode` pins the default coupon's G-code
+byte for byte. The design, its figures and its open items are in
+`docs/superpowers/specs/2026-10-08-is-ladder-two-tier-detection-design.md`. Do not change the IS
+measurement math (tracing, time base, noise model, detection, estimation, checks, along-track lag)
+without keeping the render-recovery tests (`isAnalyzer.spec.ts`) and the stats suite green (rule 1); a
+stats criterion already red (the design doc lists it) stays red until it is fixed honestly and is never
+loosened to pass.
 
 ## Conventions
 
@@ -293,8 +369,9 @@ green (and, for any change to the measurement pipeline, the synthetic-fixture va
 automated gate is sufficient: do not additionally launch a dev server for manual browser verification unless
 the owner asks for it. On the owner's local dev machine, run ONLY the unit tests that cover the code
 actually changed (e.g. `npx vitest run tests/engine/em/emAnalyzer.spec.ts` with the specific spec paths);
-running the full suite locally (`npm test` without a file filter, or `npm run e2e`) is forbidden. The full
-gate is CI's job now: it still defines "verified", but CI runs it, not the local machine.
+running the full suite locally (`npm test` without a file filter, or `npm run e2e`) is forbidden. The
+statistics suite runs on CI in four shards; locally it may be run only when the input shaper analysis
+changed. The full gate is CI's job now: it still defines "verified", but CI runs it, not the local machine.
 
 **Subagent routing.** When delegating to a subagent, prefer the `cavecrew-*` types wherever the task fits,
 because their output is caveman-compressed and keeps the parent context small: use `cavecrew-investigator`
