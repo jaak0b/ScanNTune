@@ -286,15 +286,15 @@ describe('isCouponGeometry footprint', () => {
     expect(g.couponWidthMm).toBeCloseTo(interior + 2 * g.frameBandMm, 9)
     expect(g.couponHeightMm).toBeCloseTo(g.couponWidthMm, 9)
     // Documented derived size of the expert defaults (single 150 mm/s tier, 8 lines,
-    // 30 mm clean read, 8 mm run-up, 4000 mm/s^2, 100 mm/s top corner speed): a
-    // regression inflating the layout is caught here. The field extent enters the
-    // two-axis footprint twice (once per group), so each extra line costs two pitches
-    // (5 mm); the 2.7625 mm fraction is the binding corner-to-tier ramp of the ladder's
-    // 20 mm/s bottom rung, (150^2 - 20^2) / (2 * 4000).
-    expect(g.couponWidthMm).toBeCloseTo(105.7625, 9)
+    // 30 mm clean read, 8 mm run-up, the default profile's 3000 mm/s^2, 100 mm/s top
+    // corner speed): a regression inflating the layout is caught here. The field extent
+    // enters the two-axis footprint twice (once per group), so each extra line costs two
+    // pitches (5 mm); the 3.68333 mm fraction is the binding corner-to-tier ramp of the
+    // ladder's 20 mm/s bottom rung, (150^2 - 20^2) / (2 * 3000).
+    expect(g.couponWidthMm).toBeCloseTo(106.683333, 6)
     // The 15-line maximum adds seven more line pairs on the same formula.
     const max = isCouponGeometry({ ...spec, linesPerSpeed: 15 })
-    expect(max.couponWidthMm).toBeCloseTo(140.7625, 9)
+    expect(max.couponWidthMm).toBeCloseTo(141.683333, 6)
   })
   it('shrinks when any driving parameter shrinks (the formula carries no padding)', () => {
     const size = (s: IsTestSpec) => isCouponGeometry(s).couponWidthMm
@@ -406,10 +406,10 @@ describe('corner-speed excitation ladder', () => {
     for (const group of g.groups) {
       const first = group.lines[0]
       const last = group.lines[group.lines.length - 1]
-      // Bottom rung (20 mm/s): ramp (150^2 - 20^2) / 8000 = 2.7625 mm (hand-derived);
-      // top rung (100 mm/s): (150^2 - 100^2) / 8000 = 1.5625 mm.
-      expect(first.protectedMm).toBeCloseTo(2.7625 + spec.measuredLineMm, 9)
-      expect(last.protectedMm).toBeCloseTo(1.5625 + spec.measuredLineMm, 9)
+      // Bottom rung (20 mm/s): ramp (150^2 - 20^2) / 6000 = 3.683333 mm (hand-derived);
+      // top rung (100 mm/s): (150^2 - 100^2) / 6000 = 2.083333 mm; plus the 30 mm read.
+      expect(first.protectedMm).toBeCloseTo(33.683333, 6)
+      expect(last.protectedMm).toBeCloseTo(32.083333, 6)
     }
   })
   it('shrinks a ladder coupon onto a small bed through the measured-line reduction', () => {
@@ -428,8 +428,8 @@ describe('isCouponGeometry frame band sizing', () => {
     expect(g.frameBandMm).toBeCloseTo(MIN_FRAME_BAND_MM, 9)
   })
   it('widens the band for a fast tier so the full tail plus clearance fits', () => {
-    // A 300 mm/s tier at 4000 mm/s^2 needs a 13.25 mm tail depth (1 mm weld + 11.25 mm
-    // stopping distance + 1 mm margin) plus 1 mm edge clearance.
+    // A 300 mm/s tier at 3000 mm/s^2 needs a 17 mm tail depth (1 mm weld + 15 mm stopping
+    // distance + 1 mm margin) plus 1 mm edge clearance.
     const fast: IsTestSpec = { ...spec, speedsMmS: [150, 200, 300] }
     expect(isCouponGeometry(fast).frameBandMm).toBeCloseTo(
       spec.weldMm + accelRampMm(300, spec.accelMmS2) + TAIL_MARGIN_MM + TAIL_EDGE_CLEARANCE_MM,

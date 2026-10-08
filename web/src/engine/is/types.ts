@@ -84,11 +84,6 @@ export const MAX_LINES_PER_SPEED = 15
  * can raise it.
  */
 export const DEFAULT_CORNER_SPEED_MM_S = 100
-/** Below this acceleration the ringing trace is often too weak to measure. */
-const LOW_ACCEL_MM_S2 = 4000
-/** Default acceleration floor: the same threshold, so a default spec never starts in the
- *  low-acceleration warning zone. */
-const MIN_ACCEL_MM_S2 = LOW_ACCEL_MM_S2
 
 export function defaultIsTestSpec(profile: PrinterProfile): IsTestSpec {
   return {
@@ -103,7 +98,7 @@ export function defaultIsTestSpec(profile: PrinterProfile): IsTestSpec {
     // Five wavelengths of the lowest resonance of interest at the tier speed:
     // 5 * tierSpeed / 25 Hz, so 30 mm at the 150 mm/s default tier.
     measuredLineMm: 30,
-    // Hosts the ramp to the 100 mm/s default corner speed (about 1.25 mm at 4000 mm/s^2)
+    // Hosts the ramp to the 100 mm/s default corner speed (about 1.7 mm at 3000 mm/s^2)
     // with cruise to spare; the through-band leg stretch is extra.
     runUpMm: 8,
     // The pitch must exceed twice the expected residual ring amplitude plus the bead
@@ -111,7 +106,9 @@ export function defaultIsTestSpec(profile: PrinterProfile): IsTestSpec {
     // (see DEFAULT_CORNER_SPEED_MM_S), so 2.5 mm keeps neighbouring traces apart.
     linePitchMm: 2.5,
     axes: ['x', 'y'],
-    accelMmS2: Math.max(profile.printAccelMmS2, MIN_ACCEL_MM_S2),
+    // The test runs at the profile's own print acceleration: the ringing excitation is the
+    // velocity step at the corner, which the acceleration does not set.
+    accelMmS2: profile.printAccelMmS2,
     cornerSpeedMmS: DEFAULT_CORNER_SPEED_MM_S,
     weldMm: 1,
     placement: 'center',
@@ -162,12 +159,6 @@ export function validateIsSpec(spec: IsTestSpec): void {
  */
 export function rampWarnings(spec: IsTestSpec): string[] {
   const warnings: string[] = []
-  if (spec.accelMmS2 < LOW_ACCEL_MM_S2) {
-    warnings.push(
-      'Low acceleration weakens the ringing signal; the test works best at the ' +
-        "printer's true maximum acceleration.",
-    )
-  }
   // The run-up must reach its cruise speed before the corner: v^2 / 2a from rest.
   const rampUpMm = accelRampMm(spec.cornerSpeedMmS, spec.accelMmS2)
   if (rampUpMm > spec.runUpMm) {
@@ -209,10 +200,10 @@ function fitSpecToFirmware(
   if (cap === null) return { spec, notes: [] }
   if (cap < MIN_CORNER_SPEED_MM_S) {
     throw new Error(
-      `Raise the test acceleration to at least ` +
-        `${minAccelForCornerSpeedMmS2(profile, MIN_CORNER_SPEED_MM_S)} mm/s^2. Below that, ` +
-        `Marlin's junction deviation cannot express the ${MIN_CORNER_SPEED_MM_S} mm/s minimum ` +
-        'corner speed.',
+      'Raise the print acceleration in the printer profile to at least ' +
+        `${minAccelForCornerSpeedMmS2(profile, MIN_CORNER_SPEED_MM_S)} mm/s^2. At ` +
+        `${spec.accelMmS2} mm/s^2, Marlin's 0.3 mm junction deviation limit caps the corner ` +
+        `speed at ${cap} mm/s, below the ${MIN_CORNER_SPEED_MM_S} mm/s minimum.`,
     )
   }
   if (spec.cornerSpeedMmS <= cap) return { spec, notes: [] }

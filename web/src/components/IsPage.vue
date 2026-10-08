@@ -160,17 +160,13 @@ const footprintText = computed(() => {
   return `coupon ${Math.round(g.couponWidthMm)} x ${Math.round(g.couponHeightMm)} mm`
 })
 const rampNotes = computed(() => (fittedSpec.value ? rampWarnings(fittedSpec.value) : []))
-// The acceleration is not editable here: it comes from the printer profile, floored by
-// the generator when the profile value is too weak for a readable trace.
-const accelNote = computed(() => {
-  const p = store.selected
-  if (!p || !fittedSpec.value) return ''
-  const a = fittedSpec.value.accelMmS2
-  return a > p.printAccelMmS2
-    ? `The test accelerates at ${a} mm/s^2, raised above the profile's ` +
-      `${p.printAccelMmS2} mm/s^2 because a weaker ramp leaves too faint a ringing trace.`
-    : `The test accelerates at the profile's ${a} mm/s^2 print acceleration.`
-})
+// The acceleration is not editable here: the test runs at the printer profile's own print
+// acceleration.
+const accelNote = computed(() =>
+  fittedSpec.value
+    ? `The test accelerates at the profile's ${fittedSpec.value.accelMmS2} mm/s^2 print acceleration.`
+    : '',
+)
 // The generator's own flow warnings for the fitted spec, judged like the other flows against
 // the selected profile and filament, or the defaults while none is selected.
 const highFlowText = computed(() => {

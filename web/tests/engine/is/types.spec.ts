@@ -26,12 +26,9 @@ describe('defaultIsTestSpec', () => {
     expect(spec.placement).toBe('center')
     expect(spec.contrastBase).toBe(false)
   })
-  it('floors the profile acceleration at the low-signal threshold and never caps it', () => {
-    // The floor equals the low-acceleration warning threshold, so a default spec never
-    // starts inside its own warning zone.
+  it('runs at the profile print acceleration, neither floored nor capped', () => {
     const p = defaultPrinterProfile()
-    expect(defaultIsTestSpec({ ...p, printAccelMmS2: 2000 }).accelMmS2).toBe(4000)
-    expect(rampWarnings(defaultIsTestSpec({ ...p, printAccelMmS2: 2000 }))).toEqual([])
+    expect(defaultIsTestSpec({ ...p, printAccelMmS2: 1000 }).accelMmS2).toBe(1000)
     expect(defaultIsTestSpec({ ...p, printAccelMmS2: 20000 }).accelMmS2).toBe(20000)
     expect(defaultIsTestSpec({ ...p, printAccelMmS2: 4500 }).accelMmS2).toBe(4500)
   })
@@ -85,13 +82,11 @@ describe('validateIsSpec', () => {
 
 describe('rampWarnings', () => {
   const spec = defaultIsTestSpec(defaultPrinterProfile())
-  it('is silent at a healthy acceleration', () => {
-    expect(rampWarnings({ ...spec, accelMmS2: 4000 })).toEqual([])
-  })
-  it('warns when the acceleration is below 4000 mm/s^2', () => {
-    const warnings = rampWarnings({ ...spec, accelMmS2: 3000 })
-    expect(warnings).toHaveLength(1)
-    expect(warnings[0]).toContain('Low acceleration')
+  it('is silent at a low acceleration whose run-up still reaches the corner speed', () => {
+    // The excitation is the velocity step at the corner, which the acceleration does not
+    // set, so a low acceleration alone is no reason to warn: at 1000 mm/s^2 the ramp to
+    // the 100 mm/s corner speed is 100^2 / 2000 = 5 mm, inside the 8 mm run-up.
+    expect(rampWarnings({ ...spec, accelMmS2: 1000 })).toEqual([])
   })
   it('warns when the run-up cannot host the ramp to the 100 mm/s corner speed', () => {
     // At 4000 mm/s^2 the ramp from rest to 100 mm/s is 100^2 / 8000 = 1.25 mm; there
@@ -104,13 +99,10 @@ describe('rampWarnings', () => {
     expect(rampWarnings({ ...spec, accelMmS2: 4000, runUpMm: 1.3 })).toEqual([])
   })
   it('does not warn about tier ramps: the layout reserves them before the read window', () => {
-    // At 2000 mm/s^2 the 300 mm/s tier needs a long ramp past the corner; the
-    // geometry allocates it in front of the clean read length, so only the
-    // low-acceleration warning fires (the 8 mm run-up still hosts its 2.5 mm ramp to
-    // the corner speed).
-    const warnings = rampWarnings({ ...spec, accelMmS2: 2000, speedsMmS: [150, 300] })
-    expect(warnings).toHaveLength(1)
-    expect(warnings[0]).toContain('Low acceleration')
+    // At 2000 mm/s^2 the 300 mm/s tier needs a long ramp past the corner; the geometry
+    // allocates it in front of the clean read length, and the 8 mm run-up still hosts its
+    // 2.5 mm ramp to the corner speed, so nothing warns.
+    expect(rampWarnings({ ...spec, accelMmS2: 2000, speedsMmS: [150, 300] })).toEqual([])
   })
   it('computes the ramp distance v^2 / (2a)', () => {
     expect(accelRampMm(100, 5000)).toBeCloseTo(1.0, 9)
@@ -122,14 +114,14 @@ describe('fitSpecToPrinter firmware fit', () => {
   const withFirmware = (firmware: Firmware) => ({ ...defaultPrinterProfile(), firmware })
 
   it('caps the Marlin corner speed where junction deviation stops, and says so', () => {
-    // At 4000 mm/s^2 a 0.3 mm junction deviation takes a 90 degree corner at most at
-    // sqrt(0.3 * 4000 * (sqrt(2) + 1)) = 53.82 mm/s (Marlin's planner junction formula),
-    // rounded down to 53.8.
+    // At the default profile's 3000 mm/s^2 a 0.3 mm junction deviation takes a 90 degree
+    // corner at most at sqrt(0.3 * 3000 * (sqrt(2) + 1)) = 46.61 mm/s (Marlin's planner
+    // junction formula), rounded down to 46.6.
     const { spec: fitted, notes } = fitSpecToPrinter(spec, withFirmware('Marlin'))
-    expect(fitted.cornerSpeedMmS).toBe(53.8)
+    expect(fitted.cornerSpeedMmS).toBe(46.6)
     expect(notes).toEqual([
-      "The corner speed was limited to 53.8 mm/s because Marlin's junction deviation cannot " +
-        'express a faster corner at 4000 mm/s^2.',
+      "The corner speed was limited to 46.6 mm/s because Marlin's junction deviation cannot " +
+        'express a faster corner at 3000 mm/s^2.',
     ])
   })
 
@@ -137,11 +129,11 @@ describe('fitSpecToPrinter firmware fit', () => {
     const { spec: fitted } = fitSpecToPrinter(spec, withFirmware('Marlin'))
     const rungs = ladderCornerSpeeds(fitted)
     expect(rungs[0]).toBe(20)
-    expect(rungs[rungs.length - 1]).toBeCloseTo(53.8, 9)
+    expect(rungs[rungs.length - 1]).toBeCloseTo(46.6, 9)
   })
 
   it('leaves a Marlin corner speed already under the cap untouched', () => {
-    const slow = { ...spec, cornerSpeedMmS: 50 }
+    const slow = { ...spec, cornerSpeedMmS: 40 }
     expect(fitSpecToPrinter(slow, withFirmware('Marlin'))).toEqual({ spec: slow, notes: [] })
     // The cap grows with the acceleration: 120.3 mm/s at 20000 mm/s^2 hosts the 100 default.
     const hot = { ...spec, accelMmS2: 20000 }
@@ -155,11 +147,16 @@ describe('fitSpecToPrinter firmware fit', () => {
   })
 
   it('refuses a Marlin acceleration too low to express the 20 mm/s minimum corner', () => {
-    // 20^2 / (0.3 * (sqrt(2) + 1)) = 552.28 mm/s^2, rounded up to 553.
+    // 20^2 / (0.3 * (sqrt(2) + 1)) = 552.28 mm/s^2, rounded up to 553; at 552 mm/s^2 the cap
+    // is sqrt(0.3 * 552 * (sqrt(2) + 1)) = 19.99 mm/s, rounded down to 19.9.
     expect(() =>
       fitSpecToPrinter({ ...spec, accelMmS2: 552, cornerSpeedMmS: 20, speedsMmS: [150] },
         withFirmware('Marlin')),
-    ).toThrow(/at least 553 mm\/s\^2/)
+    ).toThrow(
+      'Raise the print acceleration in the printer profile to at least 553 mm/s^2. At ' +
+        "552 mm/s^2, Marlin's 0.3 mm junction deviation limit caps the corner speed at " +
+        '19.9 mm/s, below the 20 mm/s minimum.',
+    )
     expect(() =>
       fitSpecToPrinter({ ...spec, accelMmS2: 553, cornerSpeedMmS: 20 }, withFirmware('Marlin')),
     ).not.toThrow()

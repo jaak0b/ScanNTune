@@ -160,7 +160,7 @@ describe('generateIsGcodeWithReport (Klipper)', () => {
     // VELOCITY raises the ceiling to the fastest commanded move (the 150 mm/s tier and
     // travel speed here), so a low configured maximum can never clamp a commanded feed.
     const limit = lines.indexOf(
-      'SET_VELOCITY_LIMIT VELOCITY=150 ACCEL=4000 SQUARE_CORNER_VELOCITY=100 MINIMUM_CRUISE_RATIO=0',
+      'SET_VELOCITY_LIMIT VELOCITY=150 ACCEL=3000 SQUARE_CORNER_VELOCITY=100 MINIMUM_CRUISE_RATIO=0',
     )
     expect(limit).toBeGreaterThan(0)
     expect(limit).toBeLessThan(firstExtrusionIndex(lines))
@@ -495,10 +495,10 @@ describe('generateIsGcodeWithReport (Marlin and RepRapFirmware)', () => {
     const marlin: PrinterProfile = { ...profile, firmware: 'Marlin' }
     const gcode = generateIsGcodeWithReport(marlin, filament, spec).gcode
     expect(gcode).toContain('M203 X150 Y150') // velocity ceiling in mm/s
-    expect(gcode).toContain('M201 X4000 Y4000') // per-axis maximum acceleration, mm/s^2
-    expect(gcode).toContain('M204 P4000 T4000') // test limits
-    // No numeric restore: the restart note replaces the profile-value block.
-    expect(gcode).not.toContain('M204 P3000 T3000')
+    expect(gcode).toContain('M201 X3000 Y3000') // per-axis maximum acceleration, mm/s^2
+    // The test runs at the profile's own 3000 mm/s^2, set once; no numeric restore block
+    // re-applies it at the end, the restart note does.
+    expect(gcode.match(/^M204 .*$/gm)).toEqual(['M204 P3000 T3000'])
     expect(gcode).toContain(
       '; restart the printer or run M501 to restore your configured motion limits',
     )
@@ -508,28 +508,28 @@ describe('generateIsGcodeWithReport (Marlin and RepRapFirmware)', () => {
     expect(gcode).not.toContain('SET_VELOCITY_LIMIT')
   })
 
-  it('caps the 100 mm/s Marlin corner at 4000 mm/s^2 end to end, keeping J in range', () => {
+  it('caps the 100 mm/s Marlin corner at 3000 mm/s^2 end to end, keeping J in range', () => {
     // Marlin's planner takes a 90 degree junction at v^2 = a * J * (sqrt(2) + 1), so a 100 mm/s
-    // corner would need J = 1.0355 mm, which Marlin rejects ("?J out of range") and then brakes
-    // the corner with the user's own J. The fit lowers the corner to 53.8 mm/s instead
-    // (0.29973 mm, printed as 0.300), and that one speed drives the limits, the header, the
+    // corner would need J = 1.3807 mm, which Marlin rejects ("?J out of range") and then brakes
+    // the corner with the user's own J. The fit lowers the corner to 46.6 mm/s instead
+    // (0.29983 mm, printed as 0.300), and that one speed drives the limits, the header, the
     // ladder's top rung feed, and the geometry the analysis reads.
     const marlin: PrinterProfile = { ...profile, firmware: 'Marlin' }
     const report = generateIsGcodeWithReport(marlin, filament, spec)
     const lines = report.gcode.split('\n')
     const j = lines.find((l) => l.startsWith('M205 J'))!
     expect(j).toBe('M205 J0.300')
-    expect(lines).toContain('M205 X53.8 Y53.8')
+    expect(lines).toContain('M205 X46.6 Y46.6')
     expect(lines).toContain(
-      '; corner-speed excitation ladder 20 to 53.8 mm/s across the 8 lines of each tier',
+      '; corner-speed excitation ladder 20 to 46.6 mm/s across the 8 lines of each tier',
     )
     expect(report.warnings).toContain(
-      "The corner speed was limited to 53.8 mm/s because Marlin's junction deviation cannot " +
-        'express a faster corner at 4000 mm/s^2.',
+      "The corner speed was limited to 46.6 mm/s because Marlin's junction deviation cannot " +
+        'express a faster corner at 3000 mm/s^2.',
     )
     // The emitted geometry is the capped coupon: every run-up cruise into its corner, and the
-    // top rung at exactly 53.8 mm/s (F3228), matches the geometry built from the capped spec.
-    const capped = { ...spec, cornerSpeedMmS: 53.8 }
+    // top rung at exactly 46.6 mm/s (F2796), matches the geometry built from the capped spec.
+    const capped = { ...spec, cornerSpeedMmS: 46.6 }
     const gc = isCouponGeometry(capped)
     const oxc = (profile.bedWidthMm - gc.couponWidthMm) / 2
     const oyc = (profile.bedDepthMm - gc.couponHeightMm) / 2
@@ -541,19 +541,19 @@ describe('generateIsGcodeWithReport (Marlin and RepRapFirmware)', () => {
           `E${(runUpLen(line, oxc, oyc) * ePerMm(nominal)).toFixed(5)} F${runUpFeed(line)}`
         expect(chunk, `line ${k}`).toContain(move)
       })
-      expect(Math.max(...group.lines.map((l) => l.cornerSpeedMmS))).toBeCloseTo(53.8, 9)
+      expect(Math.max(...group.lines.map((l) => l.cornerSpeedMmS))).toBeCloseTo(46.6, 9)
     }
-    expect(chunk.some((l) => l.endsWith(' F3228'))).toBe(true)
+    expect(chunk.some((l) => l.endsWith(' F2796'))).toBe(true)
   })
 
   it('uses RepRapFirmware commands for limits, disable, and restore', () => {
     const rrf: PrinterProfile = { ...profile, firmware: 'RepRapFirmware' }
     const gcode = generateIsGcodeWithReport(rrf, filament, spec).gcode
     expect(gcode).toContain('M203 X9000 Y9000') // velocity ceiling in mm/min
-    expect(gcode).toContain('M201 X4000 Y4000') // per-axis maximum acceleration, mm/s^2
-    expect(gcode).toContain('M204 P4000 T4000') // test limits
-    // No numeric restore: the restart note replaces the profile-value block.
-    expect(gcode).not.toContain('M204 P3000 T3000')
+    expect(gcode).toContain('M201 X3000 Y3000') // per-axis maximum acceleration, mm/s^2
+    // The test runs at the profile's own 3000 mm/s^2, set once; no numeric restore block
+    // re-applies it at the end, the restart note does.
+    expect(gcode.match(/^M204 .*$/gm)).toEqual(['M204 P3000 T3000'])
     // Per-axis jerk in mm/min: a 90 degree corner at 100 mm/s is a 100 mm/s per-axis
     // velocity change, 6000 mm/min.
     expect(gcode).toContain('M566 X6000 Y6000')
@@ -800,7 +800,7 @@ describe('validation and reporting', () => {
 describe('default G-code snapshot', () => {
   it('leaves the default G-code byte-identical to the pinned snapshot', () => {
     const fixture = readFileSync(
-      join(__dirname, '../../fixtures/is_nonsweep_default.gcode'),
+      join(__dirname, '../../fixtures/is_default.gcode'),
       'utf8',
     )
     expect(generateIsGcodeWithReport(profile, filament, spec).gcode).toBe(fixture)
