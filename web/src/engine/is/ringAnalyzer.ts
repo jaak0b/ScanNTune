@@ -41,7 +41,7 @@ import {
 import type { NullFit, RingRatio } from './ringLikelihood'
 import { defaultMaxArOrder } from '../correlatedNoise'
 import { MAD_TO_SIGMA, chiSquareSurvival, chiSquareSurvivalEvenDof, mad, median, normalQuantile } from '../math'
-import { tCdf } from '../studentT'
+import { tCdf, tQuantile } from '../studentT'
 
 // Detects and measures the ringing of one machine axis from its traced lines. The resonance is
 // one machine property shared by every line, so the lines share the nonlinear parameters while
@@ -545,6 +545,55 @@ function varproFit(
   }
 }
 
+/**
+ * The 95% profile-likelihood interval of the joint frequency (D. M. Bates and D. G. Watts,
+ * "Nonlinear Regression Analysis and Its Applications", Wiley 1988, s6.1): the frequencies whose
+ * profile t statistic sign(f - f_hat) sqrt(SSR(f) - SSR_min) / s stays within the Student t
+ * quantile t_(0.975, dof), with zeta and tau re-optimized at every fixed f. Unlike the
+ * linearization sigma^2 (J'J)^-1, it follows the actual shape of the least squares surface, which
+ * near the detection threshold is wider than its curvature at the optimum. Each side's end is
+ * bracketed from the linearized interval and found by bisection on the profile t statistic to a
+ * hundredth of the linearized standard error. Null when the linearized standard error is
+ * unavailable or a side leaves the search band.
+ */
+function profileFrequencyInterval(
+  bases: LineBasis[],
+  noises: LineNoise[],
+  joint: JointFit,
+  tauBounds: [number, number],
+): { lower: number; upper: number; critical: number } | null {
+  const wald = frequencySe(joint)
+  if (wald === null || !(joint.sigma2 > 0)) return null
+  const critical = tQuantile(0.975, joint.dof)
+  const s = Math.sqrt(joint.sigma2)
+  const profileT = (f: number): number => {
+    const fit = varproFit(bases, noises, [f, joint.dampingRatio, Math.log(joint.tauS)], [false, true, true], tauBounds)
+    return Math.sqrt(Math.max(0, fit.lm.ssr - joint.lm.ssr)) / s
+  }
+  const side = (direction: 1 | -1): number | null => {
+    let inside = joint.frequencyHz
+    let step = critical * wald
+    let outside = joint.frequencyHz + direction * step
+    for (;;) {
+      if (outside <= F_MIN_HZ || outside >= F_MAX_HZ) return null
+      if (profileT(outside) >= critical) break
+      inside = outside
+      step *= 2
+      outside = joint.frequencyHz + direction * step
+    }
+    while (Math.abs(outside - inside) > 0.01 * wald) {
+      const mid = 0.5 * (inside + outside)
+      if (profileT(mid) >= critical) outside = mid
+      else inside = mid
+    }
+    return 0.5 * (inside + outside)
+  }
+  const upper = side(1)
+  const lower = side(-1)
+  if (upper === null || lower === null) return null
+  return { lower, upper, critical }
+}
+
 /** Standard error of the frequency of a varpro fit whose first free parameter is f. */
 function frequencySe(fit: JointFit): number | null {
   if (!(fit.dof > 0)) return null
@@ -713,8 +762,9 @@ export function poolAxisFits(fits: LineFit[], speedsMmS: number[]): AxisPool {
     [true, true, true],
     tauBounds,
   )
-  const se = frequencySe(joint)
-  const ci95 = se !== null ? normalQuantile(0.975) * se : null
+  const interval = profileFrequencyInterval(inBases, noise1, joint, tauBounds)
+  const se = interval ? (interval.upper - interval.lower) / (2 * interval.critical) : null
+  const ci95 = interval ? Math.max(interval.upper - joint.frequencyHz, joint.frequencyHz - interval.lower) : null
   const designs1 = inBases.map((b, k) => nullDesign(b, noise1[k], joint.tauS))
   const rings = inBases.map((b, k) =>
     projectRing(b, noise1[k], designs1[k], joint.frequencyHz, joint.dampingRatio, ringScratch(b.m), new Float64Array(designs1[k].k), new Float64Array(designs1[k].k)),
