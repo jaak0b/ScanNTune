@@ -72,7 +72,9 @@ export function analyzeCouponCase(
   return poolCouponAxes([fits('x', x), fits('y', y)], spec.speedsMmS)
 }
 
-/** The production detection statistic Q at one grid point, over the lines `keep` selects. */
+/** The detection statistic Q at one grid point over the lines `keep` selects, with the flow-lag
+ *  null model (detectionStatisticAt): no pattern search and no corner-model choice, unlike the
+ *  production analysis, which may choose the bead-drag model. */
 export function statisticCase(
   spec: IsTestSpec,
   options: CaseOptions,
@@ -83,6 +85,26 @@ export function statisticCase(
 ): number {
   const lines = simulate(spec, options, seed).filter(keep)
   return detectionStatisticAt(lines.map((l) => analyzeTracedLine(l.trace)), frequencyHz, dampingRatio)
+}
+
+/**
+ * The counts a correct implementation stays within for `n` independent seeds that each succeed
+ * with probability `p`, failing with probability at most `tail` on each side: the smallest count
+ * whose binomial lower tail P(X <= count) exceeds `tail`, and the largest whose upper tail
+ * P(X >= count) does.
+ */
+export function binomialBounds(n: number, p: number, tail: number): { lower: number; upper: number } {
+  const pmf: number[] = []
+  let logTerm = n * Math.log(1 - p)
+  for (let k = 0; k <= n; k++) {
+    pmf.push(Math.exp(logTerm))
+    logTerm += Math.log((n - k) / (k + 1)) + Math.log(p / (1 - p))
+  }
+  let lower = 0
+  for (let below = pmf[0]; below <= tail && lower < n; below += pmf[++lower]);
+  let upper = n
+  for (let above = pmf[n]; above <= tail && upper > 0; above += pmf[--upper]);
+  return { lower, upper }
 }
 
 /** The noncentrality at which the noncentral chi2_dof exceeds `critical` with `power`: the
