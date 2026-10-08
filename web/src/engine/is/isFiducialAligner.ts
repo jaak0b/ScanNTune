@@ -283,14 +283,14 @@ function selectCandidateByContent(
     // The plate and its three corner fiducials were found and a geometrically valid
     // orientation was solved, but the printed run-up legs are not where the configured
     // geometry places them. The dominant cause is a coupon printed under different test
-    // settings than are configured now (most often a different number of lines per speed,
-    // which shifts every line and the whole field), so name that cause and its action.
+    // settings than are configured now: the speed tiers, the lines per speed tier and the line
+    // positions all derive from the line speed, the corner speed and the printer profile, so
+    // name those settings and the action.
     return fail(
-      'The coupon in the scan does not match the configured test settings. The plate and its ' +
-        'fiducial holes were found, but the printed lines are not where the current settings ' +
-        'place them, which usually means the coupon was printed with different settings, most ' +
-        'often a different number of lines per speed or speed tiers. Select the printer profile ' +
-        'and enter the test settings that generated this coupon, then analyze again.',
+      'The coupon in the scan does not match the configured test settings. Select the printer ' +
+        'profile and enter the line speed and corner speed this coupon was printed with, then ' +
+        'analyze again. The fiducial holes were found, but the lines per speed tier and their ' +
+        'positions, which follow from those settings, differ from the print.',
       4,
       candidates[best],
     )

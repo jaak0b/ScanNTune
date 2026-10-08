@@ -63,18 +63,19 @@ export const IS_OVERRIDDEN_SETTINGS: readonly OverriddenSetting[] = couponOverri
 ])
 
 /**
- * The high-flow warnings of a fitted spec: one per speed tier whose measured lines exceed the
- * flow limit. Judged on the measured layers' nominal bead, extrusion multiplier included.
+ * The high-flow warning of a fitted spec, judged at its fastest speed tier, the line speed: every
+ * tier prints the same bead, so a slower tier exceeds the flow limit only when the fastest one
+ * does. Judged on the measured layers' nominal bead, extrusion multiplier included; null when
+ * the flow stays within the limit.
  */
-export function isFlowWarnings(
+export function isFlowWarning(
   profile: PrinterProfile,
   filament: FilamentProfile,
   fitted: IsTestSpec,
-): string[] {
+): string | null {
   const nominal = profile.nozzleDiameterMm * NOMINAL_WIDTH_FACTOR
-  return fitted.speedsMmS
-    .map((speed) => highFlowWarning(profile, filament, nominal, speed, 'line speed'))
-    .filter((w): w is string => w !== null)
+  const lineSpeed = Math.max(...fitted.speedsMmS)
+  return highFlowWarning(profile, filament, nominal, lineSpeed, `${lineSpeed} mm/s line speed`)
 }
 
 export function generateIsGcode(
@@ -116,7 +117,8 @@ export function generateIsGcodeWithReport(
   warnings.push(...rampWarnings(fitted))
   const bandTop = bandTopWarning(fitted, profile)
   if (bandTop !== null) warnings.push(bandTop)
-  warnings.push(...isFlowWarnings(profile, filament, fitted))
+  const flow = isFlowWarning(profile, filament, fitted)
+  if (flow !== null) warnings.push(flow)
 
   return { gcode: emitIsGcode(substituted, substitutedFilament, fitted), unknownVariables, warnings }
 }

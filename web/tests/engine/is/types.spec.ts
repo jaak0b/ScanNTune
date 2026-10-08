@@ -171,8 +171,8 @@ describe('derived lines per speed (bead followability on the slower tier)', () =
 describe('fitSpecToPrinter speed tiers', () => {
   const SLOW_TIER_NOTE =
     'The 19 mm/s speed tier was removed because it is slower than the 20 mm/s lowest corner ' +
-    'speed. With one tier, the analysis cannot tell print and scan patterns apart from ' +
-    'ringing. Raise the line speed to at least 29 mm/s to keep both tiers.'
+    'speed. With one speed tier, the analysis cannot tell print and scan patterns apart from ' +
+    'ringing. Raise the line speed to at least 29 mm/s to keep both speed tiers.'
 
   it('drops the slower tier of a 28 mm/s line speed, below the 20 mm/s bottom rung, and says so', () => {
     // 28 / 1.407282 = 19.90 -> 19 mm/s; the smallest line speed with a 20 mm/s slower tier
@@ -275,7 +275,7 @@ describe('fitSpecToPrinter bed fit', () => {
     expect(spec.linesPerSpeed).toBe(4)
     expect(spec.measuredLineMm).toBe(25)
     expect(notes).toEqual([
-      'The lines per speed were reduced from 5 to 4 so the coupon fits the configured bed.',
+      'The lines per speed tier were reduced from 5 to 4 so the coupon fits the configured bed.',
       'The measured lines were shortened from 30 mm to 25 mm so the coupon fits the configured bed.',
     ])
   })
@@ -288,8 +288,8 @@ describe('fitSpecToPrinter bed fit', () => {
     expect(spec.measuredLineMm).toBe(23)
     expect(notes).toEqual([
       'The 106 mm/s speed tier was removed so the coupon fits the configured bed. With one ' +
-        'tier, the analysis cannot tell print and scan patterns apart from ringing.',
-      'The lines per speed were reduced from 5 to 4 so the coupon fits the configured bed.',
+        'speed tier, the analysis cannot tell print and scan patterns apart from ringing.',
+      'The lines per speed tier were reduced from 5 to 4 so the coupon fits the configured bed.',
       'The measured lines were shortened from 30 mm to 23 mm so the coupon fits the configured bed.',
     ])
     const g = isCouponGeometry(spec)

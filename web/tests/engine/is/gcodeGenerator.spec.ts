@@ -547,11 +547,25 @@ describe('generateIsGcodeWithReport (Klipper)', () => {
     })
     // 200 mm/s x 0.07541592 mm^2 (the 0.42 x 0.2 mm rounded bead) = 15.08 mm^3/s, hand-derived.
     expect(fast.warnings).toContain(
-      "Lower the line speed, or raise the filament's max volumetric flow only if the hotend " +
-        'can melt 15.1 mm^3/s. Above the 12 mm^3/s a typical hotend melts, the lines ' +
+      "Lower the 200 mm/s line speed, or raise the filament's max volumetric flow only if the " +
+        'hotend can melt 15.1 mm^3/s. Above the 12 mm^3/s a typical hotend melts, the lines ' +
         'under-extrude.',
     )
     expect(fast.gcode).toContain('F12000')
+  })
+
+  it('warns once, at the line speed, when both speed tiers exceed the flow limit', () => {
+    // A 5 mm^3/s filament limit sits below both default tiers: 106 x 0.07541592 mm^2 = 7.99 and
+    // 150 x 0.07541592 mm^2 = 11.31 mm^3/s (the 0.42 x 0.2 mm rounded bead), hand-derived.
+    const weak = { ...filament, maxVolumetricFlowMm3S: 5 }
+    const flowWarnings = generateIsGcodeWithReport(profile, weak, spec).warnings.filter((w) =>
+      w.includes('mm^3/s'),
+    )
+    expect(flowWarnings).toEqual([
+      "Lower the 150 mm/s line speed, or raise the filament's max volumetric flow only if the " +
+        "hotend can melt 11.3 mm^3/s. Above the filament's 5 mm^3/s max volumetric flow, the " +
+        'lines under-extrude.',
+    ])
   })
 })
 
@@ -775,8 +789,8 @@ describe('validation and reporting', () => {
     expect(r.gcode.split('\n')[1]).toBe('; speed tiers 28 mm/s, acceleration 3000 mm/s^2')
     expect(r.warnings).toContain(
       'The 19 mm/s speed tier was removed because it is slower than the 20 mm/s lowest corner ' +
-        'speed. With one tier, the analysis cannot tell print and scan patterns apart from ' +
-        'ringing. Raise the line speed to at least 29 mm/s to keep both tiers.',
+        'speed. With one speed tier, the analysis cannot tell print and scan patterns apart from ' +
+        'ringing. Raise the line speed to at least 29 mm/s to keep both speed tiers.',
     )
   })
 
@@ -867,9 +881,9 @@ describe('filament flow settings', () => {
     expect(
       generateIsGcodeWithReport(profile, { ...limited, extrusionMultiplier: 1.2 }, spec).warnings,
     ).toContain(
-      "Lower the line speed, or raise the filament's max volumetric flow only if the hotend " +
-        "can melt 13.6 mm^3/s. Above the filament's 13 mm^3/s max volumetric flow, the lines " +
-        'under-extrude.',
+      "Lower the 150 mm/s line speed, or raise the filament's max volumetric flow only if the " +
+        "hotend can melt 13.6 mm^3/s. Above the filament's 13 mm^3/s max volumetric flow, the " +
+        'lines under-extrude.',
     )
   })
 })

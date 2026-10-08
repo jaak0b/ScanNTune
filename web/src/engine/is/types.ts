@@ -367,7 +367,7 @@ export function fitSpecToPrinter(
 }
 
 const ONE_TIER_CONSEQUENCE =
-  'With one tier, the analysis cannot tell print and scan patterns apart from ringing.'
+  'With one speed tier, the analysis cannot tell print and scan patterns apart from ringing.'
 
 /**
  * The request with its slower tier removed, keeping the line speed, and the user-worded note
@@ -401,7 +401,7 @@ function fitTiersToLadder(request: IsTestRequest): { request: IsTestRequest; not
   return {
     request: oneTier.request,
     notes: [
-      `${oneTier.note} Raise the line speed to at least ${MIN_TWO_TIER_LINE_SPEED_MM_S} mm/s to keep both tiers.`,
+      `${oneTier.note} Raise the line speed to at least ${MIN_TWO_TIER_LINE_SPEED_MM_S} mm/s to keep both speed tiers.`,
     ],
   }
 }
@@ -459,7 +459,7 @@ function fitSpecToBed(
       if (read === null) continue
       const notes: string[] = []
       if (n < derivedLines) {
-        notes.push(`The lines per speed were reduced from ${derivedLines} to ${n} ${BED_FIT_REASON}`)
+        notes.push(`The lines per speed tier were reduced from ${derivedLines} to ${n} ${BED_FIT_REASON}`)
       }
       if (read < request.measuredLineMm) {
         notes.push(

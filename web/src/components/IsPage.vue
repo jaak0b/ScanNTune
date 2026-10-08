@@ -23,7 +23,7 @@ import type { IsProcessing } from '../workerClient'
 import {
   generateIsGcodeWithReport,
   IS_OVERRIDDEN_SETTINGS,
-  isFlowWarnings,
+  isFlowWarning,
 } from '../engine/is/gcodeGenerator'
 import { unresolvedVariablesWarning } from '../engine/pa/slicerVariables'
 import { restartNoteText } from '../engine/gcode/couponShell'
@@ -154,14 +154,15 @@ const fittedSpec = computed(() => (fitted.value && 'spec' in fitted.value ? fitt
 const fitNotes = computed(() => (fitted.value && 'notes' in fitted.value ? fitted.value.notes : []))
 
 const tiersText = computed(() =>
-  fittedSpec.value ? `speeds ${fittedSpec.value.speedsMmS.join(' / ')} mm/s` : '',
+  fittedSpec.value ? `speed tiers ${fittedSpec.value.speedsMmS.join(' / ')} mm/s` : '',
 )
 const linesText = computed(() =>
-  fittedSpec.value ? `${fittedSpec.value.linesPerSpeed} lines per speed` : '',
+  fittedSpec.value ? `${fittedSpec.value.linesPerSpeed} lines per speed tier` : '',
 )
-// The fastest corner proven clean on a tested printer; above it the page warns.
-const fastCornerWarning = computed(() =>
-  cornerSpeed.value !== null && cornerSpeed.value > DEFAULT_CORNER_SPEED_MM_S,
+// Corner speeds above the default are untested, so the page warns above it. It judges the corner
+// speed the coupon prints, which the firmware fit may have lowered below the entered one.
+const fastCornerWarning = computed(
+  () => fittedSpec.value !== null && fittedSpec.value.cornerSpeedMmS > DEFAULT_CORNER_SPEED_MM_S,
 )
 const footprintText = computed(() => {
   if (!fittedSpec.value) return ''
@@ -181,16 +182,18 @@ const accelNote = computed(() =>
     ? `The test accelerates at the profile's ${fittedSpec.value.accelMmS2} mm/s^2 print acceleration.`
     : '',
 )
-// The generator's own flow warnings for the fitted spec, judged like the other flows against
-// the selected profile and filament, or the defaults while none is selected.
+// The generator's own flow warning for the fitted spec, at its line speed, judged like the other
+// flows against the selected profile and filament, or the defaults while none is selected.
 const highFlowText = computed(() => {
   const s = fittedSpec.value
   if (!s) return ''
-  return isFlowWarnings(
-    store.selected ?? defaultPrinterProfile(),
-    store.selectedFilament ?? defaultFilamentProfile(),
-    s,
-  ).join(' ')
+  return (
+    isFlowWarning(
+      store.selected ?? defaultPrinterProfile(),
+      store.selectedFilament ?? defaultFilamentProfile(),
+      s,
+    ) ?? ''
+  )
 })
 
 const generateError = ref('')
@@ -468,9 +471,11 @@ async function analyze(): Promise<void> {
           <strong>Lower the corner speed if the print shows a layer shift.</strong>
         </p>
         <p class="tip mb-0" data-testid="is-ladder-tip">
-          Each tier's lines take their corners at speeds rising from
+          The speed tiers are the line speed and a slower speed derived from it. In each speed
+          tier, the lines take their corners at speeds rising from
           {{ MIN_CORNER_SPEED_MM_S }} mm/s to the corner speed, and the fastest corners print
-          last. At each corner of a CoreXY printer, one motor reverses at twice the corner speed.
+          last. At each corner of a CoreXY printer, the velocity of one motor changes by twice the
+          corner speed.
         </p>
         <v-alert
           v-if="fastCornerWarning"
@@ -481,8 +486,8 @@ async function analyze(): Promise<void> {
           data-testid="is-fast-corner-warning"
         >
           Watch the last lines of the print for a layer shift, because they carry the fastest
-          corners. Corner speeds above {{ DEFAULT_CORNER_SPEED_MM_S }} mm/s skipped steps on a
-          tested CoreXY printer.
+          corners. Corner speeds above {{ DEFAULT_CORNER_SPEED_MM_S }} mm/s are untested and can
+          make the motors skip steps.
         </v-alert>
         <v-alert
           v-if="highFlowText"
@@ -724,9 +729,12 @@ async function analyze(): Promise<void> {
       <p v-if="!isCalibrated" class="tip" data-testid="is-scan-needs-calibration">
         Calibrate the scanner in step 1 to enable the analysis.
       </p>
-      <p v-if="!fittedSpec" class="tip" data-testid="is-scan-needs-speeds">
+      <p v-if="speedsMissing" class="tip" data-testid="is-scan-needs-speeds">
         Enter the line speed and corner speed the coupon was printed with in step 3 to enable
         the analysis.
+      </p>
+      <p v-else-if="fitError" class="tip" data-testid="is-scan-fit-error">
+        Correct the test settings in step 3 to enable the analysis. {{ fitError }}
       </p>
       <div class="gen-row">
         <v-btn
