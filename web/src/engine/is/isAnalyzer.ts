@@ -9,7 +9,7 @@ import type { BackdropAssessment } from '../measurementBackdrop'
 import { imageDirection, measuredDirection, traceGroup, tracedSpanPx } from './lineTracer'
 import { analyzeTracedLine, poolAxisFits } from './ringAnalyzer'
 import { layerShiftDetected } from './layerShift'
-import { recommendShapers } from './shaperRecommender'
+import { recommendShapers, recommendShapersForModes, zvResidualAtMode } from './shaperRecommender'
 import type { IsAxisResult, IsLineOutcome, IsResult, IsScanInfo } from './resultTypes'
 import { sampleBgrTriples, selectMeasurementChannel } from '../cvUtils'
 import { evaluateScanSetResolution } from '../resolutionGate'
@@ -297,6 +297,9 @@ function refusedAxis(
     replicateCheck: 'not-assessed',
     influenceCheck: 'not-assessed',
     layerShiftDetected: null,
+    secondModePBound: null,
+    secondMode: null,
+    zvSecondModeResidual: null,
     linesUsed: 0,
     linesTraced,
     scanIndex,
@@ -507,11 +510,14 @@ function measureGroup(
     return r
   }
 
-  const recommendation = recommendShapers(
-    pool.frequencyHz!,
-    pool.dampingRatio!,
-    pool.frequencyCi95Hz ?? 0,
-  )
+  // A second mode that grows with the corner speed shapes the spectrum the shaper must cover; a
+  // steady tone next to the ring does not.
+  const dominant = { frequencyHz: pool.frequencyHz!, dampingRatio: pool.dampingRatio!, amplitudeMm: pool.amplitudeMm ?? 0 }
+  const second = pool.secondMode !== null && pool.secondMode.proportionality !== 'failed' ? pool.secondMode : null
+  const recommendation =
+    second !== null
+      ? recommendShapersForModes([dominant, second])
+      : recommendShapers(pool.frequencyHz!, pool.dampingRatio!, pool.frequencyCi95Hz ?? 0)
   return {
     axis: group.axis,
     accepted: true,
@@ -522,6 +528,9 @@ function measureGroup(
     frequencySeHz: pool.frequencySeHz,
     ...checks,
     amplitudeMm: pool.amplitudeMm,
+    secondModePBound: pool.secondModePBound,
+    secondMode: pool.secondMode,
+    zvSecondModeResidual: second !== null ? zvResidualAtMode(dominant, second) : null,
     linesUsed: pool.linesUsed,
     linesTraced: tracedIndices.length,
     scanIndex,

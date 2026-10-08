@@ -181,6 +181,30 @@ describe('poolAxisFits estimation', () => {
     expect(Math.abs(p.frequencyHz! - 60)).toBeLessThan(0.3)
   })
 
+  it('reports a second mode next to the dominant one', () => {
+    // Modes at 45 Hz (0.03 mm) and 62 Hz (0.02 mm): the fitted modes' standard errors are about
+    // 0.13 and 0.45 Hz, so 0.5 Hz and 1.5 Hz are more than three of them.
+    const p = pool(
+      twoTier,
+      simulate(twoTier, {
+        noise: IID,
+        ring: { frequencyHz: 45, dampingRatio: 0.05, ampMm: 0.03 },
+        extraModes: [{ frequencyHz: 62, dampingRatio: 0.05, ampMm: 0.02 }],
+      }),
+    )
+    expect(p.accepted).toBe(true)
+    expect(Math.abs(p.frequencyHz! - 45)).toBeLessThan(0.5)
+    expect(p.secondModePBound!).toBeLessThanOrEqual(0.001)
+    expect(Math.abs(p.secondMode!.frequencyHz - 62)).toBeLessThan(1.5)
+    expect(p.secondMode!.proportionality).toBe('passed')
+  })
+
+  it('finds no second mode next to a single mode', () => {
+    const p = pool(twoTier, simulate(twoTier, { noise: IID, ring: { frequencyHz: 60, dampingRatio: 0.05, ampMm: 0.03 } }))
+    expect(p.secondModePBound!).toBeGreaterThan(0.001)
+    expect(p.secondMode).toBeNull()
+  })
+
   it('handles unread samples without biasing the frequency', () => {
     const p = pool(
       twoTier,

@@ -256,3 +256,138 @@ export function formatRrfShaper(option: ShaperOption): string {
   }
   return `M593 P"${typeMap[option.type]}" F${option.frequencyHz.toFixed(1)}`
 }
+
+// Shaper selection for an axis with more than one mode, following Klipper's shaper_calibrate.py
+// (fit_shaper and find_best_shaper) on a spectrum synthesized from the fitted modes instead of an
+// accelerometer's: each shaper type is designed at Klipper's default damping ratio over its test
+// frequencies, its remaining vibration is the share of the spectrum above the 1/20 floor that the
+// shaper leaves, pessimized over Klipper's test damping ratios, and its score weighs that against
+// the corner smoothing.
+
+/** A fitted mode of an axis: the source of its synthesized spectrum. */
+export interface ModeComponent {
+  frequencyHz: number
+  dampingRatio: number
+  /** The mode's ring amplitude, mm (only the modes' ratio matters). */
+  amplitudeMm: number
+}
+
+/** Klipper shaper_defs.DEFAULT_DAMPING_RATIO: the damping each shaper is designed at. */
+const KLIPPER_DESIGN_DAMPING = 0.1
+/** Klipper shaper_calibrate.TEST_DAMPING_RATIOS: the remaining vibration is the worst of these. */
+const KLIPPER_TEST_DAMPING = [0.075, 0.1, 0.15]
+/** Klipper shaper_defs.MAX_SHAPER_FREQ and each shaper's min_freq, Hz. */
+const KLIPPER_MAX_SHAPER_FREQ_HZ = 150
+const KLIPPER_MIN_FREQ_HZ: Record<ShaperType, number> = { ZV: 21, MZV: 23, EI: 29, '2HUMP_EI': 39, '3HUMP_EI': 48 }
+/** Klipper's test frequency step, Hz. */
+const KLIPPER_FREQ_STEP_HZ = 0.2
+/** Klipper shaper_calibrate.MAX_FREQ: the spectrum is read up to this frequency, Hz. */
+const KLIPPER_MAX_FREQ_HZ = 200
+/** The acceleration Klipper's score evaluates the smoothing at, mm/s^2 (_get_shaper_smoothing). */
+const KLIPPER_SCORE_ACCEL_MM_S2 = 5000
+/** Spectrum bin width of the synthesized spectrum, Hz: half of Klipper's 0.5 s window bins, so
+ *  every mode's peak spans several bins. */
+const SPECTRUM_BIN_HZ = 0.5
+
+/**
+ * The acceleration power spectrum of the modes' free responses at the given frequencies: each
+ * mode a e^(-zeta w t) cos(w_d t) has the Lorentzian power a^2 / 4 / ((zeta w)^2 + (2 pi f - w_d)^2)
+ * of its positive-frequency line (its negative-frequency image is negligible in the band), times
+ * (2 pi f)^4 for acceleration; the modes add incoherently.
+ */
+export function modeSpectrum(modes: ModeComponent[], frequenciesHz: number[]): number[] {
+  return frequenciesHz.map((f) => {
+    const w = 2 * Math.PI * f
+    let power = 0
+    for (const mode of modes) {
+      const w0 = 2 * Math.PI * mode.frequencyHz
+      const wd = w0 * Math.sqrt(1 - mode.dampingRatio * mode.dampingRatio)
+      const sigma = mode.dampingRatio * w0
+      power += (mode.amplitudeMm * mode.amplitudeMm) / 4 / (sigma * sigma + (w - wd) * (w - wd))
+    }
+    return power * w ** 4
+  })
+}
+
+/** Klipper's _estimate_remaining_vibrations: the share of the spectrum above psd.max / 20 left. */
+function remainingVibrations(impulses: ShaperImpulses, dampingRatio: number, freqs: number[], psd: number[]): number {
+  const floor = Math.max(...psd) * VIBRATION_TOLERANCE
+  let remaining = 0
+  let all = 0
+  freqs.forEach((f, i) => {
+    remaining += Math.max(residualVibration(impulses, f, dampingRatio) * psd[i] - floor, 0)
+    all += Math.max(psd[i] - floor, 0)
+  })
+  return all > 0 ? remaining / all : 0
+}
+
+interface FittedShaper {
+  option: ShaperOption
+  score: number
+  smoothingAtScore: number
+}
+
+/** Klipper's fit_shaper for one type: the frequency with the least remaining vibration, then the
+ *  one scoring best among those within 10% (plus 0.0005) of it. */
+function fitShaper(type: ShaperType, freqs: number[], psd: number[]): FittedShaper {
+  const results: FittedShaper[] = []
+  let best: FittedShaper | null = null
+  const steps = Math.floor((KLIPPER_MAX_SHAPER_FREQ_HZ - KLIPPER_MIN_FREQ_HZ[type]) / KLIPPER_FREQ_STEP_HZ + 1e-9)
+  for (let s = steps; s >= 0; s--) {
+    const testFreq = KLIPPER_MIN_FREQ_HZ[type] + s * KLIPPER_FREQ_STEP_HZ
+    const impulses = shaperImpulses(type, testFreq, KLIPPER_DESIGN_DAMPING)
+    const vibrations = Math.max(...KLIPPER_TEST_DAMPING.map((dr) => remainingVibrations(impulses, dr, freqs, psd)))
+    const smoothing = shaperSmoothingMm(impulses, KLIPPER_SCORE_ACCEL_MM_S2)
+    const maxAccel = shaperMaxAccel(impulses)
+    const score = smoothing * (vibrations ** 1.5 + vibrations * 0.2 + 0.01)
+    const result: FittedShaper = {
+      option: {
+        type,
+        frequencyHz: testFreq,
+        bandResidualVibration: vibrations,
+        maxAccelMmS2: maxAccel,
+        smoothingMm: shaperSmoothingMm(impulses, maxAccel),
+      },
+      score,
+      smoothingAtScore: smoothing,
+    }
+    results.push(result)
+    if (best === null || best.option.bandResidualVibration > vibrations) best = result
+  }
+  let selected = best!
+  for (let i = results.length - 1; i >= 0; i--) {
+    const r = results[i]
+    if (r.option.bandResidualVibration < best!.option.bandResidualVibration * 1.1 + 0.0005 && r.score < selected.score) selected = r
+  }
+  return selected
+}
+
+/**
+ * All shaper types fitted to an axis with several modes, plus Klipper's choice among them: a
+ * shaper replaces the current best when its score is 20% lower, or 5% lower with 10% less
+ * smoothing (find_best_shaper). Each option's bandResidualVibration is the remaining vibration
+ * over the synthesized spectrum.
+ */
+export function recommendShapersForModes(modes: ModeComponent[]): ShaperRecommendation {
+  const freqs: number[] = []
+  for (let f = SPECTRUM_BIN_HZ; f <= KLIPPER_MAX_FREQ_HZ + 1e-9; f += SPECTRUM_BIN_HZ) freqs.push(f)
+  const psd = modeSpectrum(modes, freqs)
+  const fitted = SHAPER_TYPES.map((type) => fitShaper(type, freqs, psd))
+  let best: FittedShaper | null = null
+  for (const f of fitted) {
+    if (
+      best === null ||
+      f.score * 1.2 < best.score ||
+      (f.score * 1.05 < best.score && f.smoothingAtScore * 1.1 < best.smoothingAtScore)
+    ) {
+      best = f
+    }
+  }
+  return { options: fitted.map((f) => f.option), recommended: best!.option }
+}
+
+/** The residual vibration a ZV shaper at the dominant mode leaves at another mode (Marlin
+ *  implements ZV only), as a fraction. */
+export function zvResidualAtMode(dominant: ModeComponent, other: ModeComponent): number {
+  return residualVibration(shaperImpulses('ZV', dominant.frequencyHz, dominant.dampingRatio), other.frequencyHz, other.dampingRatio)
+}

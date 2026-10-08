@@ -56,6 +56,25 @@ export function driftBasis(tS: Float64Array): Float64Array[] {
   return basis
 }
 
+/**
+ * The raw ring columns of a mode at each sample time: e^(-zeta w t) cos(w_d t) and
+ * e^(-zeta w t) sin(w_d t), w = 2 pi f, w_d = w sqrt(1 - zeta^2). A fitted mode enters another
+ * mode's null design through them.
+ */
+export function ringColumns(tS: Float64Array, frequencyHz: number, dampingRatio: number): Float64Array[] {
+  const omega = 2 * Math.PI * frequencyHz
+  const sr = -omega * dampingRatio
+  const si = omega * Math.sqrt(Math.max(0, 1 - dampingRatio * dampingRatio))
+  const re = new Float64Array(tS.length)
+  const im = new Float64Array(tS.length)
+  for (let i = 0; i < tS.length; i++) {
+    const e = Math.exp(sr * tS[i])
+    re[i] = e * Math.cos(si * tS[i])
+    im[i] = e * Math.sin(si * tS[i])
+  }
+  return [re, im]
+}
+
 /** The commanded motion after a line's corner: corner speed c, tier speed v, acceleration a. */
 export interface CommandedMotion {
   cornerSpeedMmS: number

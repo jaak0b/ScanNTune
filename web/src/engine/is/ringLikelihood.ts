@@ -3,7 +3,7 @@ import type { ArFit } from '../correlatedNoise'
 import { nullDesign, noiseModel, projectRing, ringScratch } from './ringGls'
 import type { LineBasis, LineNoise, NullDesign, RingProjection } from './ringGls'
 import { F_MAX_HZ, F_MIN_HZ } from './types'
-import { FREQUENCY_GRID_HZ, flowDeficit } from './ringRegressors'
+import { FREQUENCY_GRID_HZ, flowDeficit, ringColumns } from './ringRegressors'
 
 // The generalized likelihood ratio test (GLRT) of a ring at one point theta = (f, zeta) of one
 // traced line, with the AR noise model refitted under each hypothesis (S. M. Kay, "Fundamentals of
@@ -65,6 +65,8 @@ export interface NullFit extends HypothesisFit {
   tauS: number
   /** The flow-lag deficit g(t) of the variance function at tauS, per observed sample. */
   deficit: Float64Array
+  /** The raw ring columns of modes already fitted, part of the null design of both hypotheses. */
+  fixedColumns: Float64Array[]
   /** The Bartlett factor (m - k1 - p) / m the line's ratios are scaled by. */
   bartlett: number
 }
@@ -115,9 +117,10 @@ function evaluate(
   deficit: Float64Array,
   tauS: number,
   point: RingPoint | null,
+  fixedColumns: Float64Array[],
 ): HypothesisFit {
   const noise = noiseModel(basis, unitModel(shape.coefficients), shape.varianceSlope, deficit)
-  const design = nullDesign(basis, noise, tauS)
+  const design = nullDesign(basis, noise, tauS, fixedColumns)
   return alternativeWith(basis, noise, design, point)
 }
 
@@ -177,10 +180,11 @@ function iterate(
   deficit: Float64Array,
   tauS: number,
   point: RingPoint | null,
+  fixedColumns: Float64Array[],
 ): HypothesisFit {
   let best = start
   for (let k = 0; k < MAX_REFITS; k++) {
-    const next = evaluate(basis, refitShape(basis, best, order), deficit, tauS, point)
+    const next = evaluate(basis, refitShape(basis, best, order), deficit, tauS, point, fixedColumns)
     const gain = best.deviance - next.deviance
     if (gain > 0) best = next
     if (!(gain > DEVIANCE_TOLERANCE)) break
@@ -191,15 +195,30 @@ function iterate(
 /**
  * The null fit of a line at the flow-lag time constant tauS and the axis's variance slope: the AR
  * order of `initial` (chosen by AICc on the ordinary least squares residual), the AR refitted by
- * iterated Cochrane-Orcutt.
+ * iterated Cochrane-Orcutt. `fixedModes` are modes already fitted, whose ring columns join the
+ * null design (sequential detection of a further mode).
  */
-export function nullHypothesisFit(basis: LineBasis, initial: ArFit, tauS: number, varianceSlope = 0): NullFit {
+export function nullHypothesisFit(
+  basis: LineBasis,
+  initial: ArFit,
+  tauS: number,
+  varianceSlope = 0,
+  fixedModes: RingPoint[] = [],
+): NullFit {
   const order = initial.coefficients.length
   const deficit = flowDeficit(basis.rec.tS, basis.rec, tauS)
-  const start = evaluate(basis, { coefficients: initial.coefficients, varianceSlope }, deficit, tauS, null)
-  const fit = iterate(basis, start, order, deficit, tauS, null)
+  const fixedColumns = fixedModes.flatMap((p) => ringColumns(basis.rec.tS, p.frequencyHz, p.dampingRatio))
+  const start = evaluate(basis, { coefficients: initial.coefficients, varianceSlope }, deficit, tauS, null, fixedColumns)
+  const fit = iterate(basis, start, order, deficit, tauS, null, fixedColumns)
   const m = basis.m
-  return { ...fit, order, tauS, deficit, bartlett: (m - fit.design.k - 2 - order - (varianceSlope !== 0 ? 1 : 0)) / m }
+  return {
+    ...fit,
+    order,
+    tauS,
+    deficit,
+    fixedColumns,
+    bartlett: (m - fit.design.k - 2 - order - (varianceSlope !== 0 ? 1 : 0)) / m,
+  }
 }
 
 /**
@@ -216,10 +235,10 @@ export function ringLikelihoodRatio(
   let start = alternativeWith(basis, h0.noise, h0.design, point)
   for (const s of starts) {
     if (s.coefficients.length !== h0.order) continue
-    const candidate = evaluate(basis, { coefficients: s.coefficients, varianceSlope: h0.noise.varianceSlope }, h0.deficit, h0.tauS, point)
+    const candidate = evaluate(basis, { coefficients: s.coefficients, varianceSlope: h0.noise.varianceSlope }, h0.deficit, h0.tauS, point, h0.fixedColumns)
     if (candidate.deviance < start.deviance) start = candidate
   }
-  const fit = iterate(basis, start, h0.order, h0.deficit, h0.tauS, point)
+  const fit = iterate(basis, start, h0.order, h0.deficit, h0.tauS, point, h0.fixedColumns)
   return { statistic: h0.bartlett * Math.max(0, h0.deviance - fit.deviance), fit }
 }
 

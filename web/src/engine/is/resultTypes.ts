@@ -1,6 +1,6 @@
 import type { IsAxis } from './types'
 import type { ShaperOption } from './shaperRecommender'
-import type { LineFitRefusalCategory, LineJointExclusion } from './ringAnalyzer'
+import type { LineFitRefusalCategory, LineJointExclusion, SecondMode } from './ringAnalyzer'
 
 /**
  * Why a line was left out of the axis's joint fit, as a category the UI can count and label:
@@ -128,6 +128,16 @@ export interface IsAxisResult {
   /** Median over every line in the joint fit of that line's ring amplitude at the start of
    *  its fit window (the start of the free ringdown), mm (diagnostic). */
   amplitudeMm: number | null
+  /** Bonferroni bound of the search for a second mode with the first one in the null design;
+   *  null when the axis was refused. */
+  secondModePBound: number | null
+  /** The axis's second mode when the search detected one; the axis's own frequency and damping
+   *  are then the dominant mode's. Its proportionality 'failed' marks a steady tone, which the
+   *  shaper selection ignores. */
+  secondMode: SecondMode | null
+  /** The residual vibration Marlin's ZV shaper at the dominant mode leaves at the second mode, as
+   *  a fraction; null without a second mode. */
+  zvSecondModeResidual: number | null
   linesUsed: number
   linesTraced: number
   /** Index of the scan (0 or 1) the axis was measured from; null when neither qualified. */

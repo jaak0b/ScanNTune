@@ -84,6 +84,8 @@ export interface NullDesign {
   ssr: number
   /** The flow-lag columns (raw) at this tau. */
   lagRaw: Float64Array[]
+  /** Further raw null columns (the ring columns of modes already fitted). */
+  extraRaw: Float64Array[]
 }
 
 const DEPENDENT_COLUMN = 1e-10
@@ -295,16 +297,16 @@ export function pooledVarianceSlope(
   return { slope: b, statistic: Math.max(0, atZero - value) }
 }
 
-/** The whitened null design of a line at tau. */
-export function nullDesign(line: LineBasis, noise: LineNoise, tauS: number): NullDesign {
+/** The whitened null design of a line at tau, with optional further raw null columns. */
+export function nullDesign(line: LineBasis, noise: LineNoise, tauS: number, extraRaw: Float64Array[] = []): NullDesign {
   const lagRaw = flowLagColumns(line.rec.tS, line.rec, tauS)
-  const Q = noise.wDriftQ.concat(orthonormalBasis(lagRaw.map((c) => noise.whiten(c)), noise.wDriftQ))
+  const Q = noise.wDriftQ.concat(orthonormalBasis([...lagRaw, ...extraRaw].map((c) => noise.whiten(c)), noise.wDriftQ))
   const k = Q.length
   const m = line.m
   const qRows = new Float64Array(m * k)
   for (let j = 0; j < k; j++) for (let i = 0; i < m; i++) qRows[i * k + j] = Q[j][i]
   const yr = residualize(noise.wY, Q)
-  return { qRows, k, yr, ssr: dot(yr, yr), lagRaw }
+  return { qRows, k, yr, ssr: dot(yr, yr), lagRaw, extraRaw }
 }
 
 /** Scratch arrays for one line's ring columns (raw z and whitened w, real and imaginary). */
@@ -528,7 +530,7 @@ export function rawFullResidual(
   const m = line.m
   const target = new Float64Array(m)
   for (let i = 0; i < m; i++) target[i] = noise.wY[i] - ring.a * scratch.wr[i] - ring.b * scratch.wi[i]
-  const rawColumns = [...line.drift, ...design.lagRaw]
+  const rawColumns = [...line.drift, ...design.lagRaw, ...design.extraRaw]
   const beta = generalizedLeastSquares(rawColumns.map((c) => noise.whiten(c)), target)
   const residual = new Float64Array(m)
   for (let i = 0; i < m; i++) {

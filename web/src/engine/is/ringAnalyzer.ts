@@ -15,6 +15,7 @@ import {
   ZETA_MAX,
   driftBasis,
   flowDeficit,
+  ringColumns,
 } from './ringRegressors'
 import {
   fitNoise,
@@ -33,7 +34,7 @@ import {
   ringScratch,
   solveSymmetric,
 } from './ringGls'
-import type { LineBasis, LineNoise, LineRecord, LmResult, NullDesign } from './ringGls'
+import type { LineBasis, LineNoise, LineRecord, LmResult, NullDesign, RingProjection } from './ringGls'
 import {
   cruiseSampleIntervalS,
   heldNoiseStatistic,
@@ -169,6 +170,19 @@ export interface LineVerdict {
   amplitudeMm: number | null
 }
 
+/** A second mode of an accepted axis: detected with the first mode in the null design, then
+ *  fitted jointly with it. */
+export interface SecondMode {
+  frequencyHz: number
+  dampingRatio: number
+  /** Standard error of the frequency from the two-mode fit, Hz; null when not estimable. */
+  frequencySeHz: number | null
+  /** Median over the lines of the mode's amplitude at the fit-window start, mm. */
+  amplitudeMm: number
+  /** Input proportionality of this mode: 'failed' marks a steady tone, not a mode. */
+  proportionality: CheckState
+}
+
 export interface AxisPool {
   accepted: boolean
   /** The axis-level verdict of a refused axis; empty when accepted. */
@@ -199,6 +213,12 @@ export interface AxisPool {
   replicateCheck: CheckState
   /** One-tier leave-one-line-out influence check of the detection. */
   influenceCheck: CheckState
+  /** Bonferroni bound of the search for a second mode (first mode in the null design); null when
+   *  the axis was not accepted. */
+  secondModePBound: number | null
+  /** The second mode, when its search detected one; the axis's own figures are then the
+   *  dominant mode's from the two-mode fit. */
+  secondMode: SecondMode | null
   lines: LineVerdict[]
 }
 
@@ -685,6 +705,8 @@ export function poolAxisFits(fits: LineFit[], speedsMmS: number[]): AxisPool {
     speedCheck: NOT_ASSESSED_SPEED,
     replicateCheck: 'not-assessed',
     influenceCheck: 'not-assessed',
+    secondModePBound: null,
+    secondMode: null,
     lines: verdicts,
   }
   const refuse = (reason: string, extras: Partial<AxisPool> = {}): AxisPool => ({
@@ -849,9 +871,16 @@ export function poolAxisFits(fits: LineFit[], speedsMmS: number[]): AxisPool {
   base.replicateCheck = replicate.state
   replicate.frequencies.forEach((f, j) => (verdicts[windowed[included[detectedK[j]]]].frequencyHz = f))
 
+  // A second mode, searched before the verdict: an unmodeled second mode distorts the single-mode
+  // fit's per-line amplitudes, so with one the dominant mode's proportionality comes from the
+  // two-mode fit.
+  Object.assign(base, withSecondMode(base, inBases, noise1, joint, tauBounds))
+
   // Verdict, the most specific failing gate first.
   const result = { ...base }
-  if (joint.frequencyHz <= F_MIN_HZ + BOUND_MARGIN_HZ || joint.frequencyHz >= F_MAX_HZ - BOUND_MARGIN_HZ) {
+  // The dominant mode's figures: the two-mode fit's when a second mode was found.
+  const f = result.frequencyHz!
+  if (f <= F_MIN_HZ + BOUND_MARGIN_HZ || f >= F_MAX_HZ - BOUND_MARGIN_HZ) {
     return refuse(
       `The frequency fitted across the axis's lines sits at the edge of the ${F_MIN_HZ} to ` +
         `${F_MAX_HZ} Hz search range, so it cannot be trusted. The true resonance likely ` +
@@ -859,7 +888,7 @@ export function poolAxisFits(fits: LineFit[], speedsMmS: number[]): AxisPool {
       result,
     )
   }
-  if (joint.dampingRatio >= ZETA_MAX) {
+  if (result.dampingRatio! >= ZETA_MAX) {
     return refuse(
       "The damping ratio fitted across the axis's lines sits at the edge of the physically " +
         'plausible range, so the fit cannot be trusted.',
@@ -907,7 +936,7 @@ export function poolAxisFits(fits: LineFit[], speedsMmS: number[]): AxisPool {
       result,
     )
   }
-  if (ci95 === null || ci95 > MAX_CI95_REL * joint.frequencyHz) {
+  if (result.frequencyCi95Hz === null || result.frequencyCi95Hz > MAX_CI95_REL * f) {
     return refuse(
       'The pooled frequency estimate is too uncertain to configure an input shaper: its 95% ' +
         'confidence interval is wider than the stopband of the shaper it would set. Reprint or ' +
@@ -916,6 +945,98 @@ export function poolAxisFits(fits: LineFit[], speedsMmS: number[]): AxisPool {
     )
   }
   return { ...result, accepted: true, refusals: [], rescanAdvice: null }
+}
+
+/**
+ * Sequential forward detection of a second mode (B. G. Quinn and E. J. Hannan, "The Estimation
+ * and Tracking of Frequency", Cambridge University Press 2001, ch. 5): the first mode's ring
+ * columns join every line's null design, and the same likelihood ratio field, refits and
+ * Bonferroni bound over the grid test for a further ring at DETECTION_ALPHA. On detection both
+ * modes are fitted jointly by variable projection over (f1, zeta1, f2, zeta2, log tau) with each
+ * line's linear terms, polished by Levenberg-Marquardt; covariance sigma^2 (J'J)^-1. The axis then
+ * reports the dominant mode (the larger median amplitude) and the other as its second mode, with
+ * the input-proportionality check of that mode.
+ */
+function withSecondMode(
+  pool: AxisPool,
+  bases: LineBasis[],
+  noises: LineNoise[],
+  joint: JointFit,
+  tauBounds: [number, number],
+): Partial<AxisPool> {
+  const mode1 = { frequencyHz: joint.frequencyHz, dampingRatio: joint.dampingRatio }
+  const states = bases.map((b, k) => {
+    const h0 = nullHypothesisFit(b, noises[k].fit, joint.tauS, noises[k].varianceSlope, [mode1])
+    const state: LineState = { basis: b, h0, field: heldNoiseField(b, h0), refitted: new Map() }
+    for (const f of noiseSpectrumPeaks(h0.noise.fit, cruiseSampleIntervalS(b))) refine(state, gridIndex(f, ZETA_GRID[0]))
+    return state
+  })
+  const all = states.map((_, l) => l)
+  const top = refittedMaximum(states, all)
+  const pBound = bonferroni(DETECTION_GRID.length, top.value, 2 * states.length)
+  if (!(pBound <= DETECTION_ALPHA)) return { secondModePBound: pBound }
+  const seed = DETECTION_GRID[top.index]
+  const fit = twoModeFit(bases, noises, [joint.frequencyHz, joint.dampingRatio, seed.frequencyHz, seed.dampingRatio, Math.log(joint.tauS)], tauBounds)
+  if (fit === null) return { secondModePBound: pBound }
+  const [m1, m2] = fit.modes[0].amplitudeMm >= fit.modes[1].amplitudeMm ? fit.modes : [fit.modes[1], fit.modes[0]]
+  return {
+    frequencyHz: m1.frequencyHz,
+    dampingRatio: m1.dampingRatio,
+    frequencySeHz: m1.frequencySeHz,
+    frequencyCi95Hz: m1.frequencySeHz !== null ? normalQuantile(0.975) * m1.frequencySeHz : pool.frequencyCi95Hz,
+    amplitudeMm: m1.amplitudeMm,
+    proportionality: m1.proportionality,
+    secondModePBound: pBound,
+    secondMode: m2,
+  }
+}
+
+/** The joint fit of two modes; null when the fit degenerates (both modes on one frequency). */
+function twoModeFit(
+  bases: LineBasis[],
+  noises: LineNoise[],
+  start: number[],
+  tauBounds: [number, number],
+): { modes: [SecondMode, SecondMode] } | null {
+  const lower = [F_MIN_HZ, 0, F_MIN_HZ, 0, Math.log(tauBounds[0])]
+  const upper = [F_MAX_HZ, ZETA_MAX, F_MAX_HZ, ZETA_MAX, Math.log(tauBounds[1])]
+  const project = (theta: number[], which: 0 | 1, residualOut?: (k: number) => Float64Array) =>
+    bases.map((b, k) => {
+      const [fa, za, fb, zb] = which === 1 ? [theta[0], theta[1], theta[2], theta[3]] : [theta[2], theta[3], theta[0], theta[1]]
+      const design = nullDesign(b, noises[k], Math.exp(theta[4]), ringColumns(b.rec.tS, fa, za))
+      return projectRing(b, noises[k], design, fb, zb, ringScratch(b.m), new Float64Array(design.k), new Float64Array(design.k), residualOut?.(k))
+    })
+  const total = bases.reduce((s, b) => s + b.m, 0)
+  const residual = (theta: number[]) => {
+    const out = new Float64Array(total)
+    const parts = bases.map((b) => new Float64Array(b.m))
+    project(theta, 1, (k) => parts[k])
+    let at = 0
+    parts.forEach((r) => {
+      out.set(r, at)
+      at += r.length
+    })
+    return out
+  }
+  const lm = levenbergMarquardt(start, lower, upper, residual)
+  const theta = lm.theta
+  const rings2 = project(theta, 1)
+  const rings1 = project(theta, 0)
+  if (rings1.every((r) => r.D === 0) || rings2.every((r) => r.D === 0)) return null
+  const linear = bases.reduce((s, b, k) => s + nullDesign(b, noises[k], Math.exp(theta[4])).k + 4, 0)
+  const dof = total - linear - 5
+  const variances = dof > 0 ? parameterVariances(lm, lm.ssr / dof) : null
+  const se = (j: number) => (variances && variances[j] !== null && variances[j]! > 0 ? Math.sqrt(variances[j]!) : null)
+  const amplitude = (rings: RingProjection[], f: number, zeta: number) =>
+    median(rings.map((r, k) => Math.hypot(r.a, r.b) * Math.exp(-zeta * 2 * Math.PI * f * bases[k].rec.tS[0])))
+  const mode = (rings: RingProjection[], f: number, zeta: number, seIndex: number): SecondMode => ({
+    frequencyHz: f,
+    dampingRatio: zeta,
+    frequencySeHz: se(seIndex),
+    amplitudeMm: amplitude(rings, f, zeta),
+    proportionality: proportionalityCheck(bases, rings),
+  })
+  return { modes: [mode(rings1, theta[0], theta[1], 0), mode(rings2, theta[2], theta[3], 2)] }
 }
 
 /**

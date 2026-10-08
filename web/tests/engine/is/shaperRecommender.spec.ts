@@ -5,12 +5,15 @@ import {
   formatKlipperShaper,
   formatMarlinShaper,
   formatRrfShaper,
+  modeSpectrum,
   recommendShapers,
+  recommendShapersForModes,
   residualVibration,
   shaperImpulses,
   shaperMaxAccel,
   shaperSmoothingMm,
   worstBandResidual,
+  zvResidualAtMode,
 } from '../../../src/engine/is/shaperRecommender'
 
 describe('shaperImpulses', () => {
@@ -124,5 +127,42 @@ describe('formatters', () => {
     expect(klipper).toContain(`shaper_type_x: ${rec.recommended.type.toLowerCase()}`)
     expect(formatMarlinShaper('y', 52.34, 0.06)).toBe('M593 Y F52.3 D0.060')
     expect(formatRrfShaper(rec.recommended)).toMatch(/^M593 P"(zvd|mzv|ei2|ei3)" F52\.3$/)
+  })
+})
+
+describe('multi-mode shaper selection', () => {
+  const twoModes = [
+    { frequencyHz: 45, dampingRatio: 0.05, amplitudeMm: 0.03 },
+    { frequencyHz: 62, dampingRatio: 0.05, amplitudeMm: 0.02 },
+  ]
+
+  it('synthesizes a spectrum that peaks at each mode', () => {
+    const freqs = Array.from({ length: 391 }, (_, i) => 5 + i * 0.5)
+    const psd = modeSpectrum(twoModes, freqs)
+    const peaks = freqs.filter((_, i) => i > 0 && i < freqs.length - 1 && psd[i] > psd[i - 1] && psd[i] > psd[i + 1])
+    expect(peaks).toHaveLength(2)
+    expect(Math.abs(peaks[0] - 45)).toBeLessThanOrEqual(1)
+    expect(Math.abs(peaks[1] - 62)).toBeLessThanOrEqual(1)
+  })
+
+  it('recommends a shaper that suppresses both modes', () => {
+    const { recommended } = recommendShapersForModes(twoModes)
+    const impulses = shaperImpulses(recommended.type, recommended.frequencyHz, 0.1)
+    for (const mode of twoModes) {
+      expect(residualVibration(impulses, mode.frequencyHz, mode.dampingRatio)).toBeLessThanOrEqual(0.2)
+    }
+  })
+
+  it('tunes every shaper type within its own frequency range', () => {
+    const { options } = recommendShapersForModes(twoModes)
+    expect(options.map((o) => o.type)).toEqual(['ZV', 'MZV', 'EI', '2HUMP_EI', '3HUMP_EI'])
+    for (const o of options) expect(o.frequencyHz).toBeLessThanOrEqual(150)
+  })
+
+  it('reports what a ZV shaper at the dominant mode leaves at the other mode', () => {
+    // ZV at 45 Hz, zeta 0.05: impulses 1 and K = 0.85448 half a damped period (0.011125 s)
+    // apart; at 62 Hz, zeta 0.05 the residual is 0.501 (hand-computed with Singer and Seering's
+    // formula).
+    expect(zvResidualAtMode(twoModes[0], twoModes[1])).toBeCloseTo(0.501, 3)
   })
 })
