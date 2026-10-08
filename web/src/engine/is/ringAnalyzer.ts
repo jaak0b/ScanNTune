@@ -13,7 +13,9 @@ import {
   FREQUENCY_GRID_HZ,
   ZETA_GRID,
   ZETA_MAX,
-  flowDeficit,
+  arcLengthMm,
+  cornerColumns,
+  cornerDeficit,
   ringColumns,
 } from './ringRegressors'
 import {
@@ -45,6 +47,7 @@ import type { NullFit, RingPoint, RingRatio } from './ringLikelihood'
 import { gridCandidates, knownCandidates, searchStage } from './artifactSearch'
 import { proportionalityCheck } from './inputProportionality'
 import type { DetectedArtifact } from './artifactSearch'
+import type { CornerModelKind } from './ringRegressors'
 import { defaultMaxArOrder } from '../correlatedNoise'
 import { MAD_TO_SIGMA, chiSquareSurvival, chiSquareSurvivalEvenDof, mad, median, normalQuantile } from '../math'
 import { tQuantile } from '../studentT'
@@ -223,6 +226,10 @@ export interface AxisPool {
   secondMode: SecondMode | null
   /** Arc-length artifacts the search detected and the analysis carried in its null design. */
   artifacts: DetectedArtifact[]
+  /** The corner model the pooled AICc chose and its scale (the flow-lag time constant in
+   *  seconds, or the bead-drag length in millimetres; the joint fit's when there is one); null
+   *  with too few lines. */
+  cornerModel: { kind: CornerModelKind; scale: number } | null
   lines: LineVerdict[]
 }
 
@@ -369,12 +376,11 @@ interface LineState {
   refitted: Map<number, RingRatio>
 }
 
-/** The search range of the flow-lag time constant: one sample interval to the longest window. */
+/** The search range of the corner-model scale: one sample interval to the longest window, in
+ *  time for the flow lag and in commanded arc length for the bead drag. */
 function tauRange(bases: LineBasis[]): [number, number] {
-  return [
-    Math.min(...bases.map((b) => b.rec.tS[1] - b.rec.tS[0])),
-    Math.max(...bases.map((b) => b.rec.tS[b.m - 1] - b.rec.tS[0])),
-  ]
+  const axis = bases.map((b) => (b.cornerModel === 'flow-lag' ? b.rec.tS : arcLengthMm(b.rec.tS, b.rec)))
+  return [Math.min(...axis.map((x) => x[1] - x[0])), Math.max(...axis.map((x) => x[x.length - 1] - x[0]))]
 }
 
 /**
@@ -432,7 +438,7 @@ const VARIANCE_CRITICAL = normalQuantile(1 - DETECTION_ALPHA / 2) ** 2
  * a constant variance at DETECTION_ALPHA.
  */
 function axisVarianceSlope(bases: LineBasis[], noises: LineNoise[], residuals: Float64Array[], tauS: number): number {
-  const deficits = bases.map((b) => flowDeficit(b.rec.tS, b.rec, tauS))
+  const deficits = bases.map((b) => cornerDeficit(b.rec.tS, b.rec, b.cornerModel, tauS))
   const innovations = residuals.map((r, l) => noises[l].whitener.whiten(r))
   const pooled = pooledVarianceSlope(innovations, deficits)
   return pooled.statistic > VARIANCE_CRITICAL ? pooled.slope : 0
@@ -463,10 +469,11 @@ function withArtifacts(
   found: DetectedArtifact[] = [],
   fixedModes: RingPoint[] = [],
   search = true,
+  cornerModel: CornerModelKind = 'flow-lag',
 ): { bases: LineBasis[]; fits: NullFit[]; artifacts: DetectedArtifact[] } {
   const artifacts = found.slice()
   const periods = artifacts.map((a) => a.periodMm)
-  let bases = windows.map((w) => lineBasis(w, periods))
+  let bases = windows.map((w) => lineBasis(w, periods, cornerModel))
   let fits = nullFits(bases, tauRange(bases), fixedModes)
   if (!search || speedsMmS.length < 2) return { bases, fits, artifacts }
   for (const known of [true, false]) {
@@ -476,11 +483,41 @@ function withArtifacts(
       if (hit === null || periods.includes(hit.periodMm)) break
       periods.push(hit.periodMm)
       artifacts.push({ ...hit, known })
-      bases = windows.map((w) => lineBasis(w, periods))
+      bases = windows.map((w) => lineBasis(w, periods, cornerModel))
       fits = nullFits(bases, tauRange(bases), fixedModes)
     }
   }
   return { bases, fits, artifacts }
+}
+
+/**
+ * The pooled corrected Akaike information criterion of the lines' null fits (C. M. Hurvich and
+ * C.-L. Tsai, Biometrika 76, 1989): the summed exact deviance plus 2 K N / (N - K - 1), with K the
+ * parameters (each line's null columns, AR coefficients, innovation variance and variance slope,
+ * and the one corner-model scale of the axis) and N the samples.
+ */
+function pooledAicc(fits: NullFit[], bases: LineBasis[]): number {
+  const N = bases.reduce((s, b) => s + b.m, 0)
+  const K = fits.reduce((s, f) => s + f.design.k + f.order + 1 + (f.noise.varianceSlope !== 0 ? 1 : 0), 0) + 1
+  return fits.reduce((s, f) => s + f.deviance, 0) + (2 * K * N) / (N - K - 1)
+}
+
+/**
+ * The corner model of an axis: the flow lag of the commanded flow (`flow`, already fitted) or the
+ * bead dragged at the corner, whichever null model has the lower pooled AICc. Both carry the
+ * detected artifacts.
+ */
+function chooseCornerModel(
+  windows: LineRecord[],
+  flow: { bases: LineBasis[]; fits: NullFit[]; artifacts: DetectedArtifact[] },
+): { bases: LineBasis[]; fits: NullFit[]; kind: CornerModelKind; flowScale: number; beadScale: number } {
+  const periods = flow.artifacts.map((a) => a.periodMm)
+  const bases = windows.map((w) => lineBasis(w, periods, 'bead-drag'))
+  const fits = nullFits(bases, tauRange(bases))
+  const scales = { flowScale: flow.fits[0].tauS, beadScale: fits[0].tauS }
+  return pooledAicc(fits, bases) < pooledAicc(flow.fits, flow.bases)
+    ? { bases, fits, kind: 'bead-drag', ...scales }
+    : { bases: flow.bases, fits: flow.fits, kind: 'flow-lag', ...scales }
 }
 
 /** One line's detection state for a null fit (see detectionStates). */
@@ -761,6 +798,7 @@ export function poolAxisFits(
     secondModePBound: null,
     secondMode: null,
     artifacts: [],
+    cornerModel: null,
     lines: verdicts,
   }
   const refuse = (reason: string, extras: Partial<AxisPool> = {}): AxisPool => ({
@@ -789,10 +827,12 @@ export function poolAxisFits(
   // bound.
   const windows = windowed.map((i) => fits[i].window!)
   const searched = withArtifacts(windows, speedsMmS, presetArtifacts ?? [], [], presetArtifacts === null)
-  const bases = searched.bases
+  const chosen = chooseCornerModel(windows, searched)
+  const bases = chosen.bases
   const tauBounds = tauRange(bases)
-  const states = searched.fits.map((h0, l) => lineState(bases[l], h0))
+  const states = chosen.fits.map((h0, l) => lineState(bases[l], h0))
   base.artifacts = searched.artifacts
+  base.cornerModel = { kind: chosen.kind, scale: chosen.fits[0].tauS }
   const tau0 = states[0].h0.tauS
   const all = bases.map((_, l) => l)
   const G = DETECTION_GRID.length
@@ -865,16 +905,28 @@ export function poolAxisFits(
 
   // Joint variable projection with each line's noise model refitted under the alternative at the
   // seed, then the second feasible GLS step with the noise refitted to the full-fit residuals.
-  const inBases = included.map((l) => states[l].basis)
+  // The ring is estimated in the model that encompasses both corner models (the flow-lag columns,
+  // their time constant free, and the bead-drag lobe at its null-fit length), so its interval does
+  // not rest on the AICc choice: an interval computed in the model a criterion selected is too
+  // narrow (H. Leeb and B. M. Potscher, "Model selection and inference: facts and fiction",
+  // Econometric Theory 21, 2005).
+  const periods = base.artifacts.map((a) => a.periodMm)
+  const inBases = included.map((l) =>
+    lineBasis(windows[l], periods, 'flow-lag', cornerColumns(windows[l].tS, windows[l], 'bead-drag', chosen.beadScale)),
+  )
+  const estBounds = tauRange(inBases)
   const seedIndex = refittedMaximum(states, included).index
   const seed = DETECTION_GRID[seedIndex]
-  const noiseAtSeed = included.map((l) => refine(states[l], seedIndex).fit.noise)
+  const noiseAtSeed = included.map((l, k) => {
+    const noise = refine(states[l], seedIndex).fit.noise
+    return noiseModel(inBases[k], noise.fit, noise.varianceSlope, cornerDeficit(inBases[k].rec.tS, inBases[k].rec, 'flow-lag', chosen.flowScale))
+  })
   const first = varproFit(
     inBases,
     noiseAtSeed,
-    [seed.frequencyHz, seed.dampingRatio, Math.log(tau0)],
+    [seed.frequencyHz, seed.dampingRatio, Math.log(chosen.flowScale)],
     [true, true, true],
-    tauBounds,
+    estBounds,
   )
   const residuals1 = inBases.map((b, k) => {
     const design = nullDesign(b, noiseAtSeed[k], first.tauS)
@@ -886,22 +938,23 @@ export function poolAxisFits(
   const noise1 =
     slope1 === 0
       ? ar1
-      : inBases.map((b, k) => noiseModel(b, ar1[k].fit, slope1, flowDeficit(b.rec.tS, b.rec, first.tauS)))
+      : inBases.map((b, k) => noiseModel(b, ar1[k].fit, slope1, cornerDeficit(b.rec.tS, b.rec, b.cornerModel, first.tauS)))
   const joint = varproFit(
     inBases,
     noise1,
     [first.frequencyHz, first.dampingRatio, Math.log(first.tauS)],
     [true, true, true],
-    tauBounds,
+    estBounds,
   )
   // A ring left out of the first artifact search leaks into the artifact columns on its own tier
   // and makes an artifact's amplitude grow with the corner speed: the search runs again with the
   // fitted ring in the null design, and the analysis is repeated with whatever more it finds.
   if (presetArtifacts === null && speedsMmS.length >= 2) {
-    const again = withArtifacts(windows, speedsMmS, searched.artifacts, [{ frequencyHz: joint.frequencyHz, dampingRatio: joint.dampingRatio }])
+    const again = withArtifacts(windows, speedsMmS, searched.artifacts, [{ frequencyHz: joint.frequencyHz, dampingRatio: joint.dampingRatio }], true, chosen.kind)
     if (again.artifacts.length > searched.artifacts.length) return poolAxisFits(fits, speedsMmS, again.artifacts)
   }
-  const interval = profileFrequencyInterval(inBases, noise1, joint, tauBounds)
+  base.cornerModel = { kind: chosen.kind, scale: chosen.kind === 'flow-lag' ? joint.tauS : chosen.beadScale }
+  const interval = profileFrequencyInterval(inBases, noise1, joint, estBounds)
   const se = interval ? (interval.upper - interval.lower) / (2 * interval.critical) : null
   const ci95 = interval ? Math.max(interval.upper - joint.frequencyHz, joint.frequencyHz - interval.lower) : null
   const designs1 = inBases.map((b, k) => nullDesign(b, noise1[k], joint.tauS))
@@ -920,17 +973,17 @@ export function poolAxisFits(
   })
 
   // Diagnostics and checks.
-  base.decayStatistic = decayStatistic(inBases, noise1, joint, tauBounds)
+  base.decayStatistic = decayStatistic(inBases, noise1, joint, estBounds)
   base.decayDemonstrated = base.decayStatistic > DECAY_CRITICAL
   base.proportionality = proportionalityCheck(inBases, rings.map((r) => Math.hypot(r.a, r.b)))
-  base.speedCheck = speedCheck(states, included, inBases, noise1, joint, speedsMmS, tauBounds)
+  base.speedCheck = speedCheck(states, included, inBases, noise1, joint, speedsMmS, estBounds)
   base.influenceCheck = speedsMmS.length === 1 ? influenceCheck(states) : 'not-assessed'
   const detectedK = included.map((l, k) => (verdicts[windowed[l]].detected ? k : -1)).filter((k) => k >= 0)
   const replicate = replicateCheck(
     detectedK.map((k) => inBases[k]),
     detectedK.map((k) => noise1[k]),
     joint,
-    tauBounds,
+    estBounds,
   )
   base.replicateCheck = replicate.state
   replicate.frequencies.forEach((f, j) => (verdicts[windowed[included[detectedK[j]]]].frequencyHz = f))
@@ -938,7 +991,7 @@ export function poolAxisFits(
   // A second mode, searched before the verdict: an unmodeled second mode distorts the single-mode
   // fit's per-line amplitudes, so with one the dominant mode's proportionality comes from the
   // two-mode fit.
-  Object.assign(base, withSecondMode(base, inBases, noise1, joint, tauBounds))
+  Object.assign(base, withSecondMode(base, inBases, noise1, joint, estBounds))
 
   // Verdict, the most specific failing gate first.
   const result = { ...base }

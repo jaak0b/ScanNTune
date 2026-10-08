@@ -3,7 +3,7 @@ import type { ArFit } from '../correlatedNoise'
 import { nullDesign, noiseModel, projectColumns, projectRing, ringScratch } from './ringGls'
 import type { LineBasis, LineNoise, NullDesign, RingProjection } from './ringGls'
 import { F_MAX_HZ, F_MIN_HZ } from './types'
-import { FREQUENCY_GRID_HZ, arcLengthMm, flowDeficit, periodicColumns, ringColumns } from './ringRegressors'
+import { FREQUENCY_GRID_HZ, arcLengthMm, cornerDeficit, periodicColumns, ringColumns } from './ringRegressors'
 
 // The generalized likelihood ratio test (GLRT) of a ring at one point theta = (f, zeta) of one
 // traced line, with the AR noise model refitted under each hypothesis (S. M. Kay, "Fundamentals of
@@ -62,8 +62,9 @@ export interface HypothesisFit {
 /** The null fit of a line: the hypothesis fit and the AR order both hypotheses use. */
 export interface NullFit extends HypothesisFit {
   order: number
+  /** The corner-model scale: the flow-lag time constant (s) or the bead-drag length (mm). */
   tauS: number
-  /** The flow-lag deficit g(t) of the variance function at tauS, per observed sample. */
+  /** The covariate g(t) of the variance function at tauS (ringRegressors.cornerDeficit). */
   deficit: Float64Array
   /** The raw ring columns of modes already fitted, part of the null design of both hypotheses. */
   fixedColumns: Float64Array[]
@@ -210,7 +211,7 @@ export function nullHypothesisFit(
   fixedModes: RingPoint[] = [],
 ): NullFit {
   const order = initial.coefficients.length
-  const deficit = flowDeficit(basis.rec.tS, basis.rec, tauS)
+  const deficit = cornerDeficit(basis.rec.tS, basis.rec, basis.cornerModel, tauS)
   const fixedColumns = fixedModes.flatMap((p) => ringColumns(basis.rec.tS, p.frequencyHz, p.dampingRatio))
   const start = evaluate(basis, { coefficients: initial.coefficients, varianceSlope }, deficit, tauS, null, fixedColumns)
   const fit = iterate(basis, start, order, deficit, tauS, null, fixedColumns)

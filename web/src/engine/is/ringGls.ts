@@ -1,6 +1,7 @@
 import { arWhitener, latticeSegments, selectOrderAiccSegments } from '../correlatedNoise'
 import type { ArFit, ArWhitener } from '../correlatedNoise'
-import { arcLengthMm, driftBasis, flowLagColumns, periodicColumns } from './ringRegressors'
+import { arcLengthMm, cornerColumns, driftBasis, periodicColumns } from './ringRegressors'
+import type { CornerModelKind } from './ringRegressors'
 import type { CommandedMotion } from './ringRegressors'
 
 // Generalized least squares machinery of the input shaper ring model, per traced line. The
@@ -8,7 +9,8 @@ import type { CommandedMotion } from './ringRegressors'
 //
 //   y(t) = sum_k d_k cos(pi k (t - t0) / T)            drift (discrete cosine basis)
 //        + sum_P p_P cos(2 pi s / P) + q_P sin(2 pi s / P)    detected arc-length artifacts P
-//        + g (q_tau(t) / v(t) - 1) + h c e^(-t/tau) / v(t)  flow lag of the commanded flow
+//        + g (q_tau(t) / v(t) - 1) + h c e^(-t/tau) / v(t)  flow lag of the commanded flow,
+//          or g e^(-s/lambda), the bead dragged at the corner (the axis's corner model)
 //        + e^(-zeta w t) (a cos(w_d t) + b sin(w_d t))   ring, w = 2 pi f, w_d = w sqrt(1 - zeta^2)
 //        + AR(p) noise on the sample lattice, its innovation standard deviation scaled by
 //          exp(b g(t) / 2) with g the flow-lag deficit of the commanded flow
@@ -54,6 +56,9 @@ export interface LineBasis {
   dt: number
   /** The periods of the arc-length artifacts the fixed columns carry, mm. */
   artifactPeriodsMm: number[]
+  /** The corner model of the null design; its scale (tauS in the functions taking one) is the
+   *  flow-lag time constant in seconds or the bead-drag length in millimetres. */
+  cornerModel: CornerModelKind
 }
 
 /** A line's noise model: its AR fit, the whitening operator, the innovation scale of its
@@ -147,11 +152,17 @@ export function fixedNullColumns(rec: LineRecord, artifactPeriodsMm: number[] = 
   return [...drift, ...periodicColumns(arcLengthMm(rec.tS, rec), artifactPeriodsMm)]
 }
 
-/** A line's model parts that depend on neither the noise model nor tau; `artifactPeriodsMm` are
- *  arc-length artifacts carried in the null design as fixed columns. */
-export function lineBasis(rec: LineRecord, artifactPeriodsMm: number[] = []): LineBasis {
+/** A line's model parts that depend on neither the noise model nor the corner-model scale;
+ *  `artifactPeriodsMm` are arc-length artifacts carried in the null design as fixed columns, and
+ *  `extraFixedColumns` further fixed null columns. */
+export function lineBasis(
+  rec: LineRecord,
+  artifactPeriodsMm: number[] = [],
+  cornerModel: CornerModelKind = 'flow-lag',
+  extraFixedColumns: Float64Array[] = [],
+): LineBasis {
   const m = rec.tS.length
-  const fixedColumns = fixedNullColumns(rec, artifactPeriodsMm)
+  const fixedColumns = [...fixedNullColumns(rec, artifactPeriodsMm), ...extraFixedColumns]
   const tRamp = Math.max(0, (rec.speedMmS - rec.cornerSpeedMmS) / rec.accelMmS2)
   let cruiseFrom = rec.tS.findIndex((t) => t >= tRamp)
   if (cruiseFrom < 0) cruiseFrom = m
@@ -169,17 +180,18 @@ export function lineBasis(rec: LineRecord, artifactPeriodsMm: number[] = []): Li
     cruiseFrom,
     dt,
     artifactPeriodsMm,
+    cornerModel,
   }
 }
 
 /** Residual sum of squares of the ordinary least squares null fit at tau. */
 export function olsNullSsr(line: LineBasis, tauS: number): number {
-  return ssrAfterLag(line.yFixedFree, orthonormalBasis(flowLagColumns(line.rec.tS, line.rec, tauS), line.fixedQ))
+  return ssrAfterLag(line.yFixedFree, orthonormalBasis(cornerColumns(line.rec.tS, line.rec, line.cornerModel, tauS), line.fixedQ))
 }
 
 /** Whitened residual sum of squares of the GLS null fit at tau. */
 export function glsNullSsr(line: LineBasis, noise: LineNoise, tauS: number): number {
-  const lag = flowLagColumns(line.rec.tS, line.rec, tauS).map((c) => noise.whiten(c))
+  const lag = cornerColumns(line.rec.tS, line.rec, line.cornerModel, tauS).map((c) => noise.whiten(c))
   return ssrAfterLag(noise.wYFixedFree, orthonormalBasis(lag, noise.wFixedQ))
 }
 
@@ -195,7 +207,7 @@ function ssrAfterLag(driftFree: Float64Array, lag: Float64Array[]): number {
 
 /** Ordinary least squares fit of the null model at tau: residual sum of squares and residuals. */
 export function olsNull(line: LineBasis, tauS: number): { ssr: number; residual: Float64Array } {
-  const lag = orthonormalBasis(flowLagColumns(line.rec.tS, line.rec, tauS), line.fixedQ)
+  const lag = orthonormalBasis(cornerColumns(line.rec.tS, line.rec, line.cornerModel, tauS), line.fixedQ)
   const yr = residualize(line.rec.y, line.fixedQ.concat(lag))
   return { ssr: dot(yr, yr), residual: yr }
 }
@@ -325,7 +337,7 @@ export function pooledVarianceSlope(
 
 /** The whitened null design of a line at tau, with optional further raw null columns. */
 export function nullDesign(line: LineBasis, noise: LineNoise, tauS: number, extraRaw: Float64Array[] = []): NullDesign {
-  const lagRaw = flowLagColumns(line.rec.tS, line.rec, tauS)
+  const lagRaw = cornerColumns(line.rec.tS, line.rec, line.cornerModel, tauS)
   const Q = noise.wFixedQ.concat(orthonormalBasis([...lagRaw, ...extraRaw].map((c) => noise.whiten(c)), noise.wFixedQ))
   const k = Q.length
   const m = line.m

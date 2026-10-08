@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { driftBasis, flowLagColumns, flowLagRegressor } from '../../../src/engine/is/ringRegressors'
+import { cornerColumns, driftBasis, flowLagColumns, flowLagRegressor } from '../../../src/engine/is/ringRegressors'
 
 const MOTION = { cornerSpeedMmS: 20, speedMmS: 150, accelMmS2: 3000 }
 
@@ -43,5 +43,22 @@ describe('flowLagColumns', () => {
     expect(particular[1]).toBeCloseTo(-0.5308781, 7)
     expect(homogeneous[0]).toBeCloseTo(1, 12)
     expect(homogeneous[1]).toBeCloseTo(0.3115203, 7)
+  })
+})
+
+describe('cornerColumns', () => {
+  it('builds the bead-drag lobe exp(-s / lambda) of the commanded arc length', () => {
+    // Corner 100 mm/s, tier 150 mm/s, 3000 mm/s^2: at 0.01 s on the ramp s = 1 + 0.15 = 1.15 mm;
+    // at 0.02 s, past the ramp end (1/60 s, 2.08333 mm), s = 2.58333 mm. With lambda = 1 mm the
+    // lobe is e^-1.15 = 0.316637 and e^-2.58333 = 0.075522 (hand-computed).
+    const motion = { cornerSpeedMmS: 100, speedMmS: 150, accelMmS2: 3000 }
+    const [lobe] = cornerColumns(Float64Array.from([0.01, 0.02]), motion, 'bead-drag', 1)
+    expect(lobe[0]).toBeCloseTo(0.316637, 6)
+    expect(lobe[1]).toBeCloseTo(0.075522, 6)
+  })
+
+  it('builds the two flow-lag columns for the flow-lag model', () => {
+    const motion = { cornerSpeedMmS: 100, speedMmS: 150, accelMmS2: 3000 }
+    expect(cornerColumns(Float64Array.from([0.01, 0.02]), motion, 'flow-lag', 0.03)).toHaveLength(2)
   })
 })

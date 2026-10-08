@@ -154,6 +154,40 @@ export function flowDeficit(tS: Float64Array, motion: CommandedMotion, tauS: num
   return flowLagRegressor(tS, motion, tauS).map((v) => -v)
 }
 
+/**
+ * The corner models of a line's null design: the first-order flow lag of the commanded flow
+ * (flowLagColumns; its scale is the time constant tau, seconds) and the bead dragged at the
+ * corner, a lobe decaying in commanded arc length exp(-s / lambda) (its scale is lambda, mm). An
+ * axis takes the one with the lower pooled AICc.
+ */
+export type CornerModelKind = 'flow-lag' | 'bead-drag'
+
+/** The corner model's columns at each sample time for its scale. */
+export function cornerColumns(
+  tS: Float64Array,
+  motion: CommandedMotion,
+  kind: CornerModelKind,
+  scale: number,
+): Float64Array[] {
+  if (kind === 'flow-lag') return flowLagColumns(tS, motion, scale)
+  return [arcLengthMm(tS, motion).map((s) => Math.exp(-s / scale))]
+}
+
+/**
+ * The covariate of the innovation variance function for the corner model: the flow-lag deficit
+ * for the flow lag, the lobe's own shape exp(-s / lambda) for the bead drag (the dragged bead is
+ * the disturbed one).
+ */
+export function cornerDeficit(
+  tS: Float64Array,
+  motion: CommandedMotion,
+  kind: CornerModelKind,
+  scale: number,
+): Float64Array {
+  if (kind === 'flow-lag') return flowDeficit(tS, motion, scale)
+  return arcLengthMm(tS, motion).map((s) => Math.exp(-s / scale))
+}
+
 /** The commanded speed at time t after the corner on the trapezoid ramp. */
 function commandedSpeedMmS(t: number, motion: CommandedMotion): number {
   return Math.min(motion.speedMmS, motion.cornerSpeedMmS + motion.accelMmS2 * Math.max(0, t))

@@ -128,6 +128,14 @@ describe('poolAxisFits detection', () => {
     expect(p.detectionPBound!).toBeGreaterThan(0.001)
   })
 
+  it('does not take the bead dragged at the corner for ringing', () => {
+    // A lobe decaying over 0.84 mm of arc length (two bead widths), 0.03 mm on the top rung.
+    const p = pool(twoTier, simulate(twoTier, { noise: IID, spatialLobe: { ampMm: 0.03, lambdaMm: 0.84 } }, 2))
+    expect(p.detectionPBound!).toBeGreaterThan(0.001)
+    expect(['flow-lag', 'bead-drag']).toContain(p.cornerModel!.kind)
+    expect(p.cornerModel!.scale).toBeGreaterThan(0)
+  })
+
   it('refuses too few lines with a fit window, pointing at the lamp shadow', () => {
     const none: LineFit = {
       screening: 'no-free-response',
@@ -226,7 +234,9 @@ describe('poolAxisFits estimation', () => {
     expect(p.lines[3].exclusion).toBe('out-of-band')
     expect(p.lines[3].usedInJointFit).toBe(false)
     expect(p.accepted).toBe(true)
-    expect(Math.abs(p.frequencyHz! - 60)).toBeLessThan(0.3)
+    // The nine remaining lines' joint frequency has a standard error of about 0.11 Hz (the
+    // profile-likelihood interval in the encompassing corner model), so 0.4 Hz is 3.6 of them.
+    expect(Math.abs(p.frequencyHz! - 60)).toBeLessThan(0.4)
   })
 })
 

@@ -100,6 +100,7 @@ function fakeAxisResult(alignment: IsAlignment): IsAxisResult {
     secondMode: null,
     zvSecondModeResidual: null,
     artifacts: [],
+    cornerModel: null,
     linesUsed: lines.filter((l) => l.accepted).length,
     linesTraced: lines.filter((l) => l.traced).length,
     scanIndex: 0,

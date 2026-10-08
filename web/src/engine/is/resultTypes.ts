@@ -2,6 +2,7 @@ import type { IsAxis } from './types'
 import type { ShaperOption } from './shaperRecommender'
 import type { LineFitRefusalCategory, LineJointExclusion, SecondMode } from './ringAnalyzer'
 import type { DetectedArtifact } from './artifactSearch'
+import type { CornerModelKind } from './ringRegressors'
 
 /**
  * Why a line was left out of the axis's joint fit, as a category the UI can count and label:
@@ -142,6 +143,9 @@ export interface IsAxisResult {
   /** Arc-length artifacts (belt teeth, JPEG blocks, other stationary patterns of the print or the
    *  scan) the analysis detected and carried in its model; empty without a search. */
   artifacts: DetectedArtifact[]
+  /** The corner model the analysis chose and its scale (flow-lag time constant in seconds, or
+   *  bead-drag length in millimetres); null when the axis had too few lines to fit. */
+  cornerModel: { kind: CornerModelKind; scale: number } | null
   linesUsed: number
   linesTraced: number
   /** Index of the scan (0 or 1) the axis was measured from; null when neither qualified. */
