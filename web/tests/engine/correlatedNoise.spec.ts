@@ -326,6 +326,28 @@ describe('arWhitener', () => {
     expect(Math.abs(meanSquare - 1)).toBeLessThanOrEqual(0.1)
     expect(Math.abs(meanProduct)).toBeLessThanOrEqual(0.071)
   })
+  it('maps the hand-computed whitened values back to the record they came from', () => {
+    // The first case's whitened values (sqrt(3)/2, 1.5, sqrt(5)) of the values 1, 2, 3 read at
+    // lattice 0, 1, 3 under AR(1) phi = 0.5.
+    const w = arWhitener({ coefficients: [0.5], noiseVariance: 1 }, [0, 1, 3])
+    const x = w.unwhiten([0.8660254037844386, 1.5, 2.23606797749979])
+    expect(x[0]).toBeCloseTo(1, 12)
+    expect(x[1]).toBeCloseTo(2, 12)
+    expect(x[2]).toBeCloseTo(3, 12)
+  })
+  it('inverts the whitening of an AR(3) record with unread runs, start prior included', () => {
+    const model = { coefficients: [0.5, -0.2, 0.1], noiseVariance: 0.7 }
+    const x = simulateAr([0.5, -0.2, 0.1], 200, 5)
+    const lattice = x.map((_, k) => k).filter((k) => k % 17 !== 5 && k % 23 !== 7 && k % 23 !== 8)
+    const values = lattice.map((k) => x[k])
+    const w = arWhitener(model, lattice)
+    const back = w.unwhiten(w.whiten(values))
+    back.forEach((v, i) => expect(v).toBeCloseTo(values[i], 10))
+  })
+  it('only rescales under a white noise model', () => {
+    const w = arWhitener({ coefficients: [], noiseVariance: 4 }, [0, 1, 2])
+    expect(Array.from(w.unwhiten([1, -0.5, 2]))).toEqual([2, -1, 4])
+  })
   it('throws on lattice positions that do not increase', () => {
     expect(() => arWhitener({ coefficients: [0.5], noiseVariance: 1 }, [0, 2, 2])).toThrow(
       /increase strictly/,

@@ -324,6 +324,14 @@ export interface ArWhitener {
   whiten(x: ArrayLike<number>): Float64Array
   /** Writes the whitened value of every non-regular observed sample of x into out. */
   whitenIrregular(x: ArrayLike<number>, out: Float64Array): void
+  /**
+   * The inverse operator: the series whose whitened values are `e`. The innovations operator is
+   * lower triangular with a positive diagonal (each output is its sample minus a prediction from
+   * earlier samples, over a positive standard error), so it is solved forward sample by sample:
+   * x = sd e + prediction. A residual known only in whitened form maps back to raw values this
+   * way at O(n p) cost.
+   */
+  unwhiten(e: ArrayLike<number>): Float64Array
 }
 
 /**
@@ -444,7 +452,46 @@ export function arWhitener(fit: ArFit, lattice: ArrayLike<number>): ArWhitener {
     return out
   }
 
-  return { fit, length: m, regular, logDet, whiten, whitenIrregular }
+  const unwhiten = (e: ArrayLike<number>): Float64Array => {
+    if (e.length !== m) throw new Error(`Expected ${m} whitened values, got ${e.length}`)
+    const x = new Float64Array(m)
+    const a = new Float64Array(p)
+    const scratch = new Float64Array(p)
+    // Regular samples follow the plain predictor; the stretches, in lattice order, hold every
+    // other sample, so the samples are solved in index order.
+    let next = 0
+    const solveRegularBefore = (end: number) => {
+      for (; next < end; next++) {
+        let v = sigma * e[next]
+        for (let j = 0; j < p; j++) v += phi[j] * x[next - 1 - j]
+        x[next] = v
+      }
+    }
+    for (const stretch of stretches) {
+      const firstStep = stretch.steps.find((s) => s.sample >= 0)
+      if (!firstStep) continue
+      solveRegularBefore(firstStep.sample)
+      if (stretch.init) {
+        for (let j = 0; j < p; j++) a[j] = x[stretch.init[j]]
+        companionStep(phi, a, scratch)
+      } else {
+        a.fill(0)
+      }
+      for (const step of stretch.steps) {
+        if (step.sample >= 0) {
+          const innovation = e[step.sample] * step.sd
+          x[step.sample] = a[0] + innovation
+          for (let j = 0; j < p; j++) a[j] += step.gain![j] * innovation
+          next = step.sample + 1
+        }
+        companionStep(phi, a, scratch)
+      }
+    }
+    solveRegularBefore(m)
+    return x
+  }
+
+  return { fit, length: m, regular, logDet, whiten, whitenIrregular, unwhiten }
 }
 
 /** a <- T a for the AR companion matrix T (new first entry phi' a, the rest shifted down). */

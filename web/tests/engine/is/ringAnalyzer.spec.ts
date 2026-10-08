@@ -163,6 +163,14 @@ describe('poolAxisFits estimation', () => {
     expect(p.speedCheck.state).toBe('confirmed')
   })
 
+  it('accepts a moderate ring so lightly damped that the noise model of the null absorbs it', () => {
+    // zeta 0.002 at 60 Hz, 0.03 mm: persistent over the whole read window, so a noise model
+    // fitted without the ring predicts it; only the noise model refitted under the ring sees it.
+    const p = pool(twoTier, simulate(twoTier, { noise: IID, ring: { frequencyHz: 60, dampingRatio: 0.002, ampMm: 0.03 } }))
+    expect(p.accepted).toBe(true)
+    expect(Math.abs(p.frequencyHz! - 60)).toBeLessThan(0.3)
+  })
+
   it('handles unread samples without biasing the frequency', () => {
     const p = pool(
       twoTier,
@@ -210,6 +218,16 @@ describe('poolAxisFits checks', () => {
         'machine does. A steady vibration, such as a fan, or a pattern in the print or the scan ' +
         'is the likely cause, so no shaper is recommended.',
     ])
+  })
+
+  it('detects a strong forced tone the noise model of the null absorbs, then refuses it', () => {
+    // 0.01 mm at 100 Hz on every line with a random phase: a null noise model predicts it, so
+    // without the refit the axis read as noise only; refitted it is found, and it fails the
+    // proportionality gate.
+    const p = pool(twoTier, simulate(twoTier, { noise: IID, artifacts: { forcedTone: { frequencyHz: 100, ampMm: 0.01 } } }))
+    expect(p.detectionPBound!).toBeLessThanOrEqual(0.001)
+    expect(p.proportionality).toBe('failed')
+    expect(p.accepted).toBe(false)
   })
 
   it('reports an undamped tone as decay not demonstrated, a row and not a refusal reason', () => {

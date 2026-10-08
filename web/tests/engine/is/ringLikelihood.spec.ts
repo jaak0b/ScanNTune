@@ -1,0 +1,75 @@
+// @vitest-environment node
+import { describe, expect, it } from 'vitest'
+import {
+  heldNoiseStatistic,
+  noiseSpectrumPeaks,
+  nullHypothesisFit,
+  ringLikelihoodRatio,
+} from '../../../src/engine/is/ringLikelihood'
+import { analyzeTracedLine } from '../../../src/engine/is/ringAnalyzer'
+import { fitNoise, lineBasis, olsNull, projectRing, ringScratch } from '../../../src/engine/is/ringGls'
+import { defaultIsTestRequest, fitSpecToPrinter } from '../../../src/engine/is/types'
+import type { IsTestSpec } from '../../../src/engine/is/types'
+import { defaultPrinterProfile } from '../../../src/engine/gcode/profileTypes'
+import { simulateAxis } from '../../helpers/isTraceSim'
+import type { TraceSimOptions } from '../../helpers/isTraceSim'
+
+// The likelihood ratio of a ring with the AR noise model refitted under each hypothesis, on lines
+// simulated from literal truth (tests/helpers/isTraceSim.ts). Its calibration under the null is
+// the tests/stats S1 suite; these cases pin the properties the detection field relies on.
+
+const profile = defaultPrinterProfile()
+const twoTier: IsTestSpec = { ...fitSpecToPrinter(defaultIsTestRequest(profile), profile).spec, axes: ['y'] }
+
+/** One simulated line's basis and null fit at a 30 ms flow-lag time constant. */
+function nullFitOf(options: Omit<TraceSimOptions, 'spec' | 'seed'>, seed: number, line: number) {
+  const [sim] = simulateAxis({ seed, spec: twoTier, lineIndices: [line], ...options })
+  const basis = lineBasis(analyzeTracedLine(sim.trace).window!)
+  const initial = fitNoise(basis, olsNull(basis, 0.03).residual)
+  return { basis, h0: nullHypothesisFit(basis, initial.fit, 0.03) }
+}
+
+function heldAt(fit: ReturnType<typeof nullFitOf>, frequencyHz: number, dampingRatio: number): number {
+  const { basis, h0 } = fit
+  const D = projectRing(basis, h0.noise, h0.design, frequencyHz, dampingRatio, ringScratch(basis.m), new Float64Array(h0.design.k), new Float64Array(h0.design.k)).D
+  return heldNoiseStatistic(h0, basis.m, D)
+}
+
+describe('ringLikelihoodRatio', () => {
+  it('is never below the ratio with the null noise model held fixed', () => {
+    // Under 2 px blur the null model has a high AR order, so the refit moves it most.
+    const fit = nullFitOf({ noise: { model: 'blur2', sigmaPx: 0.1 } }, 11, 4)
+    const points: [number, number][] = [[20, 0.001], [60, 0.05], [97, 0.2], [150, 0.4]]
+    for (const [f, zeta] of points) {
+      expect(ringLikelihoodRatio(fit.basis, fit.h0, { frequencyHz: f, dampingRatio: zeta }).statistic).toBeGreaterThanOrEqual(
+        heldAt(fit, f, zeta),
+      )
+    }
+  })
+
+  it('credits a persistent ring that the null noise model absorbs', () => {
+    // zeta 0.002 at 60 Hz, 0.03 mm on the top rung: an AR model of the null predicts it almost
+    // exactly. 28.7 is the single-line critical value 2 ln(1703 / 0.001) of the detection bound
+    // (hand-computed): held fixed the line shows nothing, refitted it is detected on its own.
+    const fit = nullFitOf({ noise: { model: 'iid', sigmaPx: 0.1 }, ring: { frequencyHz: 60, dampingRatio: 0.002, ampMm: 0.03 } }, 1, 9)
+    expect(heldAt(fit, 60, 0.002)).toBeLessThan(28.7)
+    expect(ringLikelihoodRatio(fit.basis, fit.h0, { frequencyHz: 60, dampingRatio: 0.002 }).statistic).toBeGreaterThan(28.7)
+  })
+})
+
+describe('noiseSpectrumPeaks', () => {
+  it('finds the spectral peak of an AR(2) model inside the band', () => {
+    // AR(2) phi = (1.879796, -0.9) sampled at 1/3000 s peaks where cos w = phi1 (phi2 - 1) /
+    // (4 phi2) (Box and Jenkins), w = 2 pi 60 / 3000: at 60 Hz (hand-computed).
+    expect(noiseSpectrumPeaks({ coefficients: [1.879796, -0.9], noiseVariance: 1 }, 1 / 3000)).toEqual([60])
+  })
+
+  it('reports the band edge a monotone spectrum falls away from', () => {
+    expect(noiseSpectrumPeaks({ coefficients: [0.5], noiseVariance: 1 }, 1 / 3000)).toEqual([20])
+    expect(noiseSpectrumPeaks({ coefficients: [-0.5], noiseVariance: 1 }, 1 / 3000)).toEqual([150])
+  })
+
+  it('reports none for a white noise model', () => {
+    expect(noiseSpectrumPeaks({ coefficients: [], noiseVariance: 1 }, 1 / 3000)).toEqual([])
+  })
+})

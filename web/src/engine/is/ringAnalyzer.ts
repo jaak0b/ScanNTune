@@ -11,6 +11,7 @@ import {
   DETECTION_GRID,
   DRIFT_CUTOFF_HZ,
   FREQUENCY_GRID_HZ,
+  ZETA_GRID,
   ZETA_MAX,
   driftBasis,
 } from './ringRegressors'
@@ -18,7 +19,6 @@ import {
   fitNoise,
   glsNullSsr,
   levenbergMarquardt,
-  noiseModel,
   lineBasis,
   minimizeOverLogTau,
   nullDesign,
@@ -31,8 +31,15 @@ import {
   solveSymmetric,
 } from './ringGls'
 import type { LineBasis, LineNoise, LineRecord, LmResult, NullDesign } from './ringGls'
+import {
+  cruiseSampleIntervalS,
+  heldNoiseStatistic,
+  noiseSpectrumPeaks,
+  nullHypothesisFit,
+  ringLikelihoodRatio,
+} from './ringLikelihood'
+import type { NullFit, RingRatio } from './ringLikelihood'
 import { defaultMaxArOrder } from '../correlatedNoise'
-import type { ArFit } from '../correlatedNoise'
 import { MAD_TO_SIGMA, chiSquareSurvival, chiSquareSurvivalEvenDof, mad, median, normalQuantile } from '../math'
 import { tCdf } from '../studentT'
 
@@ -57,19 +64,24 @@ import { tCdf } from '../studentT'
 //    exact innovations whitening of data and every column with missing observations handled by
 //    the Kalman filter of the AR state space (Jones 1980): two-step feasible GLS (Aitken 1935;
 //    Cochrane and Orcutt 1949).
-// 4. Detection field: D_l(theta), the whitened SSR reduction from adding the two ring columns to
-//    line l's null design (Frisch-Waugh-Lovell), chi2_2 under H0 for fixed theta; Q = sum_l D_l
-//    is chi2_2K. The look-elsewhere effect over the grid G (FREQUENCY_GRID_HZ x ZETA_GRID,
-//    |G| = 1,703) is paid by the Bonferroni bound pBound = min(1, |G| P(chi2_2K >= max_G Q))
-//    (Dunn 1961). The noise model of this test is the one fitted under the null, so its size is
-//    exact (see DetectionNoise for the calibration that chose it). Per-line labels use the same
-//    bound on max_G D_l; after a detection they, and the tier tests, use the noise model refitted
-//    to the full-fit residuals, because the null fit models a long-lived ring partly as noise.
+// 4. Detection field: per line the generalized likelihood ratio statistic of the ring at theta
+//    with the AR noise model refitted under each hypothesis (ringLikelihood.ts), chi2_2 under H0
+//    at a fixed theta; their sum Q over the K lines is chi2_2K. A noise model fitted under the
+//    null alone would absorb a component that persists over the window. The refit is costly, so
+//    the field holds a lower bound of each line's statistic: the ratio with the null noise model
+//    held fixed at every grid point, and the refitted ratio at the null spectrum's in-band peaks
+//    (where an absorbed component shows) and wherever a maximum is taken, since every maximum
+//    the analysis uses is evaluated with the refitted model. The look-elsewhere effect over the
+//    grid G (FREQUENCY_GRID_HZ x ZETA_GRID, |G| = 1,703) is paid by the Bonferroni bound
+//    pBound = min(1, |G| P(chi2_2K >= max_G Q)) (Dunn 1961); a lower bound of Q can only raise
+//    pBound, so the bound stays valid. Per-line labels use the same bound on each line's own
+//    statistic.
 // 5. Estimation: seed at argmax_G Q, then generalized least squares variable projection (Golub
-//    and Pereyra 1973) over (f, zeta, log tau), polished by Levenberg-Marquardt (Levenberg 1944;
-//    Marquardt 1963), with the noise model refitted to the full-fit residuals (the second
-//    feasible GLS step); covariance sigma^2 (J'J)^-1 on the whitened stacked Jacobian (Seber and
-//    Wild 1989); zeta is bounded to [0, ZETA_MAX].
+//    and Pereyra 1973) over (f, zeta, log tau) with each line's noise model refitted under the
+//    alternative at the seed, polished by Levenberg-Marquardt (Levenberg 1944; Marquardt 1963),
+//    then the noise model refitted to the full-fit residuals with its order chosen again (the
+//    second feasible GLS step); covariance sigma^2 (J'J)^-1 on the whitened stacked Jacobian
+//    (Seber and Wild 1989); zeta is bounded to [0, ZETA_MAX].
 // 6. Checks, each at DETECTION_ALPHA:
 //    - Input proportionality (output-error model, Ljung 1999): the ring is the linear response
 //      to the corner's velocity step, so each line's ring amplitude is its rung's corner speed
@@ -182,26 +194,6 @@ export interface AxisPool {
   /** One-tier leave-one-line-out influence check of the detection. */
   influenceCheck: CheckState
   lines: LineVerdict[]
-}
-
-/**
- * Which residual the axis detection's noise model is fitted to: 'null' fits the AR to the
- * null-model residuals (the nuisance estimated under H0, as in a score test); 'full' fits it to
- * the residuals of a per-line ordinary least squares full fit at the line's own best grid point
- * (the two-step feasible GLS of the design); 'axis' refits it once after removing the ring of the
- * null field's pooled maximum from every line. Removing any in-band component lowers the AR's
- * estimate of the noise across the whole ring band, which on the tracer's one-pixel lattice spans
- * about one AR resolution cell, so 'full' and 'axis' inflate the field under H0. Measured on 60
- * simulated noise-only axes per noise model, share of detection bounds at or below 0.05: 'full'
- * 31 of 60 under 2 px blur and 39 of 60 under red AR(2) noise, 'axis' 31 of 60 under 2 px blur,
- * 'null' 1 of 300 over five noise models. 'null' is therefore the production choice (its full
- * calibration is the tests/stats pBound suite); the others stay selectable for that measurement.
- */
-export type DetectionNoise = 'null' | 'full' | 'axis'
-export const DEFAULT_DETECTION_NOISE: DetectionNoise = 'null'
-
-export interface PoolOptions {
-  detectionNoise?: DetectionNoise
 }
 
 /**
@@ -337,15 +329,13 @@ export function analyzeTracedLine(line: TracedLine): LineFit {
 /** One line's prepared model inside poolAxisFits. */
 interface LineState {
   basis: LineBasis
-  noise0: LineNoise
-  design0: NullDesign
-  /** D_l over DETECTION_GRID. */
+  h0: NullFit
+  /** Lower bound of the line's likelihood ratio statistic over DETECTION_GRID: the held-noise
+   *  ratio everywhere, the refitted ratio wherever it was evaluated. */
   field: Float64Array
+  /** The refitted ratios evaluated so far, by grid index. */
+  refitted: Map<number, RingRatio>
 }
-
-/** The white unit-variance noise model: its whitener is the identity, so the GLS stages reduce
- *  to ordinary least squares. */
-const WHITE_UNIT: ArFit = { coefficients: [], noiseVariance: 1 }
 
 /** The search range of the flow-lag time constant: one sample interval to the longest window. */
 function tauRange(bases: LineBasis[]): [number, number] {
@@ -355,75 +345,77 @@ function tauRange(bases: LineBasis[]): [number, number] {
   ]
 }
 
-/** The detection noise models of the lines: tau by ordinary least squares, then the AR fits. */
-function detectionNoises(
-  bases: LineBasis[],
-  tauBounds: [number, number],
-  variant: DetectionNoise,
-): LineNoise[] {
+/**
+ * The null fits of the lines: tau by ordinary least squares, the AR order by AICc on each line's
+ * ordinary least squares residual, tau again by GLS under those noise models, then each line's
+ * AR refitted to its GLS residual by iterated Cochrane-Orcutt.
+ */
+function nullFits(bases: LineBasis[], tauBounds: [number, number]): NullFit[] {
   const tauOls = minimizeOverLogTau(
     (tau) => bases.reduce((s, b) => s + olsNullSsr(b, tau), 0),
     tauBounds[0],
     tauBounds[1],
   )
-  return bases.map((b) =>
-    variant === 'full'
-      ? fitNoise(b, olsFullResidualAtArgmax(b, tauOls))
-      : fitNoise(b, olsNull(b, tauOls).residual),
+  const initial = bases.map((b) => fitNoise(b, olsNull(b, tauOls).residual))
+  const tau = minimizeOverLogTau(
+    (t) => bases.reduce((s, b, l) => s + glsNullSsr(b, initial[l], t), 0),
+    tauBounds[0],
+    tauBounds[1],
   )
+  return bases.map((b, l) => nullHypothesisFit(b, initial[l].fit, tau))
 }
 
 /**
- * The axis detection statistic Q(theta) = sum_l D_l(theta) at one point, with the production
- * noise models and null designs under the null (the 'null' detection noise). Exposed for the
- * statistical calibration of the detection field (chi2_2K at a fixed theta under H0, and the
- * noncentrality of the power cases).
+ * The axis detection statistic Q(theta) = sum_l of the lines' likelihood ratio statistics at one
+ * point, each with its noise model refitted under both hypotheses. Exposed for the statistical
+ * calibration of the detection (chi2_2K at a fixed theta under H0, and the noncentrality of the
+ * power cases).
  */
 export function detectionStatisticAt(fits: LineFit[], frequencyHz: number, dampingRatio: number): number {
   const bases = fits.filter((f) => f.window).map((f) => lineBasis(f.window!))
-  const tauBounds = tauRange(bases)
-  const noises = detectionNoises(bases, tauBounds, 'null')
-  const tau = minimizeOverLogTau(
-    (t) => bases.reduce((s, b, l) => s + glsNullSsr(b, noises[l], t), 0),
-    tauBounds[0],
-    tauBounds[1],
-  )
-  return bases.reduce((sum, b, l) => {
-    const design = nullDesign(b, noises[l], tau)
-    const scratch = ringScratch(b.m)
-    return sum + projectRing(b, noises[l], design, frequencyHz, dampingRatio, scratch, new Float64Array(design.k), new Float64Array(design.k)).D
-  }, 0)
+  const h0 = nullFits(bases, tauRange(bases))
+  return bases.reduce((sum, b, l) => sum + ringLikelihoodRatio(b, h0[l], { frequencyHz, dampingRatio }).statistic, 0)
 }
 
-/** The null designs at the GLS-optimal tau and the detection fields of lines with given noise. */
-function detectionStates(
-  bases: LineBasis[],
-  noises: LineNoise[],
-  tauBounds: [number, number],
-): { states: LineState[]; tau: number } {
-  const tau = minimizeOverLogTau(
-    (t) => bases.reduce((s, b, l) => s + glsNullSsr(b, noises[l], t), 0),
-    tauBounds[0],
-    tauBounds[1],
-  )
-  const states = bases.map((b, l) => {
-    const design0 = nullDesign(b, noises[l], tau)
-    return { basis: b, noise0: noises[l], design0, field: detectionField(b, noises[l], design0) }
+/** The detection states of the lines: null fits, held-noise fields, refits at the null spectrum
+ *  peaks on the least damped grid row. */
+function detectionStates(bases: LineBasis[], tauBounds: [number, number]): LineState[] {
+  return nullFits(bases, tauBounds).map((h0, l) => {
+    const state: LineState = { basis: bases[l], h0, field: heldNoiseField(bases[l], h0), refitted: new Map() }
+    for (const f of noiseSpectrumPeaks(h0.noise.fit, cruiseSampleIntervalS(bases[l]))) refine(state, gridIndex(f, ZETA_GRID[0]))
+    return state
   })
-  return { states, tau }
 }
 
-/** D_l over DETECTION_GRID. */
-function detectionField(basis: LineBasis, noise: LineNoise, design: NullDesign): Float64Array {
+/** The grid index of (f, zeta) in DETECTION_GRID (frequency-major). */
+function gridIndex(frequencyHz: number, dampingRatio: number): number {
+  const fi = Math.round((frequencyHz - F_MIN_HZ) / FREQUENCY_GRID_HZ)
+  return fi * ZETA_GRID.length + ZETA_GRID.indexOf(dampingRatio)
+}
+
+/** The likelihood ratio of every grid point with the null noise model held fixed. */
+function heldNoiseField(basis: LineBasis, h0: NullFit): Float64Array {
   const field = new Float64Array(DETECTION_GRID.length)
   const scratch = ringScratch(basis.m)
-  const pr = new Float64Array(design.k)
-  const pi = new Float64Array(design.k)
+  const pr = new Float64Array(h0.design.k)
+  const pi = new Float64Array(h0.design.k)
   for (let g = 0; g < DETECTION_GRID.length; g++) {
     const point = DETECTION_GRID[g]
-    field[g] = projectRing(basis, noise, design, point.frequencyHz, point.dampingRatio, scratch, pr, pi).D
+    const D = projectRing(basis, h0.noise, h0.design, point.frequencyHz, point.dampingRatio, scratch, pr, pi).D
+    field[g] = heldNoiseStatistic(h0, basis.m, D)
   }
   return field
+}
+
+/** Evaluates the refitted ratio of one line at one grid point (once) into its field. */
+function refine(state: LineState, g: number): RingRatio {
+  let ratio = state.refitted.get(g)
+  if (!ratio) {
+    ratio = ringLikelihoodRatio(state.basis, state.h0, DETECTION_GRID[g])
+    state.refitted.set(g, ratio)
+    state.field[g] = Math.max(state.field[g], ratio.statistic)
+  }
+  return ratio
 }
 
 /** Index and value of the maximum of sum over `lines` of their fields, over `points`. */
@@ -445,6 +437,24 @@ function fieldMaximum(
     }
   }
   return { index: best, value: bestValue }
+}
+
+/**
+ * The maximum of the summed field over `points`, evaluated with the refitted noise models: the
+ * running maximum is refitted on every line until the maximum sits at a refitted point. Refits
+ * only raise the field, so this ends, and every point left unrefitted is below the result.
+ */
+function refittedMaximum(
+  states: LineState[],
+  lines: number[],
+  points: ArrayLike<number> | null = null,
+): { index: number; value: number } {
+  for (;;) {
+    const top = fieldMaximum(states, lines, points)
+    const pending = lines.filter((l) => !states[l].refitted.has(top.index))
+    if (pending.length === 0) return top
+    for (const l of pending) refine(states[l], top.index)
+  }
 }
 
 /** Bonferroni bound of a maximum of chi2_dof statistics over `count` grid points. */
@@ -551,12 +561,7 @@ const NOT_ASSESSED_SPEED: SpeedCheck = { state: 'not-assessed', tiers: [] }
  * machine. `speedsMmS` are the coupon's speed tiers; each line's own speed and corner speed come
  * with its record.
  */
-export function poolAxisFits(
-  fits: LineFit[],
-  speedsMmS: number[],
-  options: PoolOptions = {},
-): AxisPool {
-  const detectionNoise = options.detectionNoise ?? DEFAULT_DETECTION_NOISE
+export function poolAxisFits(fits: LineFit[], speedsMmS: number[]): AxisPool {
   const verdicts: LineVerdict[] = fits.map((f) => ({
     usedInJointFit: false,
     exclusion: f.window ? null : 'no-free-response',
@@ -608,34 +613,19 @@ export function poolAxisFits(
     return tooFewLines(windowed.length, 0, fits.length - windowed.length)
   }
 
-  // Detection stage: tau and the noise models under the null, then the field.
+  // Detection stage: the null fits, the likelihood ratio fields, the axis bound.
   const bases = windowed.map((i) => lineBasis(fits[i].window!))
   const tauBounds = tauRange(bases)
-  let detection = detectionStates(bases, detectionNoises(bases, tauBounds, detectionNoise), tauBounds)
+  const states = detectionStates(bases, tauBounds)
+  const tau0 = states[0].h0.tauS
   const all = bases.map((_, l) => l)
-  if (detectionNoise === 'axis') {
-    // One Cochrane-Orcutt step at the axis's single best candidate: the ring of the null
-    // field's pooled maximum is removed from every line by GLS, the noise is refitted to what
-    // remains, and the field is computed again with that noise.
-    const star = DETECTION_GRID[fieldMaximum(detection.states, all).index]
-    detection = detectionStates(
-      bases,
-      detection.states.map((st) => {
-        const ring = projectRing(st.basis, st.noise0, st.design0, star.frequencyHz, star.dampingRatio, ringScratch(st.basis.m), new Float64Array(st.design0.k), new Float64Array(st.design0.k))
-        return fitNoise(st.basis, rawFullResidual(st.basis, st.noise0, st.design0, star.frequencyHz, star.dampingRatio, ring, ringScratch(st.basis.m)))
-      }),
-      tauBounds,
-    )
-  }
-  const { states, tau: tau0 } = detection
   const G = DETECTION_GRID.length
-  const axisMax = fieldMaximum(states, all)
+  const axisMax = refittedMaximum(states, all)
   const pBound = bonferroni(G, axisMax.value, 2 * states.length)
-  states.forEach((s, l) => {
-    let top = 0
-    for (let g = 0; g < G; g++) top = Math.max(top, s.field[g])
+  const ownMaxima = states.map((_, l) => refittedMaximum(states, [l]))
+  ownMaxima.forEach((own, l) => {
     const v = verdicts[windowed[l]]
-    v.detectionPBound = bonferroni(G, top, 2)
+    v.detectionPBound = bonferroni(G, own.value, 2)
     v.detected = v.detectionPBound <= DETECTION_ALPHA
   })
   const linesDetected = verdicts.filter((v) => v.detected).length
@@ -653,15 +643,16 @@ export function poolAxisFits(
     )
   }
 
-  // Per-line fits of the detected lines (null noise model, the axis tau), for screening.
+  // Per-line fits of the detected lines (the line's noise model refitted under the alternative at
+  // its own maximum, the axis tau), for screening.
   const lineFits = new Map<number, JointFit>()
   states.forEach((s, l) => {
     if (!verdicts[windowed[l]].detected) return
-    const own = fieldMaximum(states, [l])
-    const seed = DETECTION_GRID[own.index]
+    const own = ownMaxima[l].index
+    const seed = DETECTION_GRID[own]
     lineFits.set(
       l,
-      varproFit([s.basis], [s.noise0], [seed.frequencyHz, seed.dampingRatio, Math.log(tau0)], [true, true, false], tauBounds),
+      varproFit([s.basis], [refine(s, own).fit.noise], [seed.frequencyHz, seed.dampingRatio, Math.log(tau0)], [true, true, false], tauBounds),
     )
   })
   lineFits.forEach((fit, l) => {
@@ -696,22 +687,24 @@ export function poolAxisFits(
   for (const l of included) verdicts[windowed[l]].usedInJointFit = true
   base.linesUsed = included.length
 
-  // Joint variable projection, then the second feasible GLS step with the noise refitted to the
-  // full-fit residuals.
+  // Joint variable projection with each line's noise model refitted under the alternative at the
+  // seed, then the second feasible GLS step with the noise refitted to the full-fit residuals.
   const inBases = included.map((l) => states[l].basis)
-  const seed = DETECTION_GRID[fieldMaximum(states, included).index]
+  const seedIndex = refittedMaximum(states, included).index
+  const seed = DETECTION_GRID[seedIndex]
+  const noiseAtSeed = included.map((l) => refine(states[l], seedIndex).fit.noise)
   const first = varproFit(
     inBases,
-    included.map((l) => states[l].noise0),
+    noiseAtSeed,
     [seed.frequencyHz, seed.dampingRatio, Math.log(tau0)],
     [true, true, true],
     tauBounds,
   )
-  const noise1 = included.map((l) => {
+  const noise1 = included.map((l, k) => {
     const s = states[l]
-    const design = nullDesign(s.basis, s.noise0, first.tauS)
-    const ring = projectRing(s.basis, s.noise0, design, first.frequencyHz, first.dampingRatio, ringScratch(s.basis.m), new Float64Array(design.k), new Float64Array(design.k))
-    return fitNoise(s.basis, rawFullResidual(s.basis, s.noise0, design, first.frequencyHz, first.dampingRatio, ring, ringScratch(s.basis.m)))
+    const design = nullDesign(s.basis, noiseAtSeed[k], first.tauS)
+    const ring = projectRing(s.basis, noiseAtSeed[k], design, first.frequencyHz, first.dampingRatio, ringScratch(s.basis.m), new Float64Array(design.k), new Float64Array(design.k))
+    return fitNoise(s.basis, rawFullResidual(s.basis, noiseAtSeed[k], design, first.frequencyHz, first.dampingRatio, ring, ringScratch(s.basis.m)))
   })
   const joint = varproFit(
     inBases,
@@ -737,33 +730,16 @@ export function poolAxisFits(
     amplitudeMm: median(amplitudes),
   })
 
-  // After the detection, the line labels and the tier tests use the noise model of the full fit:
-  // a long-lived ring is partly modeled as noise by the null fit, which costs those per-line and
-  // per-tier tests their power, while the axis decision above keeps the exact null noise model.
-  const states1: LineState[] = inBases.map((b, k) => ({
-    basis: b,
-    noise0: noise1[k],
-    design0: designs1[k],
-    field: detectionField(b, noise1[k], designs1[k]),
-  }))
-  states1.forEach((st, k) => {
-    let top = 0
-    for (let g = 0; g < G; g++) top = Math.max(top, st.field[g])
-    const v = verdicts[windowed[included[k]]]
-    v.detectionPBound = bonferroni(G, top, 2)
-    v.detected = v.detectionPBound <= DETECTION_ALPHA
-  })
-  base.linesDetected = verdicts.filter((v) => v.detected).length
-
   // Diagnostics and checks.
   base.decayStatistic = decayStatistic(inBases, noise1, joint, tauBounds)
   base.decayDemonstrated = base.decayStatistic > DECAY_CRITICAL
   base.proportionality = proportionalityCheck(inBases, rings)
-  base.speedCheck = speedCheck(states1, joint, speedsMmS, tauBounds)
+  base.speedCheck = speedCheck(states, included, noise1, joint, speedsMmS, tauBounds)
   base.influenceCheck = speedsMmS.length === 1 ? influenceCheck(states) : 'not-assessed'
   const detectedK = included.map((l, k) => (verdicts[windowed[l]].detected ? k : -1)).filter((k) => k >= 0)
   const replicate = replicateCheck(
-    detectedK.map((k) => states1[k]),
+    detectedK.map((k) => inBases[k]),
+    detectedK.map((k) => noise1[k]),
     detectedK.map((k) => lineFits.get(included[k]) ?? joint),
     joint,
     tauBounds,
@@ -841,22 +817,6 @@ export function poolAxisFits(
 }
 
 /**
- * The 'full' detection noise residual: the line's ordinary least squares full fit at its own
- * best grid point (unweighted field), whose residual the design's two-step GLS fits the AR to.
- */
-function olsFullResidualAtArgmax(basis: LineBasis, tauS: number): Float64Array {
-  const identity = noiseModel(basis, WHITE_UNIT)
-  const design = nullDesign(basis, identity, tauS)
-  const field = detectionField(basis, identity, design)
-  let best = 0
-  for (let g = 1; g < field.length; g++) if (field[g] > field[best]) best = g
-  const point = DETECTION_GRID[best]
-  const scratch = ringScratch(basis.m)
-  const ring = projectRing(basis, identity, design, point.frequencyHz, point.dampingRatio, scratch, new Float64Array(design.k), new Float64Array(design.k))
-  return rawFullResidual(basis, identity, design, point.frequencyHz, point.dampingRatio, ring, scratch)
-}
-
-/**
  * The boundary likelihood-ratio statistic of zeta = 0 (Self and Liang 1987): the whitened SSR of
  * the undamped fit (f and tau re-optimized) minus that of the full fit, over sigma^2; zero when
  * the fit already sits at zeta = 0.
@@ -920,10 +880,13 @@ function localGrid(centers: number[]): number[] {
   return out
 }
 
-/** The three-way two-tier speed check (closed testing on local grids, then the d test), on the
- *  joint-fit lines with their full-fit noise models. */
+/** The three-way two-tier speed check (closed testing on local grids, then the d test) on the
+ *  joint-fit lines `included`: each tier's detection over its own lines' likelihood ratio fields,
+ *  its frequency fitted with the lines' full-fit noise models `noise1` (aligned with included). */
 function speedCheck(
   states: LineState[],
+  included: number[],
+  noise1: LineNoise[],
   joint: JointFit,
   speedsMmS: number[],
   tauBounds: [number, number],
@@ -934,17 +897,17 @@ function speedCheck(
   const rho = fast / slow
   const points = localGrid([joint.frequencyHz, joint.frequencyHz * rho, joint.frequencyHz / rho])
   const tiers: TierCheck[] = [slow, fast].map((v) => {
-    const members = states.map((st, k) => (st.basis.rec.speedMmS === v ? k : -1)).filter((k) => k >= 0)
+    const members = included.map((l, k) => (states[l].basis.rec.speedMmS === v ? k : -1)).filter((k) => k >= 0)
     const blank: TierCheck = { speedMmS: v, detected: false, detectionPBound: null, frequencyHz: null, frequencySeHz: null }
     if (members.length === 0 || points.length === 0) return blank
-    const local = fieldMaximum(states, members, points)
+    const local = refittedMaximum(states, members.map((k) => included[k]), points)
     const pBound = bonferroni(points.length, local.value, 2 * members.length)
     const detected = pBound <= DETECTION_ALPHA
     if (!detected) return { ...blank, detectionPBound: pBound }
     const seed = DETECTION_GRID[local.index]
     const fit = varproFit(
-      members.map((k) => states[k].basis),
-      members.map((k) => states[k].noise0),
+      members.map((k) => states[included[k]].basis),
+      members.map((k) => noise1[k]),
       [seed.frequencyHz, seed.dampingRatio, Math.log(joint.tauS)],
       [true, true, false],
       tauBounds,
@@ -968,13 +931,8 @@ function influenceCheck(states: LineState[]): CheckState {
   if (K < 2) return 'failed'
   const G = DETECTION_GRID.length
   for (let left = 0; left < K; left++) {
-    let top = -Infinity
-    for (let g = 0; g < G; g++) {
-      let s = 0
-      for (let l = 0; l < K; l++) if (l !== left) s += states[l].field[g]
-      if (s > top) top = s
-    }
-    if (bonferroni(G, top, 2 * (K - 1)) > DETECTION_ALPHA) return 'failed'
+    const others = states.map((_, l) => l).filter((l) => l !== left)
+    if (bonferroni(G, refittedMaximum(states, others).value, 2 * (K - 1)) > DETECTION_ALPHA) return 'failed'
   }
   return 'passed'
 }
@@ -982,20 +940,21 @@ function influenceCheck(states: LineState[]): CheckState {
 /**
  * Cochran's Q over the detected joint-fit lines' own frequencies, each fitted with its full-fit
  * noise model and the axis tau from its screening fit (or the joint estimate). Returns the state
- * and each line's frequency, aligned with `states`.
+ * and each line's frequency, aligned with `bases`.
  */
 function replicateCheck(
-  states: LineState[],
+  bases: LineBasis[],
+  noises: LineNoise[],
   seeds: JointFit[],
   joint: JointFit,
   tauBounds: [number, number],
 ): { state: CheckState; frequencies: number[] } {
   const frequencies: number[] = []
   const estimates: { f: number; se: number }[] = []
-  states.forEach((st, j) => {
+  bases.forEach((basis, j) => {
     const fit = varproFit(
-      [st.basis],
-      [st.noise0],
+      [basis],
+      [noises[j]],
       [seeds[j].frequencyHz, seeds[j].dampingRatio, Math.log(joint.tauS)],
       [true, true, false],
       tauBounds,
