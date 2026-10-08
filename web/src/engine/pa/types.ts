@@ -90,7 +90,8 @@ export interface PaResult {
   /** Bulge-sign sweep coverage diagnostic, null on failure. */
   sweepBracket: PaSweepBracket | null
   /**
-   * Bootstrap standard error of bestPa (Efron nonparametric bootstrap of the parabolic vertex),
+   * Bootstrap standard error of bestPa (moving-block bootstrap of the full estimator, since the
+   * width deviations along a line are serially correlated),
    * null on failure or when the best line sits at the sweep edge (no bracket to interpolate in).
    */
   sePa: number | null

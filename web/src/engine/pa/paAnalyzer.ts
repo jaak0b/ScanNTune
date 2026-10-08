@@ -9,6 +9,8 @@ import type { WidthSample } from './lineMeasurer'
 import { sampleBgrTriples, selectMeasurementChannel } from '../cvUtils'
 import { hampelOutliers, median, mulberry32 } from '../math'
 import { evaluateScanSetResolution } from '../resolutionGate'
+import { latticeSegments } from '../correlatedNoise'
+import { movingBlockResample, politisWhiteBlockLength } from '../blockBootstrap'
 
 // Turns an aligned PA coupon scan into a pressure-advance estimate. Each test line is profiled
 // with measureLineWidthProfile, its width samples are cleaned with a Hampel identifier (isolated
@@ -268,18 +270,23 @@ function classifySweepBracket(bulges: number[]): 'bracketed' | 'above-range' | '
   return 'bracketed'
 }
 
-// Nonparametric bootstrap (Efron 1979) of the full PA estimator: B = 200 replicates, the textbook
-// choice for standard-error estimation (Efron and Tibshirani, ch. 6). Per replicate, EVERY
-// measured line's cleaned in-window deviations are resampled with replacement (counts preserved,
-// steady medians held fixed), all line scores recomputed, and the whole estimator re-run: the
-// discrete argmin over the replicate score curve, then the parabolic vertex when the replicate
-// best line has a measured bracket (the discrete value otherwise, mirroring the point estimate's
-// sweep-edge behavior; such edge-clamped replicates stay in the sample). The reported standard
-// error is the sample standard deviation of the replicate estimates. A bracket-only bootstrap
-// (holding the argmin fixed at the point estimate's line) underestimates: it ignores the jitter
-// of the argmin itself, which the score noise moves between neighbouring lines. The RNG seed
-// defaults to a fixed value so a given scan reports the same value by default, but is a
-// parameter so tests can vary it.
+// Moving-block bootstrap (Kunsch 1989) of the full PA estimator: B = 200 replicates, the textbook
+// choice for standard-error estimation (Efron and Tibshirani, ch. 6). The width deviations along a
+// line are serially correlated (neighbouring 0.25 mm samples share print texture and the shape of
+// the transition response; on the golden scan the squared deviations the score averages have an
+// integrated autocorrelation time of about 3 samples), so resampling them one by one would
+// understate each score's variance by about that factor. Per replicate, EVERY measured line's
+// cleaned in-window squared deviations are resampled in blocks of consecutive samples (blocks
+// never cross a transition window's edge or a rejected sample; counts preserved, steady medians
+// held fixed), with the line's own block length chosen by the Politis and White (2004, corrected
+// 2009) rule; all line scores are recomputed and the whole estimator re-run: the discrete argmin
+// over the replicate score curve, then the parabolic vertex when the replicate best line has a
+// measured bracket (the discrete value otherwise, mirroring the point estimate's sweep-edge
+// behavior; such edge-clamped replicates stay in the sample). The reported standard error is the
+// sample standard deviation of the replicate estimates. A bracket-only bootstrap (holding the
+// argmin fixed at the point estimate's line) underestimates: it ignores the jitter of the argmin
+// itself, which the score noise moves between neighbouring lines. The RNG seed defaults to a fixed
+// value so a given scan reports the same value by default, but is a parameter so tests can vary it.
 const BOOTSTRAP_REPLICATES = 200
 const BOOTSTRAP_SEED = 1234567
 
@@ -291,37 +298,37 @@ function bootstrapSePa(
   bootstrapSeed: number = BOOTSTRAP_SEED,
 ): number | null {
   const inWindow = (x: number) => transitionXsMm.some((t) => Math.abs(x - t) <= WINDOW_HALF_MM)
-  // Per measured line, the deviations the RMS score consumes: cleaned in-window samples relative
-  // to the line's (fixed) steady median, a gap counting the full nominal width. Null where the
-  // line is unmeasured or has no in-window samples; those lines keep an Infinity score in every
-  // replicate, exactly as in the point estimate.
-  const devs: (number[] | null)[] = lines.map((l, li) => {
+  // Per measured line, the squared deviations the RMS score averages: cleaned in-window samples
+  // relative to the line's (fixed) steady median, a gap counting the full nominal width, split
+  // into runs of consecutive samples. Null where the line is unmeasured or has no in-window
+  // samples; those lines keep an Infinity score in every replicate, exactly as in the point
+  // estimate.
+  const resamplers: ({ segments: number[][]; blockLength: number } | null)[] = lines.map((l, li) => {
     const c = cleaned[li]
     if (!l.measured || !c) return null
-    const d: number[] = []
+    const squares: number[] = []
+    const positions: number[] = []
     for (let i = 0; i < c.samples.length; i++) {
       if (!inWindow(c.samples[i].xMm) || c.rejected[i]) continue
-      d.push(
-        Number.isFinite(c.samples[i].widthMm)
-          ? c.samples[i].widthMm - l.medianWidthMm
-          : nominalWidthMm,
-      )
+      const dev = Number.isFinite(c.samples[i].widthMm)
+        ? c.samples[i].widthMm - l.medianWidthMm
+        : nominalWidthMm
+      squares.push(dev * dev)
+      positions.push(i)
     }
-    return d.length > 0 ? d : null
+    if (squares.length === 0) return null
+    const segments = latticeSegments(squares, positions)
+    return { segments, blockLength: politisWhiteBlockLength(segments) }
   })
-  if (devs.every((d) => d === null)) return null
+  if (resamplers.every((r) => r === null)) return null
 
   const rand = mulberry32(bootstrapSeed)
   const estimates: number[] = []
   for (let b = 0; b < BOOTSTRAP_REPLICATES; b++) {
-    const scores = devs.map((d) => {
-      if (!d) return Infinity
-      let sum = 0
-      for (let i = 0; i < d.length; i++) {
-        const v = d[Math.floor(rand() * d.length)]
-        sum += v * v
-      }
-      return Math.sqrt(sum / d.length)
+    const scores = resamplers.map((r) => {
+      if (!r) return Infinity
+      const resample = movingBlockResample(r.segments, r.blockLength, rand)
+      return Math.sqrt(resample.reduce((a, v) => a + v, 0) / resample.length)
     })
     let best = -1
     for (let i = 0; i < scores.length; i++) {
