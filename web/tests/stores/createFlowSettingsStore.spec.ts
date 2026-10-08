@@ -103,46 +103,6 @@ describe('createFlowSettingsStore (flat shape)', () => {
   })
 })
 
-describe('createFlowSettingsStore (backfilled fields)', () => {
-  type Grown = TestSettings & { added: number | null; flag: boolean }
-  const BACKFILL_KEY = 'test.settings.backfill'
-  const useGrown = createFlowSettingsStore<Grown>({
-    storeId: 'testBackfillSettings',
-    storageKey: BACKFILL_KEY,
-    shape: 'flat',
-    fields: {
-      ...FIELDS,
-      added: { kind: 'nullableNumber', backfill: null },
-      flag: { kind: 'boolean', backfill: false },
-    },
-  })
-
-  beforeEach(() => {
-    localStorage.clear()
-    setActivePinia(createPinia())
-  })
-
-  it('loads an entry stored before the fields existed, filling in their backfill values', () => {
-    localStorage.setItem(BACKFILL_KEY, JSON.stringify({ a: 1, mode: 'x' }))
-    expect(useGrown().settings).toEqual({ a: 1, mode: 'x', added: null, flag: false })
-  })
-
-  it('keeps a stored value of a backfilled field', () => {
-    localStorage.setItem(BACKFILL_KEY, JSON.stringify({ a: 1, mode: 'x', added: 3, flag: true }))
-    expect(useGrown().settings).toEqual({ a: 1, mode: 'x', added: 3, flag: true })
-  })
-
-  it('still drops an entry whose backfilled field is present but invalid', () => {
-    localStorage.setItem(BACKFILL_KEY, JSON.stringify({ a: 1, mode: 'x', added: 'three' }))
-    expect(useGrown().settings).toBeNull()
-  })
-
-  it('still drops an entry missing a field without a backfill value', () => {
-    localStorage.setItem(BACKFILL_KEY, JSON.stringify({ a: 1, added: 3, flag: true }))
-    expect(useGrown().settings).toBeNull()
-  })
-})
-
 describe('createFlowSettingsStore (per-profile shape)', () => {
   beforeEach(() => {
     localStorage.clear()

@@ -2,6 +2,10 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import { useSkewSettings, type SkewSettings } from '../../src/stores/useSkewSettings'
 import { usePaSettings, type PaSettings } from '../../src/stores/usePaSettings'
+import {
+  usePaSmoothTimeSettings,
+  type PaSmoothTimeSettings,
+} from '../../src/stores/usePaSmoothTimeSettings'
 import { useEmSettings, type EmSettings } from '../../src/stores/useEmSettings'
 import { useIsSettings, type IsSettings } from '../../src/stores/useIsSettings'
 import { usePrinterProfiles } from '../../src/stores/usePrinterProfiles'
@@ -14,9 +18,11 @@ const PA: PaSettings = {
   lineCount: 16,
   slowSpeedMmS: 25,
   fastSpeedMmS: 120,
+}
+const PA_SMOOTH_TIME: PaSmoothTimeSettings = {
   smoothTimeStart: 0.02,
   smoothTimeEnd: 0.05,
-  smoothTimeFixedAdvance: 0.045,
+  pressureAdvance: 0.045,
 }
 const EM: EmSettings = {
   pitchMinMm: 0.7,
@@ -64,43 +70,57 @@ describe('per-flow settings stores', () => {
     // The smooth time coupon is analyzed against these after a reload, so they must come back
     // exactly as generated, not as the defaults.
     const id = addProfile()
-    usePaSettings().save(PA)
+    usePaSmoothTimeSettings().save(PA_SMOOTH_TIME)
     setActivePinia(createPinia())
     usePrinterProfiles().select(id)
-    const reloaded = usePaSettings().settings
-    expect(reloaded?.smoothTimeStart).toBe(0.02)
-    expect(reloaded?.smoothTimeEnd).toBe(0.05)
-    expect(reloaded?.smoothTimeFixedAdvance).toBe(0.045)
+    expect(usePaSmoothTimeSettings().settings).toEqual({
+      smoothTimeStart: 0.02,
+      smoothTimeEnd: 0.05,
+      pressureAdvance: 0.045,
+    })
+    expect(JSON.parse(localStorage.getItem('scanntune.settings.paSmoothTime')!)).toEqual({
+      [id]: PA_SMOOTH_TIME,
+    })
   })
 
-  it('loads a pressure advance entry stored before the smooth time fields existed', () => {
+  it('loads a pressure advance entry that still carries smooth time fields, dropping them', () => {
     const id = addProfile()
-    const older = {
+    const earlier = {
       paStart: 0.02,
       paEnd: 0.08,
       lineCount: 16,
       slowSpeedMmS: 25,
       fastSpeedMmS: 120,
+      smoothTimeStart: 0.02,
+      smoothTimeEnd: 0.05,
+      smoothTimeFixedAdvance: 0.045,
     }
-    localStorage.setItem('scanntune.settings.pa', JSON.stringify({ [id]: older }))
+    localStorage.setItem('scanntune.settings.pa', JSON.stringify({ [id]: earlier }))
     setActivePinia(createPinia())
     usePrinterProfiles().select(id)
     expect(usePaSettings().settings).toEqual({
-      ...older,
-      smoothTimeStart: null,
-      smoothTimeEnd: null,
-      smoothTimeFixedAdvance: null,
+      paStart: 0.02,
+      paEnd: 0.08,
+      lineCount: 16,
+      slowSpeedMmS: 25,
+      fastSpeedMmS: 120,
     })
   })
 
-  it('reset removes the stored smooth time sweep with the rest of the pressure advance entry', () => {
+  it('resetting the pressure advance test range leaves the smooth time settings stored', () => {
     addProfile()
-    const settings = usePaSettings()
-    settings.save(PA)
-    settings.reset()
-    expect(settings.hasStored).toBe(false)
-    expect(settings.settings).toBeNull()
+    const range = usePaSettings()
+    const smoothTime = usePaSmoothTimeSettings()
+    range.save(PA)
+    smoothTime.save(PA_SMOOTH_TIME)
+    range.reset()
+    expect(range.hasStored).toBe(false)
     expect(localStorage.getItem('scanntune.settings.pa')).toBeNull()
+    expect(smoothTime.settings).toEqual({
+      smoothTimeStart: 0.02,
+      smoothTimeEnd: 0.05,
+      pressureAdvance: 0.045,
+    })
   })
 
   it('flow settings are keyed by profile id under scanntune.settings.em', () => {

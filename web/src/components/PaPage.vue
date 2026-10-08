@@ -1,9 +1,8 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, shallowRef } from 'vue'
 import { usePrinterProfiles } from '../stores/usePrinterProfiles'
-import { usePaSettings } from '../stores/usePaSettings'
 import { BETA_NOTICE_LEAD, BETA_NOTICE_BODY } from './betaNotice'
-import { useFlowSettingsForm } from '../composables/useFlowSettingsForm'
+import { usePaTestSettings } from '../composables/usePaTestSettings'
 import { runGuardedAnalysis } from '../composables/useScanAnalysis'
 import { readBytes } from '../util/preview'
 import { hasMeasuredResolution } from '../util/scanResolution'
@@ -15,8 +14,6 @@ import { unresolvedVariablesWarning } from '../engine/pa/slicerVariables'
 import { paCorrection, sweepCorrection } from '../engine/pa/paCorrectionFormatter'
 import {
   couponGeometry,
-  defaultPaTestSpec,
-  defaultSmoothTimeTestSpec,
   edgeShiftRange,
   extruderPresetRanges,
   fitsA4,
@@ -34,48 +31,17 @@ import ResolutionChip from './ResolutionChip.vue'
 
 const store = usePrinterProfiles()
 
-// Test range card state and the smooth time step's sweep, persisted per printer profile; falls
-// back to the spec defaults when nothing is stored for the selected profile.
-const specDefaults = defaultPaTestSpec()
-const stDefaults = defaultSmoothTimeTestSpec(0)
-const paSettings = usePaSettings()
+// The test range (step 2) and the smooth time sweep (step 5), persisted per printer profile,
+// with the specs both coupons are generated and analyzed with.
 const {
-  form: settingsForm,
-  hasStored: settingsStored,
-  reset: resetSettings,
-} = useFlowSettingsForm(
-  paSettings,
-  () => ({
-    paStart: specDefaults.paStart,
-    paEnd: specDefaults.paEnd,
-    lineCount: specDefaults.lineCount,
-    slowSpeedMmS: specDefaults.slowSpeedMmS,
-    fastSpeedMmS: specDefaults.fastSpeedMmS,
-    smoothTimeStart: stDefaults.paStart,
-    smoothTimeEnd: stDefaults.paEnd,
-    smoothTimeFixedAdvance: null,
-  }),
-  () => store.selectedId,
-)
-const {
-  paStart,
-  paEnd,
-  lineCount,
-  slowSpeedMmS: slowSpeed,
-  fastSpeedMmS: fastSpeed,
-  smoothTimeStart: stStart,
-  smoothTimeEnd: stEnd,
-  smoothTimeFixedAdvance: stFixedAdvance,
-} = settingsForm
-
-const spec = computed<PaTestSpec>(() => ({
-  ...defaultPaTestSpec(),
-  paStart: paStart.value ?? specDefaults.paStart,
-  paEnd: paEnd.value ?? specDefaults.paEnd,
-  lineCount: lineCount.value ?? specDefaults.lineCount,
-  slowSpeedMmS: slowSpeed.value ?? specDefaults.slowSpeedMmS,
-  fastSpeedMmS: fastSpeed.value ?? specDefaults.fastSpeedMmS,
-}))
+  range: { paStart, paEnd, lineCount, slowSpeedMmS: slowSpeed, fastSpeedMmS: fastSpeed },
+  rangeStored: settingsStored,
+  resetRange: resetSettings,
+  smoothTime: { start: stStart, end: stEnd, pressureAdvance: stFixedAdvance },
+  spec,
+  smoothTimeSpec: stSpec,
+  prefillPressureAdvance,
+} = usePaTestSettings()
 // Extruder preset picker: prefills the PA range once per selection, never persisted, and manual
 // edits leave the selection alone (it is a one-shot prefill, not a bound value).
 const extruderPreset = ref<keyof typeof extruderPresetRanges | null>(null)
@@ -212,7 +178,7 @@ function resetProcessing(): void {
 async function analyzeUpload(
   e: Event,
   kind: 'pa' | 'smoothTime',
-  usedSpec: PaTestSpec,
+  usedSpec: PaTestSpec | null,
   sink: {
     processing: typeof processing
     analyzedSpec: typeof analyzedSpec
@@ -224,8 +190,9 @@ async function analyzeUpload(
   const file = input.files?.[0]
   // Clear the input so picking the same file again still fires change.
   input.value = ''
-  // A disabled input still receives drops in some browsers; never start a second analysis.
-  if (!file || analyzing.value) return
+  // A disabled input still receives drops in some browsers; never start a second analysis, and
+  // never analyze without a spec.
+  if (!file || analyzing.value || !usedSpec) return
   analyzeKind.value = kind
   progressText.value = 'Reading the scan'
   sink.reset()
@@ -252,8 +219,7 @@ async function onPick(e: Event): Promise<void> {
     reset: resetProcessing,
   })
   const r = processing.value?.result
-  // Prefill the smooth-time step's fixed advance with the freshly measured value.
-  if (r?.success && r.bestPa !== null) stFixedAdvance.value = Number(r.bestPa.toFixed(4))
+  if (r?.success && r.bestPa !== null) prefillPressureAdvance(r.bestPa)
 }
 
 // Result card state. Derived exclusively from analyzedSpec, the snapshot of the spec used for
@@ -290,26 +256,25 @@ function applyShift(): void {
 }
 
 // Step 5, smooth time (optional). Shown once a successful PA result exists in this session and a
-// printer profile is selected. The sweep range and the fixed pressure advance are the persisted settings above, so both the generated coupon and the
-// analysis of an already printed one read the same values, also after a reload.
-const stSpec = computed<PaTestSpec>(() => ({
-  ...defaultSmoothTimeTestSpec(stFixedAdvance.value ?? 0),
-  paStart: stStart.value ?? stDefaults.paStart,
-  paEnd: stEnd.value ?? stDefaults.paEnd,
-}))
+// printer profile is selected. The sweep range and the fixed pressure advance are the persisted
+// settings above, so both the generated coupon and the analysis of an already printed one read
+// the same values, also after a reload.
 const showSmoothStep = computed(
   () => store.selected !== null && result.value?.success === true,
 )
 // The smooth time coupon prints its fast segments at the default fast speed, so it gets the
 // same flow check as the main coupon.
-const stHighFlowText = computed(() => flowWarningFor(stSpec.value))
+const stHighFlowText = computed(() => (stSpec.value ? flowWarningFor(stSpec.value) : ''))
+// The smooth time coupon is generated only with a pressure advance entered; the page states
+// that reason next to the disabled button.
+const canGenerateSmooth = computed(() => canGenerate.value && stSpec.value !== null)
 
 const stGenerateError = ref('')
 const stFilename = computed(() =>
   store.selected ? `smooth_time_${sanitizeName(store.selected.name)}.gcode` : '',
 )
 function generateSmooth(): void {
-  downloadGcode(stSpec.value, stFilename.value, stGenerateError)
+  if (stSpec.value) downloadGcode(stSpec.value, stFilename.value, stGenerateError)
 }
 
 const stScanError = ref('')
@@ -669,14 +634,15 @@ const stCorrection = computed(() => {
       />
     </section>
 
-    <!-- 5. Smooth time (optional, Klipper only) -->
+    <!-- 5. Smooth time (optional) -->
     <section v-if="showSmoothStep" class="step mt-3" data-testid="pa-st-step">
       <div class="step-head mb-1">
         <span class="num">5</span><span class="step-title">Smooth time (optional)</span>
       </div>
       <p class="tip mb-3">
-        optional, Klipper only: sharper corners at high acceleration. The test lines all use the
-        pressure advance measured above and sweep pressure_advance_smooth_time instead.
+        This coupon prints every line at the pressure advance below and sweeps
+        pressure_advance_smooth_time from the start to the end value. The pressure advance is
+        prefilled with the value measured above.
       </p>
       <div class="fields">
         <NumericField v-model="stStart" label="Smooth time start (s)" :step="0.005" :min="0" :precision="4" :disabled="analyzing" />
@@ -687,13 +653,17 @@ const stCorrection = computed(() => {
         <v-btn
           color="primary"
           prepend-icon="mdi-download"
-          :disabled="!canGenerate || analyzing"
+          :disabled="!canGenerateSmooth || analyzing"
           data-testid="st-generate-btn"
           @click="generateSmooth"
         >
           Generate G-code
         </v-btn>
-        <span v-if="stFilename" class="tip mt-0">{{ stFilename }}</span>
+        <span v-if="!canGenerate" class="tip mt-0">Choose a printer profile first.</span>
+        <span v-else-if="!stSpec" class="tip mt-0" data-testid="st-needs-advance">
+          Enter the pressure advance first.
+        </span>
+        <span v-else-if="stFilename" class="tip mt-0">{{ stFilename }}</span>
       </div>
       <v-alert
         v-if="stHighFlowText"
@@ -715,19 +685,22 @@ const stCorrection = computed(() => {
       <p class="tip mb-3 mt-3">
         Print it the same way as the first coupon, scan it, and drop the image in.
       </p>
-      <label class="dropzone">
+      <label class="dropzone" :class="{ 'dropzone-disabled': !stSpec }">
         <input
           type="file"
           accept="image/*"
           class="file-input"
-          :disabled="analyzing"
+          :disabled="analyzing || !stSpec"
           data-testid="pa-st-scan-input"
           @change="onPickSmooth"
         />
-        <v-icon size="28" color="primary">mdi-image-plus</v-icon>
+        <v-icon size="28" :color="stSpec ? 'primary' : undefined">mdi-image-plus</v-icon>
         <span class="dz-label">Choose the scan image</span>
         <span class="dz-sub">or drop it here</span>
       </label>
+      <p v-if="!stSpec" class="tip" data-testid="st-scan-needs-advance">
+        Enter the pressure advance the coupon was printed with to enable the analysis.
+      </p>
       <div v-if="analyzing && analyzeKind === 'smoothTime'" class="d-flex align-center ga-2 mt-3">
         <v-progress-circular indeterminate size="20" width="2" color="primary" />
         <span class="tip mt-0" data-testid="pa-st-progress">{{ progressText || 'Analyzing the scan...' }}</span>
@@ -924,11 +897,22 @@ const stCorrection = computed(() => {
 .dropzone:hover {
   border-color: rgb(var(--v-theme-primary));
 }
+.dropzone-disabled {
+  border-color: rgba(var(--v-theme-on-surface), 0.25);
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+.dropzone-disabled:hover {
+  border-color: rgba(var(--v-theme-on-surface), 0.25);
+}
 .file-input {
   position: absolute;
   inset: 0;
   opacity: 0;
   cursor: pointer;
+}
+.file-input:disabled {
+  cursor: not-allowed;
 }
 .dz-label {
   font-weight: 500;

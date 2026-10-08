@@ -19,17 +19,11 @@ export const SCAN_PLAN_FIELDS: FieldKinds<ScanPlanSettings> = {
   partColors: { kind: 'enum', values: PART_COLORS },
 }
 
-/**
- * How a stored settings field is validated when it is loaded back from localStorage. A field
- * added after entries were already stored declares `backfill`: an entry that predates the
- * field (the key is absent) takes that value instead of being dropped as invalid. A present
- * but invalid value is still rejected.
- */
-export type FieldKind = (
+/** How a stored settings field is validated when it is loaded back from localStorage. */
+export type FieldKind =
   | { kind: 'nullableNumber' }
   | { kind: 'boolean' }
   | { kind: 'enum'; values: readonly string[] }
-) & { backfill?: number | boolean | string | null }
 
 export type FieldKinds<S> = { readonly [K in keyof S & string]: FieldKind }
 
@@ -57,9 +51,8 @@ function isValidFieldValue(value: unknown, kind: FieldKind): boolean {
 }
 
 /**
- * Rebuilds an entry from its declared fields, dropping anything undeclared. A missing field
- * that declares a backfill value takes it. Returns null when any other declared field is
- * missing or invalid, so a corrupt entry is never partially applied.
+ * Rebuilds an entry from its declared fields, dropping anything undeclared. Returns null when
+ * any declared field is missing or invalid, so a corrupt entry is never partially applied.
  */
 function sanitizeEntry<S extends Record<string, unknown>>(
   value: unknown,
@@ -69,10 +62,8 @@ function sanitizeEntry<S extends Record<string, unknown>>(
   const record = value as Record<string, unknown>
   const entry: Record<string, unknown> = {}
   for (const key of Object.keys(fields)) {
-    const kind = fields[key as keyof S & string]
-    const stored = !(key in record) && 'backfill' in kind ? kind.backfill : record[key]
-    if (!isValidFieldValue(stored, kind)) return null
-    entry[key] = stored
+    if (!isValidFieldValue(record[key], fields[key as keyof S & string])) return null
+    entry[key] = record[key]
   }
   return entry as S
 }
