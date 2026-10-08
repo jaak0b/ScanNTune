@@ -17,11 +17,7 @@ import {
   timeAtDistance,
   TRACE_START_MM,
 } from './couponGeometry'
-import {
-  klipperCentripetalCornerCapMmS,
-  maxCornerSpeedMmS,
-  minAccelForCornerSpeedMmS2,
-} from './firmwareMotion'
+import { klipperCentripetalCornerCapMmS } from './firmwareMotion'
 
 export { accelRampMm, MIN_CORNER_SPEED_MM_S, MIN_MEASURED_LINE_MM }
 
@@ -182,8 +178,7 @@ export const MAX_LINES_PER_SPEED = 15
  * quadruples its rotor energy at the same corner speed, while the load term grows only about
  * 1.5 to 2 times; the other motor carries about a third of the reversing motor's reaction
  * through the mass coupling (m_x - m_y) / 4; 0.9 degree motors have half the well depth; and
- * the acceleration ramp after the corner tilts the well by about 5% (9% at the peak of
- * Marlin's S-curve).
+ * the acceleration ramp after the corner tilts the well by about 5%.
  */
 export const DEFAULT_CORNER_SPEED_MM_S = 100
 /** The line speed the defaults are built around. */
@@ -424,8 +419,7 @@ function fitTiersToLadder(request: IsTestRequest): { request: IsTestRequest; not
 
 /**
  * Lowers the corner speed to the fastest corner the firmware can take at the test
- * acceleration: Marlin's junction deviation range (see maxCornerSpeedMmS) and Klipper's
- * centripetal junction limit over the shortest run-up move (see
+ * acceleration: Klipper's centripetal junction limit over the shortest run-up move (see
  * klipperCentripetalCornerCapMmS). The lowered value becomes the spec's one corner speed, so
  * the ladder's top rung, the ramps, the packing, the emitted limits, and the analysis time
  * base all agree with the corner the printer actually takes. Throws when the firmware cannot
@@ -437,42 +431,22 @@ function fitSpecToFirmware(
 ): { request: FirmwareFittedRequest; notes: string[] } {
   const request: FirmwareFittedRequest = { ...req, exactRampTiming: profile.firmware !== 'Marlin' }
   const legMm = shortestRunUpMoveMm(request)
-  const klipperCap = klipperCentripetalCornerCapMmS(profile, legMm, request.accelMmS2)
-  if (klipperCap !== null) {
-    if (klipperCap < MIN_CORNER_SPEED_MM_S) {
-      throw new Error(
-        'Raise the print acceleration in the printer profile. At ' +
-          `${request.accelMmS2} mm/s^2, Klipper's centripetal junction limit caps a corner after ` +
-          `the ${legMm} mm run-up at ${klipperCap} mm/s, below the ${MIN_CORNER_SPEED_MM_S} mm/s ` +
-          'minimum.',
-      )
-    }
-    if (request.cornerSpeedMmS <= klipperCap) return { request, notes: [] }
-    return {
-      request: { ...request, cornerSpeedMmS: klipperCap },
-      notes: [
-        `The corner speed was limited to ${klipperCap} mm/s because Klipper's centripetal ` +
-          `junction limit allows no faster corner after the ${legMm} mm run-up at ` +
-          `${request.accelMmS2} mm/s^2.`,
-      ],
-    }
-  }
-  const cap = maxCornerSpeedMmS(profile, request.accelMmS2)
-  if (cap === null) return { request, notes: [] }
+  const cap = klipperCentripetalCornerCapMmS(legMm, request.accelMmS2)
   if (cap < MIN_CORNER_SPEED_MM_S) {
     throw new Error(
-      'Raise the print acceleration in the printer profile to at least ' +
-        `${minAccelForCornerSpeedMmS2(profile, MIN_CORNER_SPEED_MM_S)} mm/s^2. At ` +
-        `${request.accelMmS2} mm/s^2, Marlin's 0.3 mm junction deviation limit caps the corner ` +
-        `speed at ${cap} mm/s, below the ${MIN_CORNER_SPEED_MM_S} mm/s minimum.`,
+      'Raise the print acceleration in the printer profile. At ' +
+        `${request.accelMmS2} mm/s^2, Klipper's centripetal junction limit caps a corner after ` +
+        `the ${legMm} mm run-up at ${cap} mm/s, below the ${MIN_CORNER_SPEED_MM_S} mm/s ` +
+        'minimum.',
     )
   }
   if (request.cornerSpeedMmS <= cap) return { request, notes: [] }
   return {
     request: { ...request, cornerSpeedMmS: cap },
     notes: [
-      `The corner speed was limited to ${cap} mm/s because Marlin's junction deviation ` +
-        `cannot express a faster corner at ${request.accelMmS2} mm/s^2.`,
+      `The corner speed was limited to ${cap} mm/s because Klipper's centripetal ` +
+        `junction limit allows no faster corner after the ${legMm} mm run-up at ` +
+        `${request.accelMmS2} mm/s^2.`,
     ],
   }
 }

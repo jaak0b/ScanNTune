@@ -34,7 +34,7 @@ import {
 import { isCouponGeometry, type IsSegment, MIN_CORNER_SPEED_MM_S } from './couponGeometry'
 import { dipsForMove, extrudeWithDips, type PrintedBead } from './crossings'
 import {
-  disableShapingCommands,
+  DISABLE_SHAPING_COMMANDS,
   isMotionLimitCommands,
   junctionLimitCommands,
   PLANNER_STOP,
@@ -229,7 +229,7 @@ function emitIsGcode(profile: PrinterProfile, filament: FilamentProfile, spec: I
   )
   // Input shaping and pressure advance both mask ringing; switch them off before any
   // extrusion so the measured corners carry the raw machine response.
-  L.push(...disableShapingCommands(profile))
+  L.push(...DISABLE_SHAPING_COMMANDS)
 
   // Contrasting-color base: solid layers over the full coupon rectangle, band and window
   // alike (only the fiducial holes stay open), then a filament change pause. The base
@@ -307,9 +307,6 @@ function emitIsGcode(profile: PrinterProfile, filament: FilamentProfile, spec: I
       // Isolated kicks: the planner comes to rest before the travel and before the line's
       // first bead, so every move from rest starts under the profile's own corner limit,
       // like the first move of any print, and no corner kick lands on a still-ringing rotor.
-      // The stop after the stationary un-retract also keeps that E-only move from sharing a
-      // junction with the first bead, which on Marlin's junction deviation would start the
-      // bead at about 11 mm/s.
       L.push(PLANNER_STOP)
       travel(e, profile, ox + line.prime.x0, oy + line.prime.y0)
       retract(e, profile, -1)
@@ -318,9 +315,8 @@ function emitIsGcode(profile: PrinterProfile, filament: FilamentProfile, spec: I
       extrude(e, profile, filament, width, ox + line.prime.x1, oy + line.prime.y1, primeSpeed)
       // Raise the corner limit to this line's own corner speed only now that the first
       // stretch is queued: its junction with the run-up is colinear, so the raised value
-      // governs the ringing corner alone (see junctionLimitCommands for the per-firmware
-      // semantics).
-      L.push(...junctionLimitCommands(profile, cornerFeedMmS, spec.accelMmS2))
+      // governs the ringing corner alone (see junctionLimitCommands for the semantics).
+      L.push(...junctionLimitCommands(cornerFeedMmS))
       // Full-flow run-up straight into the corner at the corner speed: under that limit a
       // 90 degree corner entered at that velocity is taken without deceleration, so the
       // corner dumps no pressure and the bead stays continuous through it.
@@ -335,7 +331,7 @@ function emitIsGcode(profile: PrinterProfile, filament: FilamentProfile, spec: I
       // before the wipe, so the wipe's reversal and the next travel run under it.
       finishLine(e, profile, filament, width, line.tail, ox, oy, speed, [
         PLANNER_STOP,
-        ...junctionLimitCommands(profile, profile.squareCornerVelocityMmS, spec.accelMmS2),
+        ...junctionLimitCommands(profile.squareCornerVelocityMmS),
       ])
     }
     // M107 forces the fan off for the band; any fan state the user's start G-code set

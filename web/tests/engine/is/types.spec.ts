@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { defaultPrinterProfile } from '../../../src/engine/gcode/profileTypes'
-import type { Firmware, PrinterProfile } from '../../../src/engine/gcode/profileTypes'
+import type { PrinterProfile } from '../../../src/engine/gcode/profileTypes'
 import {
   accelRampMm,
   bandTopWarning,
@@ -13,7 +13,7 @@ import {
   TIER_SPEED_RATIO,
   validateIsSpec,
 } from '../../../src/engine/is/types'
-import { isCouponGeometry, ladderCornerSpeeds } from '../../../src/engine/is/couponGeometry'
+import { isCouponGeometry } from '../../../src/engine/is/couponGeometry'
 
 const profile = defaultPrinterProfile()
 const request = defaultIsTestRequest(profile)
@@ -150,8 +150,7 @@ describe('derived lines per speed (bead followability on the slower tier)', () =
     expect(spec.linesPerSpeed).toBe(5)
     expect(followableRungCount(spec, profile)).toBe(3)
   })
-  it('needs fewer lines when Marlin caps the ladder, and more for a wider bead or a lower acceleration', () => {
-    expect(fitted(request, { ...profile, firmware: 'Marlin' }).linesPerSpeed).toBe(3)
+  it('needs more lines for a wider bead or a lower acceleration', () => {
     expect(fitted(request, { ...profile, nozzleDiameterMm: 0.6 }).linesPerSpeed).toBe(6)
     const slow = { ...profile, printAccelMmS2: 1000 }
     expect(fitted(defaultIsTestRequest(slow), slow).linesPerSpeed).toBe(7)
@@ -213,43 +212,11 @@ describe('fitSpecToPrinter speed tiers', () => {
 })
 
 describe('fitSpecToPrinter firmware fit', () => {
-  const withFirmware = (firmware: Firmware) => ({ ...profile, firmware })
-
-  it('caps the Marlin corner speed where junction deviation stops, and says so', () => {
-    // At the default profile's 3000 mm/s^2 a 0.3 mm junction deviation takes a 90 degree
-    // corner at most at sqrt(0.3 * 3000 * (sqrt(2) + 1)) = 46.61 mm/s (Marlin's planner
-    // junction formula), rounded down to 46.6.
-    const { spec, notes } = fitSpecToPrinter(request, withFirmware('Marlin'))
-    expect(spec.cornerSpeedMmS).toBe(46.6)
-    expect(notes).toEqual([
-      "The corner speed was limited to 46.6 mm/s because Marlin's junction deviation cannot " +
-        'express a faster corner at 3000 mm/s^2.',
-    ])
-  })
-
-  it('makes the capped speed the ladder top rung and keeps the 20 mm/s bottom rung', () => {
-    const spec = fitted(request, withFirmware('Marlin'))
-    const rungs = ladderCornerSpeeds(spec)
-    expect(rungs[0]).toBe(20)
-    expect(rungs[rungs.length - 1]).toBeCloseTo(46.6, 9)
-  })
-
-  it('leaves a Marlin corner speed already under the cap untouched', () => {
-    const slow = { ...request, cornerSpeedMmS: 40 }
-    expect(fitted(slow, withFirmware('Marlin')).cornerSpeedMmS).toBe(40)
-    // The cap grows with the acceleration: 120.3 mm/s at 20000 mm/s^2 hosts the 100 default.
-    const hot = { ...request, accelMmS2: 20000 }
-    expect(fitSpecToPrinter(hot, withFirmware('Marlin')).notes).toEqual([])
-    expect(fitted(hot, withFirmware('Marlin')).cornerSpeedMmS).toBe(100)
-  })
-
-  it('leaves the default corner speed on Klipper and RepRapFirmware at 3000 mm/s^2', () => {
+  it('leaves the default corner speed at 3000 mm/s^2', () => {
     // Klipper's centripetal cap over the 14 mm shortest run-up is 144.9 mm/s here.
-    for (const firmware of ['Klipper', 'RepRapFirmware'] as const) {
-      const { spec, notes } = fitSpecToPrinter(request, withFirmware(firmware))
-      expect(spec.cornerSpeedMmS).toBe(100)
-      expect(notes).toEqual([])
-    }
+    const { spec, notes } = fitSpecToPrinter(request, profile)
+    expect(spec.cornerSpeedMmS).toBe(100)
+    expect(notes).toEqual([])
   })
 
   it("caps a Klipper corner at the planner's centripetal junction limit over the shortest run-up", () => {
@@ -263,25 +230,6 @@ describe('fitSpecToPrinter firmware fit', () => {
       "The corner speed was limited to 90.1 mm/s because Klipper's centripetal junction " +
         'limit allows no faster corner after the 16.25 mm run-up at 1000 mm/s^2.',
     ])
-    // RepRapFirmware has no centripetal term.
-    const rrf = { ...slow, firmware: 'RepRapFirmware' as const }
-    expect(fitted(defaultIsTestRequest(rrf), rrf).cornerSpeedMmS).toBe(100)
-  })
-
-  it('refuses a Marlin acceleration too low to express the 20 mm/s minimum corner', () => {
-    // 20^2 / (0.3 * (sqrt(2) + 1)) = 552.28 mm/s^2, rounded up to 553; at 552 mm/s^2 the cap
-    // is sqrt(0.3 * 552 * (sqrt(2) + 1)) = 19.99 mm/s, rounded down to 19.9.
-    expect(() =>
-      fitSpecToPrinter({ ...request, accelMmS2: 552, cornerSpeedMmS: 20, speedsMmS: [150] },
-        withFirmware('Marlin')),
-    ).toThrow(
-      'Raise the print acceleration in the printer profile to at least 553 mm/s^2. At ' +
-        "552 mm/s^2, Marlin's 0.3 mm junction deviation limit caps the corner speed at " +
-        '19.9 mm/s, below the 20 mm/s minimum.',
-    )
-    expect(() =>
-      fitSpecToPrinter({ ...request, accelMmS2: 553, cornerSpeedMmS: 20 }, withFirmware('Marlin')),
-    ).not.toThrow()
   })
 })
 

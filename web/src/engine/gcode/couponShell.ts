@@ -168,42 +168,34 @@ interface OverriddenSettingText {
   /** Whether the name is a plural noun, which makes the note speak of values. */
   plural: boolean
   /** The end-of-print G-code comment naming how the setting comes back. */
-  comment: (profile: PrinterProfile) => string
+  comment: string
 }
 
 const OVERRIDDEN_SETTING_TEXT: Record<OverriddenSetting, OverriddenSettingText> = {
   inputShaping: {
     label: 'input shaping',
     plural: false,
-    comment: () => '; input shaping resumes with the next firmware restart or saved configuration',
+    comment: '; input shaping resumes with the next firmware restart or saved configuration',
   },
   pressureAdvance: {
     label: 'pressure advance',
     plural: false,
-    comment: () => '; pressure advance resumes with the next firmware restart or saved configuration',
+    comment: '; pressure advance resumes with the next firmware restart or saved configuration',
   },
   flowPercentage: {
     label: 'flow percentage',
     plural: false,
-    comment: () => '; the M221 flow percentage resumes with the next firmware restart',
+    comment: '; the M221 flow percentage resumes with the next firmware restart',
   },
   speedFactor: {
     label: 'speed factor',
     plural: false,
-    comment: () => '; the M220 speed factor resumes with the next firmware restart',
+    comment: '; the M220 speed factor resumes with the next firmware restart',
   },
   motionLimits: {
     label: 'motion limits',
     plural: true,
-    comment: (profile) => {
-      if (profile.firmware === 'Marlin') {
-        return '; restart the printer or run M501 to restore your configured motion limits'
-      }
-      if (profile.firmware === 'RepRapFirmware') {
-        return '; run M98 P"config.g" or restart the printer to restore your configured motion limits'
-      }
-      return '; run FIRMWARE_RESTART to restore your configured motion limits'
-    },
+    comment: '; run FIRMWARE_RESTART to restore your configured motion limits',
   },
 }
 
@@ -220,11 +212,8 @@ export function couponOverriddenSettings(
 }
 
 /** End-of-print comments, one per overridden setting, naming how each comes back. */
-export function restartNoteComments(
-  profile: PrinterProfile,
-  overridden: readonly OverriddenSetting[],
-): string[] {
-  return overridden.map((s) => OVERRIDDEN_SETTING_TEXT[s].comment(profile))
+export function restartNoteComments(overridden: readonly OverriddenSetting[]): string[] {
+  return overridden.map((s) => OVERRIDDEN_SETTING_TEXT[s].comment)
 }
 
 /** "a", "a and b", "a, b, and c". */
@@ -262,7 +251,7 @@ export function finishCoupon(
   filament: FilamentProfile,
   overridden: readonly OverriddenSetting[],
 ): void {
-  e.lines.push(...restartNoteComments(profile, overridden))
+  e.lines.push(...restartNoteComments(overridden))
   retract(e, profile, 1)
   e.lines.push(...gcodeBlockLines(filament.endGcode), ...profile.endGcode.split('\n'))
 }

@@ -419,8 +419,8 @@ describe('test line clearance from the fiducial holes', () => {
 describe('motion limits', () => {
   const spec = defaultPaTestSpec()
 
-  function linesOf(firmware: 'Klipper' | 'Marlin' | 'RepRapFirmware'): string[] {
-    return generatePaGcode({ ...defaultPrinterProfile(), firmware }, defaultFilamentProfile(), spec).split('\n')
+  function linesOf(): string[] {
+    return generatePaGcode(defaultPrinterProfile(), defaultFilamentProfile(), spec).split('\n')
   }
 
   function assertAfterStartBeforeFirstMove(lines: string[], expected: string[]): void {
@@ -437,17 +437,9 @@ describe('motion limits', () => {
   }
 
   it('emits SET_VELOCITY_LIMIT for Klipper after start G-code, before the first layer move', () => {
-    assertAfterStartBeforeFirstMove(linesOf('Klipper'), [
+    assertAfterStartBeforeFirstMove(linesOf(), [
       'SET_VELOCITY_LIMIT ACCEL=3000 SQUARE_CORNER_VELOCITY=5',
     ])
-  })
-
-  it('emits M204 and M205 for Marlin after start G-code, before the first layer move', () => {
-    assertAfterStartBeforeFirstMove(linesOf('Marlin'), ['M204 P3000 T3000', 'M205 X5 Y5'])
-  })
-
-  it('emits M204 and M566 in mm/min for RepRapFirmware after start G-code, before the first layer move', () => {
-    assertAfterStartBeforeFirstMove(linesOf('RepRapFirmware'), ['M204 P3000 T3000', 'M566 X300 Y300'])
   })
 
   it('uses the profile values, not constants', () => {

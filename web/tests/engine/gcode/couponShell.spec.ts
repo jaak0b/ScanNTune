@@ -1,10 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import {
-  defaultFilamentProfile,
-  defaultPrinterProfile,
-  type Firmware,
-  type PrinterProfile,
-} from '../../../src/engine/gcode/profileTypes'
+import { defaultFilamentProfile, defaultPrinterProfile } from '../../../src/engine/gcode/profileTypes'
 import {
   availableBedDepthMm,
   couponOrigin,
@@ -18,46 +13,34 @@ import { PA_OVERRIDDEN_SETTINGS } from '../../../src/engine/pa/gcodeGenerator'
 import { EM_OVERRIDDEN_SETTINGS } from '../../../src/engine/em/gcodeGenerator'
 import { IS_OVERRIDDEN_SETTINGS } from '../../../src/engine/is/gcodeGenerator'
 
-function profileWith(firmware: Firmware): PrinterProfile {
-  return { ...defaultPrinterProfile(), firmware }
-}
-
 describe('restartNoteComments', () => {
-  it('names how shaping and pressure advance come back, the same on every firmware', () => {
-    for (const firmware of ['Klipper', 'Marlin', 'RepRapFirmware'] as const) {
-      expect(restartNoteComments(profileWith(firmware), ['inputShaping', 'pressureAdvance'])).toEqual([
-        '; input shaping resumes with the next firmware restart or saved configuration',
-        '; pressure advance resumes with the next firmware restart or saved configuration',
-      ])
-    }
+  it('names how shaping and pressure advance come back', () => {
+    expect(restartNoteComments(['inputShaping', 'pressureAdvance'])).toEqual([
+      '; input shaping resumes with the next firmware restart or saved configuration',
+      '; pressure advance resumes with the next firmware restart or saved configuration',
+    ])
   })
 
-  it('names the per-firmware way to bring the configured motion limits back, as a comment only', () => {
-    expect(restartNoteComments(profileWith('Klipper'), ['motionLimits'])).toEqual([
+  it('names the FIRMWARE_RESTART that brings the configured motion limits back, as a comment only', () => {
+    expect(restartNoteComments(['motionLimits'])).toEqual([
       '; run FIRMWARE_RESTART to restore your configured motion limits',
-    ])
-    expect(restartNoteComments(profileWith('Marlin'), ['motionLimits'])).toEqual([
-      '; restart the printer or run M501 to restore your configured motion limits',
-    ])
-    expect(restartNoteComments(profileWith('RepRapFirmware'), ['motionLimits'])).toEqual([
-      '; run M98 P"config.g" or restart the printer to restore your configured motion limits',
     ])
   })
 
   it('names the M221 flow percentage', () => {
-    expect(restartNoteComments(profileWith('Marlin'), ['flowPercentage'])).toEqual([
+    expect(restartNoteComments(['flowPercentage'])).toEqual([
       '; the M221 flow percentage resumes with the next firmware restart',
     ])
   })
 
   it('names the M220 speed factor', () => {
-    expect(restartNoteComments(profileWith('Klipper'), ['speedFactor'])).toEqual([
+    expect(restartNoteComments(['speedFactor'])).toEqual([
       '; the M220 speed factor resumes with the next firmware restart',
     ])
   })
 
   it('keeps the order it is given', () => {
-    const lines = restartNoteComments(profileWith('Klipper'), ['motionLimits', 'pressureAdvance'])
+    const lines = restartNoteComments(['motionLimits', 'pressureAdvance'])
     expect(lines[0]).toContain('motion limits')
     expect(lines[1]).toContain('pressure advance')
   })
@@ -114,7 +97,7 @@ describe('couponOverriddenSettings', () => {
 
 describe('finishCoupon', () => {
   it('emits the restart comments, then the final retract, then the filament and printer end G-code', () => {
-    const profile = profileWith('Klipper')
+    const profile = defaultPrinterProfile()
     const filament = { ...defaultFilamentProfile(), endGcode: '; filament end' }
     const e = newEmitter()
     finishCoupon(e, profile, filament, ['pressureAdvance'])

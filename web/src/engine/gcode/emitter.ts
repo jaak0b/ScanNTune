@@ -593,17 +593,10 @@ export function frameBandInfill(
   }
 }
 
-/** Firmware-specific print acceleration and corner velocity (jerk) limit commands. */
+/** The profile's print acceleration and square corner velocity as a motion limit command. */
 export function motionLimitCommands(profile: PrinterProfile): string[] {
   const accel = profile.printAccelMmS2
   const scv = profile.squareCornerVelocityMmS
-  if (profile.firmware === 'Marlin') {
-    return [`M204 P${accel} T${accel}`, `M205 X${scv} Y${scv}`]
-  }
-  if (profile.firmware === 'RepRapFirmware') {
-    // M566 takes mm/min.
-    return [`M204 P${accel} T${accel}`, `M566 X${scv * 60} Y${scv * 60}`]
-  }
   return [`SET_VELOCITY_LIMIT ACCEL=${accel} SQUARE_CORNER_VELOCITY=${scv}`]
 }
 

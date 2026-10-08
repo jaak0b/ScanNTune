@@ -143,7 +143,7 @@ interface Seg {
 }
 
 /** The planner stop and the corner-limit commands a line carries between its moves. */
-const NON_MOTION = /^(G4 P0|SET_VELOCITY_LIMIT SQUARE_CORNER_VELOCITY=|M205 |M566 )/
+const NON_MOTION = /^(G4 P0|SET_VELOCITY_LIMIT SQUARE_CORNER_VELOCITY=)/
 
 /** Walk the printing moves of one test line from its corner up to and including the wipe,
  *  stepping over the planner stop and the corner-limit commands between them. */
@@ -552,84 +552,6 @@ describe('generateIsGcodeWithReport (Klipper)', () => {
         'under-extrude.',
     )
     expect(fast.gcode).toContain('F12000')
-  })
-})
-
-describe('generateIsGcodeWithReport (Marlin and RepRapFirmware)', () => {
-  it('uses Marlin commands for limits, disable, and restore', () => {
-    const marlin: PrinterProfile = { ...profile, firmware: 'Marlin' }
-    const gcode = generateIsGcodeWithReport(marlin, filament, spec).gcode
-    expect(gcode).toContain('M203 X150 Y150') // velocity ceiling in mm/s
-    expect(gcode).toContain('M201 X3000 Y3000') // per-axis maximum acceleration, mm/s^2
-    // The test runs at the profile's own 3000 mm/s^2, set once; no numeric restore block
-    // re-applies it at the end, the restart note does.
-    expect(gcode.match(/^M204 .*$/gm)).toEqual(['M204 P3000 T3000'])
-    expect(gcode).toContain(
-      '; restart the printer or run M501 to restore your configured motion limits',
-    )
-    expect(gcode).not.toContain('M205 J junction deviation resumes')
-    expect(gcode).toContain('M593 F0')
-    expect(gcode).toContain('M900 K0')
-    expect(gcode).not.toContain('SET_VELOCITY_LIMIT')
-  })
-
-  it('caps the 100 mm/s Marlin corner at 3000 mm/s^2 end to end, keeping J in range', () => {
-    // Marlin's planner takes a 90 degree junction at v^2 = a * J * (sqrt(2) + 1), so a 100 mm/s
-    // corner would need J = 1.3807 mm, which Marlin rejects ("?J out of range") and then brakes
-    // the corner with the user's own J. The fit lowers the corner to 46.6 mm/s instead
-    // (0.29983 mm, printed as 0.300), and that one speed drives the limits, the header, the
-    // ladder's top rung feed, and the geometry the analysis reads.
-    const marlin: PrinterProfile = { ...profile, firmware: 'Marlin' }
-    const report = generateIsGcodeWithReport(marlin, filament, spec)
-    const lines = report.gcode.split('\n')
-    // The top rung's per-line raise carries the capped J; the profile's own limit is set back
-    // after every line.
-    expect(lines).toContain('M205 J0.300')
-    expect(lines).toContain('M205 X46.6 Y46.6')
-    expect(lines).toContain('M205 X5 Y5')
-    expect(lines).toContain(
-      '; corner-speed excitation ladder 20 to 46.6 mm/s across the 3 lines of each tier, ' +
-        'fastest corners printed last',
-    )
-    expect(report.warnings).toContain(
-      "The corner speed was limited to 46.6 mm/s because Marlin's junction deviation cannot " +
-        'express a faster corner at 3000 mm/s^2.',
-    )
-    // The emitted geometry is the capped coupon: every run-up cruise into its corner, and the
-    // top rung at exactly 46.6 mm/s (F2796), matches the geometry built from the capped spec.
-    const capped = { ...fitted, cornerSpeedMmS: 46.6, linesPerSpeed: 3 }
-    const gc = isCouponGeometry(capped)
-    const oxc = (profile.bedWidthMm - gc.couponWidthMm) / 2
-    const oyc = (profile.bedDepthMm - gc.couponHeightMm) / 2
-    const chunk = measuredChunk(lines)
-    for (const group of gc.groups) {
-      group.lines.forEach((line, k) => {
-        const move =
-          `G1 X${(oxc + line.measured.x0).toFixed(3)} Y${(oyc + line.measured.y0).toFixed(3)} ` +
-          `E${(runUpLen(line, oxc, oyc) * ePerMm(nominal)).toFixed(5)} F${runUpFeed(line)}`
-        expect(chunk, `line ${k}`).toContain(move)
-      })
-      expect(Math.max(...group.lines.map((l) => l.cornerSpeedMmS))).toBeCloseTo(46.6, 9)
-    }
-    expect(chunk.some((l) => l.endsWith(' F2796'))).toBe(true)
-  })
-
-  it('uses RepRapFirmware commands for limits, disable, and restore', () => {
-    const rrf: PrinterProfile = { ...profile, firmware: 'RepRapFirmware' }
-    const gcode = generateIsGcodeWithReport(rrf, filament, spec).gcode
-    expect(gcode).toContain('M203 X9000 Y9000') // velocity ceiling in mm/min
-    expect(gcode).toContain('M201 X3000 Y3000') // per-axis maximum acceleration, mm/s^2
-    // The test runs at the profile's own 3000 mm/s^2, set once; no numeric restore block
-    // re-applies it at the end, the restart note does.
-    expect(gcode.match(/^M204 .*$/gm)).toEqual(['M204 P3000 T3000'])
-    // Per-axis jerk in mm/min: a 90 degree corner at 100 mm/s is a 100 mm/s per-axis
-    // velocity change, 6000 mm/min.
-    expect(gcode).toContain('M566 X6000 Y6000')
-    expect(gcode).toContain(
-      '; run M98 P"config.g" or restart the printer to restore your configured motion limits',
-    )
-    expect(gcode).toContain('M593 P"none"')
-    expect(gcode).toContain('M572 D0 S0')
   })
 })
 
