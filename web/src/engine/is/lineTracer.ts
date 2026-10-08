@@ -18,19 +18,39 @@ import type { ScaleReference } from '../scannerCalibration'
 // line-peak localization (weights below a fraction of the peak deviation are zeroed so
 // background noise cannot pull the centroid toward the window center).
 //
-// Feature LOCATIONS come from the alignment affine, but every measured DISTANCE converts to
-// true millimetres through the card-calibrated scanner reference along the direction it is
-// measured in: arc length along the line's image direction, lateral deviation along the
-// perpendicular. A per-axis (CCD) reference therefore contributes only the axis actually used.
+// Feature LOCATIONS come from the alignment affine. The lateral deviation, the ring itself,
+// converts to true millimetres through the card-calibrated scanner reference along the
+// perpendicular direction it is measured in, so a per-axis (CCD) reference contributes only the
+// axis actually used.
 //
-// Sample distances are mapped to time since the corner with the commanded trapezoidal velocity
-// profile (constant-acceleration kinematics): t(s) = (sqrt(v0^2 + 2 a s) - v0) / a inside the
-// acceleration ramp from the corner speed to the tier speed, then linear at the cruise speed.
+// The TIME base is the deliberate exception to converting through the card. A sample's time
+// since the corner comes from its commanded coupon-frame distance: the sample's position mapped
+// back through the fiducial affine (sLocMm), not its distance in true millimetres. The printer
+// executed the commanded distance at the commanded speed, and the printed coupon carries the
+// printer's axis scale error and the plastic's shrinkage exactly as its fiducials do, so the
+// affine-mapped distance is the commanded distance and the commanded speed profile applies to it
+// unchanged. Converting through the card instead scales the time base by the shrinkage and
+// biases the frequency by the same fraction (a 0.5% shrinkage read 0.5% high).
+//
+// Commanded distances are mapped to time since the corner with the commanded trapezoidal
+// velocity profile (constant-acceleration kinematics): t(s) = (sqrt(v0^2 + 2 a s) - v0) / a
+// inside the acceleration ramp from the corner speed to the tier speed, then linear at the
+// cruise speed. Klipper and RepRapFirmware ramps are exact trapezoids. Marlin may be built with
+// S_CURVE_ACCELERATION, which replaces the ramp by the quintic Bezier v0 + dv (10 tau^3 -
+// 15 tau^4 + 6 tau^5) over the trapezoid's own duration (stepper.cpp,
+// _calc_bezier_curve_coeffs): same duration and distance, but the nozzle trails the trapezoid
+// inside the ramp. The build flag cannot be detected, so on Marlin (spec.exactRampTiming false)
+// the fit window starts no earlier than the end of the ramp, (v - c) / a after the corner, from
+// where both profiles agree.
 
 export interface TracedLine {
   speedMmS: number
-  /** Time since the corner of each sample, seconds (trapezoidal velocity profile mapping). */
+  /** Time since the corner of each sample, seconds: the commanded coupon-frame distance mapped
+   *  through the commanded trapezoidal velocity profile. */
   tS: Float64Array
+  /** Earliest time since the corner the ringing fit may start at, seconds: 0 when the ramp
+   *  timing is exact, else the end of the post-corner acceleration ramp. */
+  fitStartMinS: number
   /** Lateral deviation from the nominal centerline of each sample, true mm. */
   lateralMm: Float64Array
   /** Index where the noise-floor window starts: the last stretch of the clean read. */
@@ -163,8 +183,8 @@ function traceLine(
   const px = -uy
   const py = ux
 
-  // True px/mm along the trace and across it, from the card reference.
-  const alongPxPerMm = referenceAlongDirection(scanReference, ux, uy)
+  // True px/mm across the trace, from the card reference: the lateral deviations convert
+  // through it. The time base deliberately does not (see the header).
   const acrossPxPerMm = referenceAlongDirection(scanReference, px, py)
 
   // Affine-implied px/mm along the trace, used only to LOCATE samples in the image.
@@ -203,9 +223,8 @@ function traceLine(
       profile[j] = v
       if (Number.isFinite(v)) valid++
     }
-    // True arc distance from the corner, converted with the card reference along the trace.
-    const sTrueMm = (sLocMm * affinePxPerMm) / alongPxPerMm
-    tS[k] = timeAtDistance(sTrueMm, line.cornerSpeedMmS, line.speedMmS, spec.accelMmS2)
+    // Commanded coupon-frame distance from the corner, mapped to time by the commanded profile.
+    tS[k] = timeAtDistance(sLocMm, line.cornerSpeedMmS, line.speedMmS, spec.accelMmS2)
 
     if (valid < acrossCount) {
       lateralMm[k] = NaN
@@ -269,6 +288,9 @@ function traceLine(
   return {
     speedMmS: line.speedMmS,
     tS,
+    fitStartMinS: spec.exactRampTiming
+      ? 0
+      : (line.speedMmS - line.cornerSpeedMmS) / spec.accelMmS2,
     lateralMm,
     noiseWindowStart: Math.floor(count * (1 - NOISE_WINDOW_FRACTION)),
     lateralPxPerMm: acrossPxPerMm,

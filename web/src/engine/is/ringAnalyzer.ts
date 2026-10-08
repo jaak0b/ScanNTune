@@ -505,8 +505,12 @@ export function analyzeTracedLine(line: TracedLine): LineFit {
     n - line.noiseWindowStart,
   )
 
-  // Forced-transient exclusion: fit only the free ringdown after the corner-overshoot peak.
-  const start = freeResponseStart(y)
+  // Forced-transient exclusion: fit only the free ringdown after the corner-overshoot peak, and
+  // never before the earliest time the trace's time base is exact (see TracedLine.fitStartMinS).
+  const freeStart = freeResponseStart(y)
+  const timedStart = tS.findIndex((t) => t >= line.fitStartMinS)
+  const start =
+    freeStart === null || timedStart < 0 || timedStart >= n ? null : Math.max(freeStart, timedStart)
   if (start === null) {
     return {
       accepted: false,

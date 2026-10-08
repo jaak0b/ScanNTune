@@ -57,7 +57,7 @@ function truthModel(p: TruthParams, t: number): number {
   )
 }
 
-function makeTrace(params: TruthParams, noiseMm: number, seed = 42): TracedLine {
+function makeTrace(params: TruthParams, noiseMm: number, seed = 42, fitStartMinS = 0): TracedLine {
   const n = 750
   const dt = 0.2 / n
   const tS = new Float64Array(n)
@@ -67,7 +67,14 @@ function makeTrace(params: TruthParams, noiseMm: number, seed = 42): TracedLine 
     tS[i] = i * dt
     lateralMm[i] = truthModel(params, tS[i]) + (noiseMm > 0 ? gauss(rand) * noiseMm : 0)
   }
-  return { speedMmS: 150, tS, lateralMm, noiseWindowStart: Math.floor(0.75 * n), lateralPxPerMm: 24 }
+  return {
+    speedMmS: 150,
+    tS,
+    fitStartMinS,
+    lateralMm,
+    noiseWindowStart: Math.floor(0.75 * n),
+    lateralPxPerMm: 24,
+  }
 }
 
 const TRUE_PARAMS: TruthParams = {
@@ -151,10 +158,34 @@ describe('analyzeTracedLine', () => {
     expect(fit.params!.dampingRatio).toBeLessThan(0.15)
   })
 
+  it('starts the fit window no earlier than the earliest exactly timed sample', () => {
+    // 750 samples over 0.2 s (0.2667 ms apart): the free ringdown starts within the first few
+    // milliseconds, but with the window held back to 0.05 s it starts at sample 188
+    // (0.05 / 0.000266667 = 187.5, rounded up), leaving 562 samples; the ring is still read.
+    const free = analyzeTracedLine(makeTrace(TRUE_PARAMS, 0.002))
+    const held = analyzeTracedLine(makeTrace(TRUE_PARAMS, 0.002, 42, 0.05))
+    expect(free.window!.y.length).toBeGreaterThan(562)
+    expect(held.window!.y.length).toBe(562)
+    expect(Math.abs(held.params!.frequencyHz - 75)).toBeLessThan(0.2)
+  })
+
+  it('finds no window when the earliest exactly timed sample lies past the trace', () => {
+    const fit = analyzeTracedLine(makeTrace(TRUE_PARAMS, 0.002, 42, 0.3))
+    expect(fit.screening).toBe('no-free-response')
+    expect(fit.window).toBeNull()
+  })
+
   it('excludes a trace too short to hold a transient and a ringdown', () => {
     const tS = new Float64Array([0, 0.001, 0.002])
     const lateralMm = new Float64Array([0.1, 0.05, 0.02])
-    const fit = analyzeTracedLine({ speedMmS: 150, tS, lateralMm, noiseWindowStart: 2, lateralPxPerMm: 24 })
+    const fit = analyzeTracedLine({
+      speedMmS: 150,
+      tS,
+      fitStartMinS: 0,
+      lateralMm,
+      noiseWindowStart: 2,
+      lateralPxPerMm: 24,
+    })
     expect(fit.accepted).toBe(false)
     expect(fit.screening).toBe('no-free-response')
     expect(fit.refusalReason).toContain('never settles')

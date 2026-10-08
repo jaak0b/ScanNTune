@@ -313,6 +313,54 @@ describe('analyzeIsCoupon render recovery', () => {
   )
 
   it(
+    'times the ring by the commanded distance: a 0.5% shrunk coupon reads within 0.1% of the truth',
+    async () => {
+      // The printed coupon (fiducials, lines and rings) is 0.5% smaller than commanded, and the
+      // card calibration reads true millimetres. The ring was printed at the commanded speed
+      // over the commanded distance, so the time base must come from the affine-mapped
+      // coupon-frame distance; converting the arc length through the card instead read this
+      // render 0.52% high (75.39 Hz).
+      const truth = { y: { frequencyHz: 75, dampingRatio: 0.05, ringAmpMm: 0.25 } }
+      const r = await analyzePair(
+        ySpec,
+        { truth, quarterTurns: 0, flipped: true, shrink: 0.005 },
+        { truth, quarterTurns: 1, flipped: true, shrink: 0.005 },
+      )
+      expect(r.aligned).toBe(true)
+      const y = axisOf(r, 'y')
+      expect(y.accepted).toBe(true)
+      expect(Math.abs(y.frequencyHz! - 75)).toBeLessThanOrEqual(0.075)
+    },
+    240000,
+  )
+
+  it(
+    'starts the Marlin fit after the post-corner ramp, so an S-curve ramp leaves the frequency unbiased',
+    async () => {
+      // Marlin's S_CURVE_ACCELERATION ramp (quintic Bezier, same duration and distance as the
+      // trapezoid) cannot be detected, so the Marlin spec starts every fit at the ramp end. With
+      // the window from the corner instead, this render read 0.8% low (74.41 Hz).
+      const marlin = { ...profile, firmware: 'Marlin' as const }
+      const marlinSpec: IsTestSpec = {
+        ...fitSpecToPrinter(defaultIsTestRequest(marlin), marlin).spec,
+        axes: ['y'],
+      }
+      expect(marlinSpec.exactRampTiming).toBe(false)
+      const truth = { y: { frequencyHz: 75, dampingRatio: 0.05, ringAmpMm: 0.25 } }
+      const r = await analyzePair(
+        marlinSpec,
+        { truth, quarterTurns: 0, flipped: true, rampProfile: 'sCurve' },
+        { truth, quarterTurns: 1, flipped: true, rampProfile: 'sCurve' },
+      )
+      expect(r.aligned).toBe(true)
+      const y = axisOf(r, 'y')
+      expect(y.accepted).toBe(true)
+      expect(Math.abs(y.frequencyHz! - 75)).toBeLessThanOrEqual(0.075)
+    },
+    240000,
+  )
+
+  it(
     'is order-independent: the swapped scan pair measures the axis from the other scan',
     async () => {
       // The UI passes the two files in pick order; each axis group must be assigned to

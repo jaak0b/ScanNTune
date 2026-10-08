@@ -10,6 +10,14 @@ import { timeAtDistance } from '../../src/engine/is/lineTracer'
 // conventions: supersampled coverage rendering, soft edges, mirror flip and quarter turns,
 // optional Gaussian noise, and an optional low-frequency transport waviness on the image's
 // vertical (carriage) axis.
+//
+// The ring is a function of time since the corner, and the printer reaches a commanded
+// distance at the commanded time whatever the part does afterwards: `shrink` scales the whole
+// printed coupon (lines, rings, fiducials) by 1 - shrink about its origin, the way plastic
+// shrinkage or a printer axis scale error does, while the ring stays timed by the commanded
+// distance. `rampProfile: 'sCurve'` times the post-corner acceleration ramp by Marlin's
+// S_CURVE_ACCELERATION quintic Bezier, v0 + dv (10 tau^3 - 15 tau^4 + 6 tau^5) over the
+// trapezoid's duration (stepper.cpp _calc_bezier_curve_coeffs), instead of the trapezoid.
 
 export interface IsAxisTruth {
   frequencyHz: number
@@ -40,6 +48,10 @@ export interface IsRenderOptions {
   /** Amplitude of the transport-axis waviness, mm (applied along the image vertical). */
   wavinessAmpMm?: number
   wavinessPeriodMm?: number
+  /** Fraction the printed coupon is smaller than commanded (0.005 = 0.5% shrinkage). */
+  shrink?: number
+  /** Velocity profile of the post-corner acceleration ramp. */
+  rampProfile?: 'trapezoid' | 'sCurve'
 }
 
 type Resolved = Required<IsRenderOptions>
@@ -56,6 +68,8 @@ const DEFAULTS: Omit<Resolved, 'spec' | 'truth'> = {
   marginMm: 8,
   wavinessAmpMm: 0,
   wavinessPeriodMm: 40,
+  shrink: 0,
+  rampProfile: 'trapezoid',
 }
 
 /** Deterministic pseudo-random (mulberry32), same construction as paRender.ts. */
@@ -67,6 +81,32 @@ function rng(seed: number): () => number {
     t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296
   }
+}
+
+/**
+ * Time since the corner at commanded distance sMm when the acceleration ramp from the corner
+ * speed c to the tier speed v follows Marlin's quintic Bezier: v(t) = c + (v - c) B(t / T)
+ * with B(tau) = 10 tau^3 - 15 tau^4 + 6 tau^5 and T = (v - c) / a, the trapezoid's duration.
+ * The distance covered by time t inside the ramp is c t + (v - c) T S(t / T) with
+ * S(tau) = 2.5 tau^4 - 3 tau^5 + tau^6 (the integral of B), solved for t by bisection; the ramp
+ * ends at the trapezoid's distance (S(1) = 1/2), so the cruise part is shared.
+ */
+function timeAtDistanceSCurve(sMm: number, c: number, v: number, a: number): number {
+  const T = (v - c) / a
+  const rampMm = c * T + 0.5 * (v - c) * T
+  if (sMm > rampMm) return T + (sMm - rampMm) / v
+  const distance = (t: number) => {
+    const tau = t / T
+    return c * t + (v - c) * T * (2.5 * tau ** 4 - 3 * tau ** 5 + tau ** 6)
+  }
+  let lo = 0
+  let hi = T
+  for (let k = 0; k < 60; k++) {
+    const mid = 0.5 * (lo + hi)
+    if (distance(mid) < sMm) lo = mid
+    else hi = mid
+  }
+  return 0.5 * (lo + hi)
 }
 
 function gauss(rand: () => number): number {
@@ -139,8 +179,9 @@ function buildRingedLines(spec: IsTestSpec, g: IsCouponGeometry, o: Resolved): R
       const phi = truth.phaseRad ?? 0
       const omega = 2 * Math.PI * f
       const omegaD = omega * Math.sqrt(1 - zeta * zeta)
+      const timeAt = o.rampProfile === 'sCurve' ? timeAtDistanceSCurve : timeAtDistance
       const lat = (sMm: number) => {
-        const t = timeAtDistance(sMm, line.cornerSpeedMmS, line.speedMmS, spec.accelMmS2)
+        const t = timeAt(sMm, line.cornerSpeedMmS, line.speedMmS, spec.accelMmS2)
         return lobeA * Math.exp(-t / lobeTau) + B * Math.exp(-omega * zeta * t) * Math.cos(omegaD * t + phi)
       }
       out.push({ line, horizontal, lat, maxAmpMm: Math.abs(B) + Math.abs(lobeA), lengthMm })
@@ -213,8 +254,10 @@ export function renderIsScan(options: IsRenderOptions): RgbaImage {
   const o: Resolved = { ...DEFAULTS, ...options }
   const g = isCouponGeometry(o.spec)
   const lines = buildRingedLines(o.spec, g, o)
-  const Wc = g.couponWidthMm
-  const Hc = g.couponHeightMm
+  // The printed (physical) coupon is the commanded one scaled by k about its origin.
+  const k = 1 - o.shrink
+  const Wc = g.couponWidthMm * k
+  const Hc = g.couponHeightMm * k
   const w0Mm = Wc + 2 * o.marginMm
   const h0Mm = Hc + 2 * o.marginMm
   const rad = (o.quarterTurns * 90 * Math.PI) / 180
@@ -253,7 +296,7 @@ export function renderIsScan(options: IsRenderOptions): RgbaImage {
           } else {
             // Everything behind the plastic (fiducial through-holes and the open window)
             // shows the scanner background.
-            const { plastic } = couponCoverage(bx, by, g, lines, o)
+            const { plastic } = couponCoverage(bx / k, by / k, g, lines, o)
             acc += plastic * o.plasticGray + (1 - plastic) * o.backgroundGray
           }
         }

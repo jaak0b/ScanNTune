@@ -77,14 +77,27 @@ export interface IsTestSpec {
    * down on the glass) and the traced geometry are unchanged.
    */
   contrastBase: boolean
+  /**
+   * Whether the firmware's post-corner acceleration ramp is the exact trapezoid the time base
+   * models. False on Marlin, whose S_CURVE_ACCELERATION build flag (undetectable) replaces the
+   * ramp by a quintic Bezier of the same duration and distance; the ringing fit then starts at
+   * the end of the ramp. Set by fitSpecToPrinter from the firmware.
+   */
+  exactRampTiming: boolean
 }
 
 /**
  * What the page asks for: a spec whose line count may be left to the derivation. Null lines
  * per speed is resolved by fitSpecToPrinter (ladderLinesPerSpeed) after the firmware fit,
- * so the generator and the analysis both read one fitted IsTestSpec.
+ * so the generator and the analysis both read one fitted IsTestSpec; the ramp timing comes
+ * from the firmware.
  */
-export type IsTestRequest = Omit<IsTestSpec, 'linesPerSpeed'> & { linesPerSpeed: number | null }
+export type IsTestRequest = Omit<IsTestSpec, 'linesPerSpeed' | 'exactRampTiming'> & {
+  linesPerSpeed: number | null
+}
+
+/** A request after the firmware fit: its ramp timing is known, its line count not yet. */
+type FirmwareFittedRequest = IsTestRequest & Pick<IsTestSpec, 'exactRampTiming'>
 
 /** Frequency search range of the ringing fit: the flow's measurable resonance band. */
 export const F_MIN_HZ = 20
@@ -384,9 +397,10 @@ export function fitSpecToPrinter(
  * take even the minimum corner speed.
  */
 function fitSpecToFirmware(
-  request: IsTestRequest,
+  req: IsTestRequest,
   profile: PrinterProfile,
-): { request: IsTestRequest; notes: string[] } {
+): { request: FirmwareFittedRequest; notes: string[] } {
+  const request: FirmwareFittedRequest = { ...req, exactRampTiming: profile.firmware !== 'Marlin' }
   const legMm = shortestRunUpMoveMm(request)
   const klipperCap = klipperCentripetalCornerCapMmS(profile, legMm, request.accelMmS2)
   if (klipperCap !== null) {
@@ -439,7 +453,7 @@ const BED_FIT_REASON = 'so the coupon fits the configured bed.'
  * note; a derived line count that changes with the tiers is no reduction and gets none.
  */
 function fitSpecToBed(
-  request: IsTestRequest,
+  request: FirmwareFittedRequest,
   profile: PrinterProfile,
 ): { spec: IsTestSpec; notes: string[] } {
   const attempt = (speedsMmS: number[]): { spec: IsTestSpec; notes: string[] } | null => {
