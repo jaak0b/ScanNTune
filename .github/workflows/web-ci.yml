@@ -41,33 +41,27 @@ jobs:
       - run: npm test
 
   # The statistical calibration suite of the input shaper analysis (web/tests/stats): fixed-seed
-  # simulations kept out of the default run because they take minutes, not seconds.
+  # simulations kept out of the default run because they take minutes, not seconds. The files run
+  # in four shards on four runners so each file gets about a core of its own; the suite needs no
+  # LFS fixtures.
   stats:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
     steps:
       - uses: actions/checkout@v4
         with:
-          lfs: false # same checkout as build-test; the objects are restored from the cache below instead of a fresh LFS download
-      - name: Build the LFS object cache key
-        run: git lfs ls-files -l | cut -d' ' -f1 | sort > .lfs-assets-id
-        working-directory: ${{ github.workspace }}
-      - name: Restore the LFS object cache
-        uses: actions/cache@v4
-        with:
-          path: .git/lfs
-          key: lfs-${{ runner.os }}-${{ hashFiles('.lfs-assets-id') }}
-          restore-keys: lfs-${{ runner.os }}-
-      - name: Fetch the LFS objects
-        run: git lfs pull
-        working-directory: ${{ github.workspace }}
+          lfs: false
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
           cache-dependency-path: web/package-lock.json
       - run: npm ci
-      - run: npm run test:stats
+      - run: npm run test:stats -- --shard=${{ matrix.shard }}/4
 
   e2e:
     runs-on: ubuntu-latest
