@@ -1,7 +1,8 @@
 # Input shaper: two-tier corner ladder and correlated-noise detection (as built)
 
-Date: 2026-10-08. Branch: fix/audit-findings. Status: stages 1 and 2 implemented; the owner's test
-print at the default speeds is still outstanding and is a required merge step.
+Date: 2026-10-08. Branch: fix/audit-findings. Status: stages 1 and 2 implemented, and the document
+updated for the later changes listed in section 6; the owner's test print at the default speeds is still
+outstanding and is a required merge step.
 
 This document records the input shaper flow as the code on this branch builds it. It was written from
 the approved redesign, its binding amendments after the second physics review, the two implementation
@@ -39,10 +40,12 @@ to 8.
   pattern does not.
 - **Why two speeds.** Real ringing belongs to the machine and keeps its frequency at any line speed.
   Patterns that sit in the print or the scan (belt teeth, scanner compression blocks) are fixed in
-  distance, so their apparent frequency changes in step with the speed. The slower speed is chosen so
-  the two cases separate: at the weakest precision the app accepts, a real ring is confirmed at least
-  95% of the time and a pattern passes at most 0.1% of the time. With two speeds printed, an axis is
-  only accepted when both speeds agree.
+  distance, so their apparent frequency changes in step with the speed. The slower speed was chosen so
+  that, at the weakest precision the app accepts, a real ring would be confirmed 95% of the time and a
+  pattern would pass at most 0.1% of the time. Each speed has only half the lines, though, so a real
+  ring at that precision is confirmed only about 60% of the time, an open item (section 5). With two
+  speeds printed, an axis is refused when its frequency changes with the speed; a check that cannot
+  confirm the ring does not refuse it.
 - **How the motors are protected.** No safe corner speed can be computed, because it depends on motor
   torque, step angle and moving mass, none of which the printer profile records. Instead: 100 mm/s stays
   the default, with a warning above it but no hard limit; the fastest corners print last in every layer,
@@ -95,6 +98,12 @@ ratio 1.415, never below rho because of the floor). The second tier is always sl
 it never raises flow or motion demands above what the user entered. Two tiers need a line speed of at
 least ceil(20 * rho) = 29 mm/s; below that the slower tier would fall under the 20 mm/s bottom rung and
 is dropped automatically with a worded note (`fitTiersToLadder`).
+
+The power 0.95 is the design target, not what the check achieves. The derivation takes each tier's
+relative standard error to be the gate's 0.1 / 1.96, but each tier is fitted from half of the axis's
+lines, so its standard error is about sqrt(2) times that of the axis estimate the gate judges. At the
+weakest accepted measurement s_d is then about 0.102 and the power about 0.60. Closing that gap is an
+open item of the coupon redesign (section 5).
 
 The tiers are interleaved, not blocked (amendment I7). Field slot k sits k pitches from offset zero;
 rung j occupies slots 2j and 2j + 1, slower tier first on even rungs and faster tier first on odd rungs
@@ -149,7 +158,8 @@ profile, 6 for a 0.6 mm nozzle, 7 at 1000 mm/s^2.
 Changed from the plan: the redesign derived the count from the slow tier's cruise speed (a closed form
 that gave 7 for a 0.6 mm nozzle); amendment I9 moved it onto the commanded speed profile after the
 corner, which the code implements with the Klipper design damping above. There is no longer a Lines per
-speed setting (section 4); `IsTestRequest` still accepts a fixed count for engine callers.
+speed setting (section 4), and `IsTestRequest` no longer accepts a fixed count (a0f9ee1): the count is
+always derived.
 
 ### 1.5 Per-line corner limits
 
@@ -185,8 +195,8 @@ item d); amendment M1 replaced that with the per-line raise and lower.
   from the previous kick, and the old 180 degree wipe reversal at speed is gone.
 - **Speed factor reset** (`SPEED_FACTOR_RESET = 'M220 S100'`, amendment M2) in the motion block. A persisted speed factor s scales every commanded feed rate, so the frequency would read
   as f / s on both tiers alike, which the speed check cannot detect. `IS_OVERRIDDEN_SETTINGS` gains the
-  speed factor, so the end-of-print comment and the restart note say it resumes with the next firmware
-  restart. This reset is in the input shaper coupon only (section 4).
+  speed factor, so the end-of-print comment says it resumes with the next firmware restart (the coupon
+  pages show no restart note since 3f52bcf). This reset is in the input shaper coupon only (section 4).
 - **Acceleration**: the test runs at the profile's print acceleration (f4bc3c4). The old 4000 mm/s^2
   floor, `LOW_ACCEL_MM_S2`, `MIN_ACCEL_MM_S2` and the low-acceleration warning are removed: the
   excitation is the corner's velocity step, which the acceleration does not set, and extra acceleration
@@ -520,8 +530,10 @@ Checks, each at alpha = 0.001:
   delta-method standard error s_d from the two tiers' standard errors: "changed with speed" when
   |d| / s_d > z_(1 - alpha/2) = 3.29; "confirmed" when the pattern hypothesis d = -ln(rho) is rejected
   one-sided, (d + ln rho) / s_d > z_(1 - alpha) = 3.09, and d = 0 is not rejected; otherwise "not
-  confirmed", which includes a tier whose own detection fails. Both "changed" and "not confirmed" refuse
-  the axis (section 4). With one tier the check is "not assessed".
+  confirmed", which includes a tier whose own detection fails. Only "changed" refuses the axis; "not
+  confirmed" is reported and does not refuse (owner decision 2026-10-08, 9ace4a0; section 4). With one
+  tier the check is "not assessed". The check's power against a pattern at the weakest accepted
+  measurement is about 0.60, not the 0.95 the tier ratio was designed for (section 1.2).
 - **Influence check** (one tier only, amendment I12): the detection must survive leaving out any single
   line (Cook 1977), so a dust speck on one line cannot carry the axis.
 - **Replicate check**: Cochran's Q homogeneity test (Cochran 1954) on the inverse-variance weighted
@@ -531,12 +543,15 @@ Checks, each at alpha = 0.001:
   null law 0.5 chi2_0 + 0.5 chi2_1, critical value z_0.999^2 = 9.5495, with f and tau re-optimized under
   zeta = 0. It is reported as "Decay demonstrated: yes/no" and is never a gate (amendment M5): as a gate
   it would refuse about half of real rings at zeta 0.02 and 30 Hz.
-- **Guards**: the fitted frequency within 2 Hz of a band edge, the damping at its 0.4 bound, and the
-  confidence gate: the 95% halfwidth must stay under 10% of the frequency (`MAX_CI95_REL`), the stopband
-  the EI shaper family covers.
+- **Guards**: the fitted frequency within 2 Hz of a band edge, and the confidence gate: the 95%
+  halfwidth must stay under 10% of the frequency (`MAX_CI95_REL`), the stopband the EI shaper family
+  covers.
+- **Damping at the bound**: a joint damping ratio at its 0.4 bound is the fit's limit, not a
+  measurement, and does not refuse the axis (055f1b3). The axis keeps its frequency, and the shaper is
+  designed at Klipper's default damping ratio 0.1 (section 2.10).
 
-Verdict order, the most specific failing gate first: band edge, damping bound, speed changed, speed not
-confirmed, influence, proportionality, replicate, confidence gate. Each refusal has its own worded
+Verdict order, the most specific failing gate first: band edge, speed changed, influence,
+proportionality, replicate, confidence gate. Each refusal has its own worded
 reason; a refusal where only the fastest-corner lines showed ringing adds the ladder advice to raise the
 corner speed in small steps.
 
@@ -561,7 +576,10 @@ design and the same likelihood ratio field and Bonferroni bound test for a furth
 detection both modes are fitted jointly by variable projection over (f1, zeta1, f2, zeta2, log tau) with
 a Levenberg-Marquardt polish. The axis reports the dominant mode (the larger median amplitude) and the
 other as its second mode, each with its own proportionality check; the dominant mode's confidence
-halfwidth then is 1.96 times its linearized standard error from the two-mode fit.
+halfwidth then is 1.96 times its linearized standard error from the two-mode fit. When the two-mode fit
+gives the dominant mode no standard error, the joint fit's interval stands in only when the dominant
+mode is the joint fit's own; a dominant mode the search found then has no interval, and the confidence
+gate refuses the axis (59ece65).
 
 Shaper choice (`shaperRecommender.ts`): with one mode, every shaper (ZV, MZV, EI, 2HUMP_EI, 3HUMP_EI;
 Singer and Seering 1990; Singhose, Seering and Singer) is tuned to the measured frequency and judged by
@@ -572,6 +590,12 @@ not fail (a steady tone next to the ring does not shape the spectrum the shaper 
 follows Klipper's `shaper_calibrate.py` (`fit_shaper`, `find_best_shaper`) on a spectrum synthesized from
 the fitted modes (Lorentzian lines in acceleration, added incoherently). The Marlin ZV output and its
 second-mode residual were removed on 2026-10-08 by owner decision; the app supports Klipper only.
+
+Damping ratio: with one mode the shapers are designed at the fitted damping ratio, or at Klipper's
+default 0.1 when the fit sits at its 0.4 bound; with two modes every shaper is designed at 0.1, as
+Klipper's `fit_shaper` does. The Klipper snippet always writes the damping ratio the shaper was designed
+at, 0.1 included (0fc6cc0), because a `damping_ratio` line already in printer.cfg would otherwise stay
+in effect and the firmware would build a different shaper than the one scored.
 
 ### 2.11 Print and scan patterns (order tracking) and pixel locking
 
@@ -636,12 +660,26 @@ whether ringing was detected on it.
 ### 3.1 Statistics suite
 
 `web/tests/stats/` (run with `npm run test:stats`, `web/vitest.stats.config.ts`; excluded from the default
-`npm test`) simulates traces with the seeded simulator `web/tests/helpers/isTraceSim.ts` (fixed seeds;
-noise models iid, half-pixel bilinear, 1 px and 2 px blur, in-band red AR(2) peaking at 60 Hz, per-line
-noise levels; mechanisms flow lag, bead drag, pedestal ring, an above-band mode, early-noise inflation,
-impulses, belt teeth, JPEG blocks, pixel locking, a forced tone, along-track time warp, two modes, a
-position gradient). Each criterion is a binomial tail a correct implementation fails with probability
-about 0.001 or less, unless stated. Results from the stage 2 run:
+`npm test`) simulates traces with the seeded simulator `web/tests/helpers/isTraceSim.ts` (fixed seeds).
+Each criterion is a binomial tail a correct implementation fails with probability about 0.001 or less,
+unless stated. The suite now holds two files, both under iid scan noise on the default coupon's Y group
+(c4c19a2, 3440f51):
+
+- **`pbound-iid.stats.spec.ts`** (no false detection on pure noise): of 400 noise-only axes, at most 35
+  reach pBound <= 0.05 and at most 11 pBound <= 0.01; of the first 60, at most 1 is accepted (S2).
+- **`s3-iid.stats.spec.ts`** (honest frequency interval, S3): a 60.4 Hz ring at damping 0.043, off the
+  detection grid's nodes, at three times the threshold amplitude; of 200 seeds at least 180 intervals
+  cover the truth, and the estimates' SD over the mean reported SE lies in 0.85 to 1.15 (dd18e1e).
+
+Current status: the S3 file is red on CI and under diagnosis (wild frequency estimates on some seeds),
+so no S3 figure below describes the current code.
+
+History: the stage 2 suite also simulated half-pixel bilinear, 1 px and 2 px blur, in-band red AR(2)
+peaking at 60 Hz and per-line noise levels, and the mechanisms flow lag, bead drag, pedestal ring, an
+above-band mode, early-noise inflation, impulses, belt teeth, JPEG blocks, pixel locking, a forced tone,
+the along-track time warp, two modes and a position gradient. Those files were removed in c4c19a2. The
+table records the stage 2 run of that suite (S3 then used a 60 Hz, zeta 0.05 truth); it was not rerun
+afterwards:
 
 | Test | What it checks | Criterion | Result |
 |---|---|---|---|
@@ -690,11 +728,12 @@ the bed and inside its footprint, and the one-tier fallbacks with their notes.
 
 ### 3.4 CI
 
-`.github/workflows/web-ci.yml` runs the statistics suite as its own `stats` job in four shards
-(`npm run test:stats -- --shard=N/4`, 30 minute job timeout, no LFS checkout); each file is one test with a
-15 minute budget (a time budget, not a statistical criterion). The build and unit test job is capped at
-15 minutes. Locally the full suite took 497 s wall and 7,462 s of test CPU; the shard times on GitHub
-runners are estimated at 10 to 14 minutes and not yet measured.
+`.github/workflows/web-ci.yml` runs the two statistics files as one `stats` job
+(`npm run test:stats -- --maxWorkers=$(nproc)`, one worker per runner vCPU, 25 minute job timeout, no LFS
+checkout), and only when a `changes` job finds a changed dependency of the suite (9d6d6fe). Each file is
+one test with a 20 minute budget (a time budget, not a statistical criterion) that ends before the job
+timeout. The build and unit test job is capped at 15 minutes. The earlier sharded jobs (four shards in
+9de025f, thirteen in 0189790) ended when the suite was cut to two files.
 
 ## 4. Owner decisions
 
@@ -708,16 +747,25 @@ runners are estimated at 10 to 14 minutes and not yet measured.
   first stretch as an ordinary bead (section 1.8).
 - **`M220 S100` in the input shaper coupon only.** The pressure advance and flow coupons are exempt: their
   measurands do not depend on the absolute speed (`2026-07-15-cross-flow-exemptions.md`, section 6).
-- **An axis is refused when the two-speed check is "not confirmed".** A shaper recommendation must not
-  rest on an unconfirmed exclusion of print and scan patterns when two tiers were printed. The owner will
-  try out how well this works on real prints.
+- **A "not confirmed" speed check no longer refuses the axis (2026-10-08, 9ace4a0).** This replaces the
+  earlier decision to refuse such an axis. Only a frequency that changes with the speed refuses; the
+  check's state is still reported. The owner will try out how well this works on real prints.
+- **A damping ratio at the fit bound no longer refuses the axis (2026-10-08, 055f1b3).** The shaper is
+  designed at Klipper's default damping ratio 0.1, and the Klipper snippet writes that value (0fc6cc0);
+  the results card adds no text about it.
+- **Two analysis additions were reverted (2026-10-08).** The trace outlier filter, which set additive
+  outliers aside as unread samples, together with the running median search of the fit window (954c75e,
+  reverted in 084c486), and the refusal of an axis whose forced tone check is underpowered (cb68806,
+  reverted in 6f603fa). Neither is part of the analysis.
+- **No restart note on the coupon pages (3f52bcf).** The restore is a firmware restart, stated only in
+  the end-of-print G-code comments.
 - **Corner speed above 100 mm/s gives a warning, no hard cap.** The owner will try the warning out later.
 - **Coupons with the old single-speed layout are not supported.** The Speed tiers and Lines per speed
   settings were removed (8fb3d4c); one tier happens automatically on small beds (bed fit) and below a
   29 mm/s line speed, each with a worded note.
 - **Red statistics tests stay red** rather than being loosened, unless fixed honestly. Of the two red S1
-  files at the end of stage 1 (2 px blur and red AR(2)), stage 2 fixed red AR(2); 2 px blur remains red
-  (section 5).
+  files at the end of stage 1 (2 px blur and red AR(2)), stage 2 fixed red AR(2); 2 px blur was still red
+  when the S1 files left the suite (section 5).
 - **Two implementer method changes, flagged to the owner for review**: input proportionality as a t
   test of the intercept of per-line amplitude against corner speed instead of the complex-amplitude
   likelihood ratio test (the latter refused correct rings at tiny noise and needed an unreliable corner
@@ -730,24 +778,32 @@ runners are estimated at 10 to 14 minutes and not yet measured.
 
 ## 5. Known limitations and open items
 
-- **S1 under 2 px blur is red at 67 exceedances of the 95% point** (allowed 68 to 132; 11 above the 99%
-  point). The detection is slightly conservative there, the safe direction: it costs some sensitivity and
-  never adds false acceptances. Alternatives measured and rejected because none met every S1 file: the
-  unscaled ratio (1 px blur 144), the Berk 1974 m / p F reference (2 px blur 44), a delta-method
-  equivalent degrees of freedom (2 px blur 34, red AR(2) 46), and the maximum AR order (iid 157).
-- **Bead transfer and the along-track time warp (stage 2 item 7, amendment S8) are not implemented.**
-  Each corner also steps the along-track axis by the rung, so the nozzle lags the commanded arc position
-  by (c / omega_a) e^(-zeta omega_a t) sin(omega_a t), which phase-modulates the lateral ring (index up to
-  about 0.9 rad on CoreXY X at the top rung) and biases the frequency by up to about 1%, the same on both
-  tiers. The planned fix is a two-pass joint X and Y model that corrects each group's time base with the
-  other group's fitted ring at the same rung. The simulator already carries the warp; the analysis does
-  not. Bead transfer (the bead failing to follow very sharp wiggles: compressed first cycles, low zeta,
-  3f harmonics) has no simulator mechanism to validate against and needs the bead width and both axes'
-  fits in the analysis.
-- **Robustness to dust is not done.** A Hampel rejection cascade broke render recovery and was removed.
-  With 1% impulse outliers at 0.05 mm there are no false detections (S2 0 of 60), but the frequency
-  standard deviation grows from 0.11 Hz to about 0.3 Hz. The ISO 16610-31 robust Gaussian regression
-  filter of the plan was not built.
+- **S3 coverage under iid noise is red on CI and under diagnosis** (`s3-iid.stats.spec.ts`, wild
+  frequency estimates on some seeds). No current S3 figure is recorded here.
+- **The speed check's power is about 0.60, not 0.95.** The tier ratio was derived for power 0.95 at the
+  weakest accepted measurement, but each tier is fitted from half of the axis's lines, so its standard
+  error is about sqrt(2) times that of the axis estimate the confidence gate judges (section 1.2). A
+  coupon redesign that restores the design power is open.
+- **S1 under 2 px blur was red at 67 exceedances of the 95% point** (allowed 68 to 132; 11 above the 99%
+  point) when the S1 files left the suite (c4c19a2). The detection was slightly conservative there, the
+  safe direction: it costs some sensitivity and never adds false acceptances. Alternatives measured and
+  rejected because none met every S1 file: the unscaled ratio (1 px blur 144), the Berk 1974 m / p F
+  reference (2 px blur 44), a delta-method equivalent degrees of freedom (2 px blur 34, red AR(2) 46), and
+  the maximum AR order (iid 157).
+- **The along-track time warp is corrected (176b55f, 5205e2c); bead transfer is not.** Each corner also
+  steps the along-track axis, so the nozzle lags its commanded arc position, which phase-modulates the
+  lateral ring and would bias the frequency by up to about 1%, the same on both tiers.
+  `alongTrackLag.ts` models the lag as the superposition of that axis's velocity-step response over the
+  corner's step and the following acceleration ramp, and `poolCouponAxes` refits each axis on deposit
+  times corrected by the other axis's fitted ring at the same corner speed (at most 8 passes), kept only
+  when the other axis is accepted. Bead transfer (the bead failing to follow very sharp wiggles:
+  compressed first cycles, low zeta, 3f harmonics) has no simulator mechanism to validate against and
+  needs the bead width in the analysis.
+- **Robustness to dust is not done.** A Hampel rejection cascade broke render recovery and was removed,
+  and a later trace outlier filter was reverted by owner decision (section 4). With 1% impulse outliers
+  at 0.05 mm the stage 2 run had no false detections (S2 0 of 60), but the frequency standard deviation
+  grew from 0.11 Hz to about 0.3 Hz. The ISO 16610-31 robust Gaussian regression filter of the plan was
+  not built.
 - **Firmware limits not modelled**: Klipper's `limited_cartesian` and `limited_corexy` `max_x_accel` and
   `max_y_accel` can lower the real motion below the commanded profile and so shift the time base. They
   are stated, not detected.
@@ -756,12 +812,11 @@ runners are estimated at 10 to 14 minutes and not yet measured.
   firmware source and the oracle, not on a printer.
 - **Real-scan goldens are pending fresh prints.** `web/e2e/input-shaper/` holds no webtest or golden yet
   and there is no input shaper real-scan unit spec.
-- **Review items**: the edge-of-band unit test tolerance was widened from 0.3 to 0.4 Hz with a
-  re-derivation from the nine-line profile-likelihood standard error of about 0.11 Hz
-  (`web/tests/engine/is/ringAnalyzer.spec.ts`); the mirrored render's replicate check sits near its
-  threshold (Q 34.3 against 27.9 under one intermediate variant); the one-tier influence refusal still
-  says "reprint it with two speed tiers", a setting that no longer exists; `IsTestRequest.linesPerSpeed`
-  remains only for an engine caller (the bottom-rung statistics case).
+- **Review items**: the edge-of-band unit test tolerance is 0.3 Hz, three times the nine remaining
+  lines' profile-likelihood standard error of about 0.10 Hz (`web/tests/engine/is/ringAnalyzer.spec.ts`);
+  the mirrored render's replicate check sits near its threshold (Q 34.3 against 27.9 under one
+  intermediate variant). The one-tier influence refusal now names the line speed and bed that keep both
+  tiers (661960e), and `IsTestRequest.linesPerSpeed` is removed (a0f9ee1).
 - **Performance**: a detected axis takes about 1.4 to 1.6 s (stage 1 about 0.8 s); `isAnalyzer.spec.ts`
   takes 173 s of test time, its slowest case 33 s against a 240 s per-case timeout.
 - **Motor safety stays empirical**: the 100 mm/s default rests on one tested CoreXY printer. Approaching
@@ -785,3 +840,12 @@ Stage 2: be2e712 (likelihood ratio with refitted noise), 2c07f43 (profile-likeli
 search), 0411fa6 (corner model by pooled AICc), 552a4ad (result rows), 2e7603e (pixel locking), daa708b
 (closed-form pattern whitening, file budget), 9e2c6d9 (pedestal ring and above-band mode cases), 1ed5b5f
 (analysis header).
+
+After stage 2: a0f9ee1 (`IsTestRequest.linesPerSpeed` removed), 661960e (one-tier refusal text),
+176b55f and 5205e2c (along-track lag correction, with the acceleration ramp), 0189790 and 9d6d6fe (CI
+shards, then the stats job only on changed dependencies), cb68806 (underpowered forced tone refusal,
+reverted in 6f603fa), dd18e1e (S3 truth off the grid nodes), c4c19a2 and 3440f51 (suite cut to two
+files), 954c75e (trace outlier filter, reverted in 084c486), 3f52bcf (restart note removed from the
+coupon pages), 9ace4a0 ("not confirmed" no longer refuses), 055f1b3 (damping bound no longer refuses),
+0fc6cc0 (snippet always writes the design damping ratio), 59ece65 (no interval for a swapped dominant
+mode without a standard error).

@@ -114,6 +114,10 @@ export const SPEED_CHECK_POWER = 0.95
  * hypotheses ln(rho) apart at level alpha with power 1 - beta when
  * ln(rho) = (z_(1-alpha) + z_(1-beta)) * s_d, the standard power relation, so
  * rho = exp((z_0.999 + z_0.95) * sqrt(2) * 0.1 / z_0.975) = 1.40728.
+ * The power 0.95 is the design target, not what the check achieves: each tier is fitted from
+ * half of the axis's lines, so its standard error is about sqrt(2) times that of the axis
+ * estimate the confidence gate judges, and the power at the weakest accepted measurement is
+ * about 0.60. Closing that gap is an open item of the coupon redesign.
  */
 export const TIER_SPEED_RATIO = Math.exp(
   ((normalQuantile(1 - DETECTION_ALPHA) + normalQuantile(SPEED_CHECK_POWER)) *

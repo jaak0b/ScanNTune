@@ -242,12 +242,14 @@ axis scale and plastic shrinkage cannot bias the frequency. Per axis, the lines 
 projection. Detection is the generalized likelihood ratio with the noise model refitted under each
 hypothesis, summed over the lines, with the look-elsewhere effect over the 1,703-point frequency and
 damping grid paid by a Bonferroni bound at a 0.1% false-alarm level; the frequency interval is the
-profile-likelihood interval. With two tiers, an axis is accepted only when the two-speed check confirms
-the ring (a machine resonance keeps its frequency at both tiers, a print or scan pattern scales with the
-speed); a coupon left with one tier (a small bed, or a line speed below 29 mm/s) gets a leave-one-line-out
+profile-likelihood interval. With two tiers, the two-speed check compares the tiers (a machine resonance
+keeps its frequency at both tiers, a print or scan pattern scales with the speed): an axis whose
+frequency changes with the speed is refused, while a check that cannot confirm the ring does not refuse;
+a coupon left with one tier (a small bed, or a line speed below 29 mm/s) gets a leave-one-line-out
 influence check instead. The ring amplitude must also be proportional to the corner speed through zero
 (which rejects forced tones such as a fan), and the replicate check and the confidence gate must not
-fail. The two axes are then estimated jointly: the axis along one group's lines is the other group's
+fail. A damping ratio fitted at its 0.4 bound does not refuse the axis: the shaper is then designed at
+Klipper's default damping ratio 0.1, which the configuration snippet writes. The two axes are then estimated jointly: the axis along one group's lines is the other group's
 measured axis and rings after its corner too, so each axis's ring is refitted on deposit times
 corrected by the other axis's fitted ring at the same corner
 speed (the along-track lag), kept only when the other axis is accepted. Validation contract:
@@ -329,8 +331,8 @@ shipped source, comments, or UI text: they are guidance for how to work, not doc
    quarter turn"); prose is for guidance text only.
 
 9. **Never store a printer setting solely to restore it after a test print.** A generated test may override
-   firmware limits, but the restore is a firmware restart, stated as an end-of-print G-code comment and a
-   note in the UI, never a numeric restore block from stored profile values. A value may live in the
+   firmware limits, but the restore is a firmware restart, stated only as an end-of-print G-code comment
+   (no note in the UI), never a numeric restore block from stored profile values. A value may live in the
    printer profile only when it actively configures generated prints.
 
 10. **Never downscale or resample a scan image anywhere in a measurement path.** Analysis always runs on

@@ -1524,7 +1524,7 @@ function verdict(result: AxisPool): AxisPool {
     )
   }
   // A damping ratio at ZETA_MAX is the fit's limit, not a measurement: the axis keeps its
-  // frequency, and the shaper recommendation leaves the damping ratio to the firmware default.
+  // frequency, and the shaper recommendation designs the shaper at Klipper's default damping ratio.
   const speed = result.speedCheck
   if (speed.state === 'changed') {
     return refusal(
