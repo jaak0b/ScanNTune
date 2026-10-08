@@ -85,18 +85,9 @@ export function statisticCase(
   return detectionStatisticAt(lines.map((l) => analyzeTracedLine(l.trace)), frequencyHz, dampingRatio)
 }
 
-/** P(X >= x) for the noncentral chi-square with even dof and noncentrality lambda (the Poisson
- *  mixture of central chi-squares, Johnson, Kotz and Balakrishnan 1995, ch. 29). */
-export function noncentralSurvival(x: number, dof: number, lambda: number): number {
-  let total = 0
-  let weight = Math.exp(-lambda / 2)
-  for (let j = 0; j < 2000; j++) {
-    total += weight * chiSquareSurvivalEvenDof(x, dof + 2 * j)
-    weight *= lambda / 2 / (j + 1)
-    if (j > lambda && weight < 1e-18) break
-  }
-  return total
-}
+/** The noncentrality at which the noncentral chi2_dof exceeds `critical` with `power`: the
+ *  engine's own, which the proportionality gate uses too. */
+export { noncentralityForPower } from '../../src/engine/math'
 
 /** The x with P(chi2_dof >= x) = tail, by bisection (even dof). */
 export function chiSquareCritical(dof: number, tail: number): number {
@@ -105,18 +96,6 @@ export function chiSquareCritical(dof: number, tail: number): number {
   for (let k = 0; k < 200; k++) {
     const mid = 0.5 * (lo + hi)
     if (chiSquareSurvivalEvenDof(mid, dof) > tail) lo = mid
-    else hi = mid
-  }
-  return 0.5 * (lo + hi)
-}
-
-/** The noncentrality at which the noncentral chi2_dof exceeds `critical` with `power`. */
-export function noncentralityForPower(dof: number, critical: number, power: number): number {
-  let lo = 0
-  let hi = 10 * critical + 100
-  for (let k = 0; k < 200; k++) {
-    const mid = 0.5 * (lo + hi)
-    if (noncentralSurvival(critical, dof, mid) < power) lo = mid
     else hi = mid
   }
   return 0.5 * (lo + hi)

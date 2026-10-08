@@ -113,7 +113,9 @@ import { tQuantile } from '../studentT'
 //      times one scale per speed tier, through zero. The intercept of the least squares
 //      regression of the per-line amplitudes on the corner speeds is t-tested against zero with
 //      the lines' own scatter as the error (Student 1908); a forced tone (rung-independent
-//      amplitude) has a large intercept and fails it.
+//      amplitude) has a large intercept and fails it. It is the only gate against a forced tone,
+//      so an axis whose lines give it less than the design power against a tone each line
+//      detects on its own is refused as not assessed.
 //    - Speed check with two tiers: each tier is tested on its own lines only on a local grid
 //      around the axis estimate and its arc-length artifact images f rho^(+/-1) (closed testing,
 //      Marcus, Peritz and Gabriel 1976), then fitted on its own; d = ln(f_slow / f_fast) with the
@@ -1527,6 +1529,19 @@ function verdict(result: AxisPool): AxisPool {
       'The pattern on this axis does not grow with the corner speed the way ringing of the ' +
         'machine does. A steady vibration, such as a fan, or a pattern in the print or the scan ' +
         'is the likely cause, so no shaper is recommended.',
+    )
+  }
+  // The proportionality test is the only gate against a forced tone; an axis whose lines cannot
+  // run it with the design power is refused like an unconfirmed speed check.
+  if (result.proportionality === 'not-assessed') {
+    return refusal(
+      result,
+      speed.state === 'not-assessed'
+        ? 'The lines of a coupon with one speed tier cannot tell ringing of the machine from a ' +
+            'steady vibration, such as a fan. Reprint it at a line speed of at least ' +
+            `${MIN_TWO_TIER_LINE_SPEED_MM_S} mm/s on a bed large enough for both speed tiers.`
+        : 'The usable lines of this axis are too few to tell ringing of the machine from a steady ' +
+            'vibration, such as a fan. Rescan the coupon, or reprint it if lines are damaged.',
     )
   }
   if (result.replicateCheck === 'failed') {

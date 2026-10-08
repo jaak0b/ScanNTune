@@ -216,6 +216,45 @@ export function chiSquareSurvival(x: number, dof: number): number {
 }
 
 /**
+ * Survival function P(X >= x) of the noncentral chi-square distribution with an even number of
+ * degrees of freedom and noncentrality lambda: the Poisson mixture of central chi-squares,
+ * sum_j e^(-lambda/2) (lambda/2)^j / j! P(chi2_(dof + 2j) >= x) (N. L. Johnson, S. Kotz and N.
+ * Balakrishnan, "Continuous Univariate Distributions", vol. 2, 2nd ed., 1995, ch. 29).
+ */
+export function noncentralChiSquareSurvivalEvenDof(x: number, dof: number, lambda: number): number {
+  let total = 0
+  let weight = Math.exp(-lambda / 2)
+  for (let j = 0; j < 2000; j++) {
+    total += weight * chiSquareSurvivalEvenDof(x, dof + 2 * j)
+    weight *= lambda / 2 / (j + 1)
+    if (j > lambda && weight < 1e-18) break
+  }
+  return total
+}
+
+/**
+ * The noncentrality at which the noncentral chi-square with an even dof exceeds `critical` with
+ * probability `power`, by bisection (the survival grows monotonically with the noncentrality).
+ */
+export function noncentralityForPower(dof: number, critical: number, power: number): number {
+  let lo = 0
+  let hi = 10 * critical + 100
+  for (let k = 0; k < 200; k++) {
+    const mid = 0.5 * (lo + hi)
+    if (noncentralChiSquareSurvivalEvenDof(critical, dof, mid) < power) lo = mid
+    else hi = mid
+  }
+  return 0.5 * (lo + hi)
+}
+
+/** The standard normal distribution function, from the chi-square with one degree of freedom:
+ *  P(Z^2 >= x^2) = 2 (1 - Phi(|x|)). */
+export function normalCdf(x: number): number {
+  const tail = 0.5 * chiSquareSurvival(x * x, 1)
+  return x >= 0 ? 1 - tail : tail
+}
+
+/**
  * Seedable deterministic PRNG (mulberry32, Tommy Ettinger's public-domain generator): a 32-bit
  * state hashed through two rounds of multiply-xorshift per draw, returning uniform floats in
  * [0, 1). Used wherever a reproducible random stream is needed (bootstrap resampling, synthetic
