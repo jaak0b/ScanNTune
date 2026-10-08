@@ -39,6 +39,15 @@ function percent(v: number): string {
   return `${(100 * v).toFixed(1)}%`
 }
 
+// With a second mode that grows with the corner speed, the shapers are scored by the share of the
+// two modes' spectrum they leave above the reduction floor, not by the residual across one mode's
+// tolerance band.
+function residualHeader(a: IsAxisResult): string {
+  return a.secondMode !== null && a.secondMode.proportionality !== 'failed'
+    ? 'Remaining vibration over both modes'
+    : 'Residual vibration across the tolerance band'
+}
+
 // The lines a refused axis left out of its joint fit are summarized in its alert as one
 // labeled count per category, so the alert reads as a short list of facts instead of
 // repeated prose; each label describes what the line looked like, not which internal gate
@@ -175,7 +184,7 @@ const snippet = computed(() => {
             <thead>
               <tr>
                 <th>Shaper</th>
-                <th>Residual vibration across the tolerance band</th>
+                <th>{{ residualHeader(axis) }}</th>
                 <th>Max accel</th>
               </tr>
             </thead>
