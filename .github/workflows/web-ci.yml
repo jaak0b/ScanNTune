@@ -1,6 +1,6 @@
 name: Web CI
 
-# Builds, unit-tests, and end-to-end-tests the Vue web app on every pull request and on pushes to master.
+# Builds, unit-tests, statistics-tests, and end-to-end-tests the Vue web app on every pull request and on pushes to master.
 on:
   pull_request:
   push:
@@ -39,6 +39,35 @@ jobs:
       - run: npm ci
       - run: npm run build
       - run: npm test
+
+  # The statistical calibration suite of the input shaper analysis (web/tests/stats): fixed-seed
+  # simulations kept out of the default run because they take minutes, not seconds.
+  stats:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false # same checkout as build-test; the objects are restored from the cache below instead of a fresh LFS download
+      - name: Build the LFS object cache key
+        run: git lfs ls-files -l | cut -d' ' -f1 | sort > .lfs-assets-id
+        working-directory: ${{ github.workspace }}
+      - name: Restore the LFS object cache
+        uses: actions/cache@v4
+        with:
+          path: .git/lfs
+          key: lfs-${{ runner.os }}-${{ hashFiles('.lfs-assets-id') }}
+          restore-keys: lfs-${{ runner.os }}-
+      - name: Fetch the LFS objects
+        run: git lfs pull
+        working-directory: ${{ github.workspace }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - run: npm run test:stats
 
   e2e:
     runs-on: ubuntu-latest
