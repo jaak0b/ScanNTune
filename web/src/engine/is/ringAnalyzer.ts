@@ -17,6 +17,7 @@ import {
   arcLengthMm,
   cornerColumns,
   covariateAt,
+  dampingMeasured,
   varianceCovariate,
   depositTimes,
   ringColumns,
@@ -1590,8 +1591,21 @@ function searchSecondMode(fit: JointFitResult): SecondModeSearch {
   const seed = DETECTION_GRID[top.index]
   const two = twoModeFit(bases, noises, [joint.frequencyHz, joint.dampingRatio, seed.frequencyHz, seed.dampingRatio, Math.log(joint.tauS)], tauBounds)
   if (two === null) return { pBound, modes: null }
-  const swapped = two.modes[0].mode.amplitudeMm < two.modes[1].mode.amplitudeMm
-  const [dominant, other] = swapped ? [two.modes[1], two.modes[0]] : two.modes
+  return secondModeOutcome(pBound, two.modes)
+}
+
+/**
+ * The outcome of a second-mode search from the two-mode fit's modes, the joint fit's mode first
+ * and the mode the search found second: the dominant mode is the one with the larger amplitude.
+ * A found mode whose damping ratio sits at the bound of the fit is no measurement (the fit's
+ * limit, where frequency and damping are not identified), so it neither replaces the joint fit's
+ * mode nor is reported as a second mode; the search's p-value bound stays as its diagnostic.
+ */
+export function secondModeOutcome(pBound: number, modes: [FittedMode, FittedMode]): SecondModeSearch {
+  const [jointMode, found] = modes
+  if (!dampingMeasured(found.mode.dampingRatio)) return { pBound, modes: null }
+  const swapped = jointMode.mode.amplitudeMm < found.mode.amplitudeMm
+  const [dominant, other] = swapped ? [found, jointMode] : [jointMode, found]
   return { pBound, modes: { dominant, other, swapped } }
 }
 

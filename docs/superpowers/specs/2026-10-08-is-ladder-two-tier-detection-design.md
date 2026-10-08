@@ -589,7 +589,10 @@ other as its second mode, each with its own proportionality check; the dominant 
 halfwidth then is 1.96 times its linearized standard error from the two-mode fit. When the two-mode fit
 gives the dominant mode no standard error, the joint fit's interval stands in only when the dominant
 mode is the joint fit's own; a dominant mode the search found then has no interval, and the confidence
-gate refuses the axis (59ece65).
+gate refuses the axis (59ece65). A found mode whose damping ratio the two-mode fit places at the 0.4
+bound is no measurement (the fit's limit, where frequency and damping are not identified): it never
+replaces the joint fit's mode and is not reported as a second mode, so the axis keeps its single-mode
+fit and the search's p-value bound stays as the diagnostic.
 
 Shaper choice (`shaperRecommender.ts`): with one mode, every shaper (ZV, MZV, EI, 2HUMP_EI, 3HUMP_EI;
 Singer and Seering 1990; Singhose, Seering and Singer) is tuned to the measured frequency and judged by

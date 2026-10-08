@@ -4,6 +4,7 @@ import {
   DETECTION_GRID_SIZE,
   analyzeTracedLine,
   poolAxisFits,
+  secondModeOutcome,
   withSecondMode,
 } from '../../../src/engine/is/ringAnalyzer'
 import type { AxisPool, LineFit, SecondMode } from '../../../src/engine/is/ringAnalyzer'
@@ -458,5 +459,30 @@ describe('withSecondMode', () => {
     })
     expect(fields.frequencyHz).toBe(62)
     expect(fields.frequencyCi95Hz).toBeNull()
+  })
+})
+
+describe('secondModeOutcome', () => {
+  const joint: SecondMode = { frequencyHz: 60.46, dampingRatio: 0.044, frequencySeHz: 0.1, amplitudeMm: 0.007, proportionality: 'passed' }
+
+  it('reports no second mode when the found mode sits at the damping bound', () => {
+    // A damping ratio at the 0.4 bound is the fit's limit, where frequency and damping are not
+    // identified: such a mode is no measurement, so it neither replaces the joint fit's mode
+    // (even with the larger amplitude) nor stands as a second mode.
+    const found: SecondMode = { frequencyHz: 101.69, dampingRatio: 0.4, frequencySeHz: 9.39, amplitudeMm: 0.011, proportionality: 'passed' }
+
+    const search = secondModeOutcome(3.3e-24, [{ mode: joint, rings: [] }, { mode: found, rings: [] }])
+
+    expect(search).toEqual({ pBound: 3.3e-24, modes: null })
+  })
+
+  it('makes a larger found mode below the damping bound the dominant mode', () => {
+    const found: SecondMode = { frequencyHz: 45, dampingRatio: 0.05, frequencySeHz: 0.13, amplitudeMm: 0.03, proportionality: 'passed' }
+
+    const search = secondModeOutcome(1e-6, [{ mode: joint, rings: [] }, { mode: found, rings: [] }])
+
+    expect(search.modes!.swapped).toBe(true)
+    expect(search.modes!.dominant.mode.frequencyHz).toBe(45)
+    expect(search.modes!.other.mode.frequencyHz).toBe(60.46)
   })
 })

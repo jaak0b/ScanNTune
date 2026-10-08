@@ -12,6 +12,12 @@ export const ZETA_GRID = [0.001, 0.002, 0.005, 0.01, 0.02, 0.035, 0.05, 0.075, 0
 /** Upper bound of the damping ratio: the top of the grid. */
 export const ZETA_MAX = ZETA_GRID[ZETA_GRID.length - 1]
 
+/** True when a fitted damping ratio is a measurement: below the upper bound of the fit's range.
+ *  At the bound the fit has reached its limit, where frequency and damping are not identified. */
+export function dampingMeasured(dampingRatio: number): boolean {
+  return dampingRatio < ZETA_MAX
+}
+
 export interface GridPoint {
   frequencyHz: number
   dampingRatio: number

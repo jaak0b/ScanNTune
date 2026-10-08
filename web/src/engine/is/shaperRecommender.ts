@@ -11,7 +11,7 @@
 // worst-case corner smoothing under Klipper's 0.12 mm target at a 5 mm/s square corner
 // velocity.
 
-import { ZETA_MAX } from './ringRegressors'
+import { dampingMeasured } from './ringRegressors'
 
 export type ShaperType = 'ZV' | 'MZV' | 'EI' | '2HUMP_EI' | '3HUMP_EI'
 
@@ -194,11 +194,6 @@ export function worstBandResidual(
     worst = Math.max(worst, residualVibration(impulses, f, dampingRatio))
   }
   return worst
-}
-
-/** True when a fitted damping ratio is a measurement: below the upper bound of the fit's range. */
-function dampingMeasured(dampingRatio: number): boolean {
-  return dampingRatio < ZETA_MAX
 }
 
 /**
