@@ -70,6 +70,10 @@ export interface TracedLine {
   /** Image px along that axis per mm of lateral deviation (signed), so the centroid's coordinate
    *  is acrossImagePx + acrossAxisPxPerMm * lateralMm. */
   acrossAxisPxPerMm: number
+  /** +1 when a positive lateral deviation points along the run-up's direction of travel into the
+   *  corner, -1 when it points against it: the sign that turns the trace into the displacement
+   *  of the axis the corner stopped, in the direction it was moving. */
+  lateralTowardRunUp: 1 | -1
 }
 
 export interface TracedGroup {
@@ -195,16 +199,24 @@ function traceLine(
 ): TracedLine | null {
   const dir = measuredDirection(line)
   const { ux, uy } = imageDirection(alignment, dir)
-  // Perpendicular image direction (sign is irrelevant; the model fits the phase).
+  // Perpendicular image direction: the positive lateral deviation. Its coupon-frame direction,
+  // through the inverse of the affine's linear part, is compared with the run-up's direction of
+  // travel, so the trace records which way it points relative to the corner's velocity step.
   const px = -uy
   const py = ux
+  const A = alignment.affine!
+  const det = A.a * A.d - A.b * A.c
+  const lateralX = (A.d * px - A.b * py) / det
+  const lateralY = (-A.c * px + A.a * py) / det
+  const runUpDx = line.runUp.x1 - line.runUp.x0
+  const runUpDy = line.runUp.y1 - line.runUp.y0
+  const lateralTowardRunUp: 1 | -1 = lateralX * runUpDx + lateralY * runUpDy >= 0 ? 1 : -1
 
   // True px/mm across the trace, from the card reference: the lateral deviations convert
   // through it. The time base deliberately does not (see the header).
   const acrossPxPerMm = referenceAlongDirection(scanReference, px, py)
 
   // Affine-implied px/mm along the trace, used only to LOCATE samples in the image.
-  const A = alignment.affine!
   const locX = A.a * dir.dx + A.b * dir.dy
   const locY = A.c * dir.dx + A.d * dir.dy
   const affinePxPerMm = Math.hypot(locX, locY)
@@ -319,6 +331,7 @@ function traceLine(
     alongPxPerMm: affinePxPerMm,
     acrossImagePx,
     acrossAxisPxPerMm: (acrossOnY ? py : px) * acrossPxPerMm,
+    lateralTowardRunUp,
   }
 }
 

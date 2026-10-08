@@ -2,7 +2,7 @@ import { arWhitener, latticeSegments, selectOrderAiccSegments } from '../correla
 import type { ArFit, ArWhitener } from '../correlatedNoise'
 import { arcLengthMm, cornerColumns, driftBasis, periodicColumns } from './ringRegressors'
 import type { CornerModelKind } from './ringRegressors'
-import type { CommandedMotion } from './ringRegressors'
+import type { SampleTimes } from './ringRegressors'
 
 // Generalized least squares machinery of the input shaper ring model, per traced line. The
 // model of one line's fit window (t in seconds since the ringing corner):
@@ -15,8 +15,10 @@ import type { CommandedMotion } from './ringRegressors'
 //        + AR(p) noise on the sample lattice, its innovation standard deviation scaled by
 //          exp(b g(t) / 2) with g the flow-lag deficit of the commanded flow
 //
-// The drift and flow-lag columns form the NULL design; the two ring columns are added in the
-// full model. Every column and the data are whitened by the same exact AR innovations operator
+// Time t is the deposit time of the sample for the ring and the flow lag, which happen in time,
+// and the commanded time (one to one with the commanded arc length s) for the drift and the
+// patterns fixed in the print or the scan (ringRegressors.SampleTimes). The drift and flow-lag
+// columns form the NULL design; the two ring columns are added in the full model. Every column and the data are whitened by the same exact AR innovations operator
 // (correlatedNoise.arWhitener), then divided by the innovation scale, so under the model the
 // whitened residuals are iid N(0, 1) whatever the regressor shapes.
 //
@@ -27,8 +29,9 @@ import type { CommandedMotion } from './ringRegressors'
 // innovations rather than the observations keeps the whitening one exact lower-triangular
 // operator (the AR filter, then a diagonal), so the ring columns keep their closed-form whitening.
 
-/** One line's fit window: the observed samples of the free ringdown. */
-export interface LineRecord extends CommandedMotion {
+/** One line's fit window: the observed samples of the free ringdown. Its tS is the commanded
+ *  time base; a depositTimeS (SampleTimes) moves the time-domain columns to the deposit times. */
+export interface LineRecord extends SampleTimes {
   /** Scan pixels per commanded millimetre along the line (0 when unknown), locating patterns
    *  fixed in scan pixels. */
   alongPxPerMm: number
@@ -36,7 +39,9 @@ export interface LineRecord extends CommandedMotion {
    *  per mm of lateral deviation along it (lineTracer.TracedLine). */
   acrossImagePx: Float64Array
   acrossAxisPxPerMm: number
-  /** Time since the corner of each observed sample, seconds. */
+  /** The trace's lateral sign relative to the run-up (lineTracer.TracedLine). */
+  lateralTowardRunUp: 1 | -1
+  /** Commanded time since the corner of each observed sample, seconds. */
   tS: Float64Array
   /** Sample-lattice index of each observed sample (consecutive except across unread samples). */
   lattice: Int32Array
@@ -193,12 +198,12 @@ export function lineBasis(
 
 /** Residual sum of squares of the ordinary least squares null fit at tau. */
 export function olsNullSsr(line: LineBasis, tauS: number): number {
-  return ssrAfterLag(line.yFixedFree, orthonormalBasis(cornerColumns(line.rec.tS, line.rec, line.cornerModel, tauS), line.fixedQ))
+  return ssrAfterLag(line.yFixedFree, orthonormalBasis(cornerColumns(line.rec, line.cornerModel, tauS), line.fixedQ))
 }
 
 /** Whitened residual sum of squares of the GLS null fit at tau. */
 export function glsNullSsr(line: LineBasis, noise: LineNoise, tauS: number): number {
-  const lag = cornerColumns(line.rec.tS, line.rec, line.cornerModel, tauS).map((c) => noise.whiten(c))
+  const lag = cornerColumns(line.rec, line.cornerModel, tauS).map((c) => noise.whiten(c))
   return ssrAfterLag(noise.wYFixedFree, orthonormalBasis(lag, noise.wFixedQ))
 }
 
@@ -214,7 +219,7 @@ function ssrAfterLag(driftFree: Float64Array, lag: Float64Array[]): number {
 
 /** Ordinary least squares fit of the null model at tau: residual sum of squares and residuals. */
 export function olsNull(line: LineBasis, tauS: number): { ssr: number; residual: Float64Array } {
-  const lag = orthonormalBasis(cornerColumns(line.rec.tS, line.rec, line.cornerModel, tauS), line.fixedQ)
+  const lag = orthonormalBasis(cornerColumns(line.rec, line.cornerModel, tauS), line.fixedQ)
   const yr = residualize(line.rec.y, line.fixedQ.concat(lag))
   return { ssr: dot(yr, yr), residual: yr }
 }
@@ -344,7 +349,7 @@ export function pooledVarianceSlope(
 
 /** The whitened null design of a line at tau, with optional further raw null columns. */
 export function nullDesign(line: LineBasis, noise: LineNoise, tauS: number, extraRaw: Float64Array[] = []): NullDesign {
-  const lagRaw = cornerColumns(line.rec.tS, line.rec, line.cornerModel, tauS)
+  const lagRaw = cornerColumns(line.rec, line.cornerModel, tauS)
   const Q = noise.wFixedQ.concat(orthonormalBasis([...lagRaw, ...extraRaw].map((c) => noise.whiten(c)), noise.wFixedQ))
   const k = Q.length
   const m = line.m
@@ -376,11 +381,14 @@ const RECURRENCE_ANCHOR = 256
 
 /**
  * The raw ring columns z = e^(s t) (real part a cos, imaginary part sin of the damped quadrature
- * pair, s = -zeta w + i w_d) at the line's samples, then their whitened versions. On the uniform
- * cruise grid z follows the exact recurrence z_i = z_(i-1) e^(s dt), and a regular sample whose
- * p predecessors are all on that grid whitens in closed form: z_(i-j) = z_i e^(-s j dt), so
+ * pair, s = -zeta w + i w_d) at the line's deposit times, then their whitened versions. On the
+ * commanded time base the cruise samples lie on a uniform grid, where z follows the exact
+ * recurrence z_i = z_(i-1) e^(s dt), and a regular sample whose p predecessors are all on that
+ * grid whitens in closed form: z_(i-j) = z_i e^(-s j dt), so
  * (z_i - sum_j phi_j z_(i-j)) / sigma = z_i (1 - sum_j phi_j e^(-s j dt)) / sigma. Every other
  * sample is whitened explicitly, by the AR predictor or by the operator's Kalman stretches.
+ * Deposit times corrected for the along-line ring (alongTrackLag.ts) are not uniform, so their
+ * columns are evaluated at every sample and whitened explicitly by the noise model.
  */
 export function whitenedRing(
   line: LineBasis,
@@ -392,7 +400,19 @@ export function whitenedRing(
   const omega = 2 * Math.PI * frequencyHz
   const sr = -omega * dampingRatio
   const si = omega * Math.sqrt(Math.max(0, 1 - dampingRatio * dampingRatio))
-  whitenedExponential(line, noise, line.rec.tS, line.dt, sr, si, out)
+  const deposit = line.rec.depositTimeS
+  if (!deposit) {
+    whitenedExponential(line, noise, line.rec.tS, line.dt, sr, si, out)
+    return
+  }
+  const { zr, zi } = out
+  for (let i = 0; i < line.m; i++) {
+    const e = Math.exp(sr * deposit[i])
+    zr[i] = e * Math.cos(si * deposit[i])
+    zi[i] = e * Math.sin(si * deposit[i])
+  }
+  out.wr.set(noise.whiten(zr))
+  out.wi.set(noise.whiten(zi))
 }
 
 /**

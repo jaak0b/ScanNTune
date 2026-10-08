@@ -52,13 +52,29 @@ describe('cornerColumns', () => {
     // at 0.02 s, past the ramp end (1/60 s, 2.08333 mm), s = 2.58333 mm. With lambda = 1 mm the
     // lobe is e^-1.15 = 0.316637 and e^-2.58333 = 0.075522 (hand-computed).
     const motion = { cornerSpeedMmS: 100, speedMmS: 150, accelMmS2: 3000 }
-    const [lobe] = cornerColumns(Float64Array.from([0.01, 0.02]), motion, 'bead-drag', 1)
+    const [lobe] = cornerColumns({ ...motion, tS: Float64Array.from([0.01, 0.02]) }, 'bead-drag', 1)
     expect(lobe[0]).toBeCloseTo(0.316637, 6)
     expect(lobe[1]).toBeCloseTo(0.075522, 6)
   })
 
   it('builds the two flow-lag columns for the flow-lag model', () => {
     const motion = { cornerSpeedMmS: 100, speedMmS: 150, accelMmS2: 3000 }
-    expect(cornerColumns(Float64Array.from([0.01, 0.02]), motion, 'flow-lag', 0.03)).toHaveLength(2)
+    expect(cornerColumns({ ...motion, tS: Float64Array.from([0.01, 0.02]) }, 'flow-lag', 0.03)).toHaveLength(2)
+  })
+
+  it('reads the flow lag at the deposit times and the bead drag at the commanded arc length', () => {
+    // The extruded flow is a function of time, so a sample deposited late by the along-line ring
+    // sees the flow of its deposit time; the dragged bead is fixed where it lies on the coupon.
+    const motion = { cornerSpeedMmS: 100, speedMmS: 150, accelMmS2: 3000 }
+    const tS = Float64Array.from([0.01, 0.02])
+    const depositTimeS = Float64Array.from([0.0112, 0.0191])
+    const lagged = cornerColumns({ ...motion, tS, depositTimeS }, 'flow-lag', 0.03)
+    const atDeposit = flowLagColumns(depositTimeS, motion, 0.03)
+    expect(Array.from(lagged[0])).toEqual(Array.from(atDeposit[0]))
+    expect(Array.from(lagged[1])).toEqual(Array.from(atDeposit[1]))
+    expect(lagged[0][0]).not.toBeCloseTo(flowLagColumns(tS, motion, 0.03)[0][0], 6)
+    const [lobe] = cornerColumns({ ...motion, tS, depositTimeS }, 'bead-drag', 1)
+    expect(lobe[0]).toBeCloseTo(0.316637, 6)
+    expect(lobe[1]).toBeCloseTo(0.075522, 6)
   })
 })

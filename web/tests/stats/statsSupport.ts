@@ -1,7 +1,7 @@
-import { analyzeTracedLine, detectionStatisticAt, poolAxisFits } from '../../src/engine/is/ringAnalyzer'
+import { analyzeTracedLine, detectionStatisticAt, poolAxisFits, poolCouponAxes } from '../../src/engine/is/ringAnalyzer'
 import type { AxisPool } from '../../src/engine/is/ringAnalyzer'
 import { defaultIsTestRequest, fitSpecToPrinter } from '../../src/engine/is/types'
-import type { IsTestRequest, IsTestSpec } from '../../src/engine/is/types'
+import type { IsAxis, IsTestRequest, IsTestSpec } from '../../src/engine/is/types'
 import { defaultPrinterProfile } from '../../src/engine/gcode/profileTypes'
 import { chiSquareSurvivalEvenDof } from '../../src/engine/math'
 import { simulateAxis } from '../helpers/isTraceSim'
@@ -25,6 +25,9 @@ export const SHORT_LINES = { ...TWO_TIER, measuredLineMm: 21 }
  *  with five lines per speed so the axis keeps the default's 10 lines. */
 export const BOTTOM_RUNG: IsTestSpec = { ...fitted({ cornerSpeedMmS: 20 }), linesPerSpeed: 5 }
 
+/** The default coupon with both groups, for the cases that analyze the two axes together. */
+export const TWO_AXES: IsTestSpec = fitSpecToPrinter(defaultIsTestRequest(profile), profile).spec
+
 export type CaseOptions = Omit<TraceSimOptions, 'seed' | 'spec'>
 
 export const NOISE: Record<string, SimNoise> = {
@@ -44,6 +47,29 @@ export function simulate(spec: IsTestSpec, options: CaseOptions, seed: number): 
 export function analyzeCase(spec: IsTestSpec, options: CaseOptions, seed: number): AxisPool {
   const lines = simulate(spec, options, seed)
   return poolAxisFits(lines.map((l) => analyzeTracedLine(l.trace)), spec.speedsMmS)
+}
+
+/** The seed of a group's simulated lines in a two-axis case: the groups draw independent noise. */
+function axisSeed(axis: IsAxis, seed: number): number {
+  return axis === 'x' ? seed : seed + 500_000
+}
+
+/** One group of a two-axis coupon analyzed alone, on its commanded time base. */
+export function analyzeAxisAlone(spec: IsTestSpec, axis: IsAxis, options: Omit<CaseOptions, 'axis'>, seed: number): AxisPool {
+  const lines = simulateAxis({ seed: axisSeed(axis, seed), spec, axis, ...options })
+  return poolAxisFits(lines.map((l) => analyzeTracedLine(l.trace)), spec.speedsMmS)
+}
+
+/** The production analysis of a two-axis coupon: both groups pooled together (X first). */
+export function analyzeCouponCase(
+  spec: IsTestSpec,
+  x: Omit<CaseOptions, 'axis'>,
+  y: Omit<CaseOptions, 'axis'>,
+  seed: number,
+): AxisPool[] {
+  const fits = (axis: IsAxis, options: Omit<CaseOptions, 'axis'>) =>
+    simulateAxis({ seed: axisSeed(axis, seed), spec, axis, ...options }).map((l) => analyzeTracedLine(l.trace))
+  return poolCouponAxes([fits('x', x), fits('y', y)], spec.speedsMmS)
 }
 
 /** The production detection statistic Q at one grid point, over the lines `keep` selects. */

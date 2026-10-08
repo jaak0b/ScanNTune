@@ -90,6 +90,10 @@ describe('analyzeIsCoupon render recovery', () => {
       expect(x.scanIndex).toBe(1)
       expect(Math.abs(x.frequencyHz! - 62)).toBeLessThanOrEqual(1.5)
       expect(Math.abs(x.dampingRatio! - 0.08)).toBeLessThanOrEqual(0.02)
+      // The renderer deposits each group's lines where the nozzle, lagging by the other axis's
+      // ring, passed them; both axes are read on those deposit times.
+      expect(x.alongTrackLag).toBe('corrected')
+      expect(y.alongTrackLag).toBe('corrected')
 
       // Shaper table: five options, a recommendation within the band vibration tolerance.
       for (const axis of [x, y]) {

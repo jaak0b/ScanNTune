@@ -31,6 +31,7 @@ function axis(overrides: Partial<IsAxisResult>): IsAxisResult {
     zvSecondModeResidual: null,
     artifacts: [],
     cornerModel: null,
+    alongTrackLag: null,
     linesUsed: 10,
     linesTraced: 10,
     scanIndex: 0,
@@ -110,6 +111,22 @@ describe('isCheckRows', () => {
     expect(rows.map((r) => r.label)).not.toContain('Print or scan pattern 3 period')
     expect(rows).toContainEqual({ label: 'Corner model', value: 'extrusion lag' })
     expect(rows).toContainEqual({ label: 'Extrusion lag time constant', value: '41 ms' })
+  })
+
+  it('reports the along-track lag correction with the other axis named, and omits it before a fit', () => {
+    expect(isCheckRows(axis({ alongTrackLag: 'corrected' }))).toContainEqual({
+      label: 'Corrected for X axis ringing along the lines',
+      value: 'yes',
+    })
+    expect(isCheckRows(axis({ axis: 'x', alongTrackLag: 'other-axis-not-measured' }))).toContainEqual({
+      label: 'Corrected for Y axis ringing along the lines',
+      value: 'not possible, Y axis ringing not measured',
+    })
+    expect(isCheckRows(axis({ alongTrackLag: 'joint-fit-failed' }))).toContainEqual({
+      label: 'Corrected for X axis ringing along the lines',
+      value: 'not possible, the joint fit of both axes failed',
+    })
+    expect(isCheckRows(axis({})).map((r) => r.label)).not.toContain('Corrected for X axis ringing along the lines')
   })
 
   it('shows the bead drag length for the bead-drag corner model', () => {

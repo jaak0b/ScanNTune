@@ -1,5 +1,5 @@
 import type { TracedLine } from './lineTracer'
-import type { CheckState, SpeedCheck, TierCheck } from './resultTypes'
+import type { AlongTrackLagState, CheckState, SpeedCheck, TierCheck } from './resultTypes'
 import {
   DETECTION_ALPHA,
   F_MAX_HZ,
@@ -17,8 +17,11 @@ import {
   arcLengthMm,
   cornerColumns,
   cornerDeficit,
+  depositTimes,
   ringColumns,
 } from './ringRegressors'
+import { depositTimesUnder, unitResponseMode } from './alongTrackLag'
+import type { CornerResponse, FittedLineRing } from './alongTrackLag'
 import {
   fitNoise,
   fixedNullColumns,
@@ -50,6 +53,7 @@ import { proportionalityCheck } from './inputProportionality'
 import type { DetectedArtifact } from './artifactSearch'
 import type { CornerModelKind } from './ringRegressors'
 import { defaultMaxArOrder } from '../correlatedNoise'
+import type { ArFit } from '../correlatedNoise'
 import { MAD_TO_SIGMA, chiSquareSurvival, chiSquareSurvivalEvenDof, mad, median, normalQuantile } from '../math'
 import { tQuantile } from '../studentT'
 
@@ -124,6 +128,12 @@ import { tQuantile } from '../studentT'
 // 7. Screening and guards: a Hampel identifier on the per-line frequencies of the detected lines,
 //    the band-edge and damping-bound guards, at least MIN_ACCEPTED_LINES lines, and the
 //    MAX_CI95_REL confidence gate.
+// 8. Along-track lag (poolCouponAxes; alongTrackLag.ts): the axis along a group's lines is the
+//    other group's axis, and it rings after the corner too, so the nozzle lags its commanded
+//    position by that axis's response and every sample is deposited at a shifted time. A coupon's
+//    two axes are estimated jointly by the nonlinear Gauss-Seidel iteration, each axis's ring and
+//    flow-lag columns on the deposit times the other axis's fitted ring gives; the detection stays
+//    on the commanded time base, the screening and the estimation run again on the deposit times.
 
 export { F_MIN_HZ, F_MAX_HZ, MIN_ACCEPTED_LINES } from './types'
 export { DETECTION_GRID, ZETA_GRID, ZETA_MAX } from './ringRegressors'
@@ -239,6 +249,9 @@ export interface AxisPool {
    *  seconds, or the bead-drag length in millimetres; the joint fit's when there is one); null
    *  with too few lines. */
   cornerModel: { kind: CornerModelKind; scale: number } | null
+  /** The along-track lag correction of the estimate (poolCouponAxes); null when the axis was
+   *  refused before its estimate or analyzed alone (poolAxisFits). */
+  alongTrackLag: AlongTrackLagState | null
   lines: LineVerdict[]
 }
 
@@ -364,6 +377,7 @@ export function analyzeTracedLine(line: TracedLine): LineFit {
     alongPxPerMm: line.alongPxPerMm,
     acrossImagePx: Float64Array.from(lattice, (k) => line.acrossImagePx[k]),
     acrossAxisPxPerMm: line.acrossAxisPxPerMm,
+    lateralTowardRunUp: line.lateralTowardRunUp,
   }
   const columns = fixedNullColumns(record).length + 4
   if (m - columns - defaultMaxArOrder(m) - 2 <= 0) return refuse()
@@ -449,7 +463,7 @@ const VARIANCE_CRITICAL = normalQuantile(1 - DETECTION_ALPHA / 2) ** 2
  * a constant variance at DETECTION_ALPHA.
  */
 function axisVarianceSlope(bases: LineBasis[], noises: LineNoise[], residuals: Float64Array[], tauS: number): number {
-  const deficits = bases.map((b) => cornerDeficit(b.rec.tS, b.rec, b.cornerModel, tauS))
+  const deficits = bases.map((b) => cornerDeficit(b.rec, b.cornerModel, tauS))
   const innovations = residuals.map((r, l) => noises[l].whitener.whiten(r))
   const pooled = pooledVarianceSlope(innovations, deficits)
   return pooled.statistic > VARIANCE_CRITICAL ? pooled.slope : 0
@@ -557,6 +571,12 @@ function lineState(basis: LineBasis, h0: NullFit): LineState {
   const state: LineState = { basis, h0, field: heldNoiseField(basis, h0), refitted: new Map() }
   for (const f of noiseSpectrumPeaks(h0.noise.fit, cruiseSampleIntervalS(basis))) refine(state, gridIndex(f, ZETA_GRID[0]))
   return state
+}
+
+/** The ZETA_GRID value nearest a damping ratio on a log scale. */
+function nearestGridZeta(dampingRatio: number): number {
+  const target = Math.log(Math.max(dampingRatio, ZETA_GRID[0]))
+  return ZETA_GRID.reduce((best, z) => (Math.abs(Math.log(z) - target) < Math.abs(Math.log(best) - target) ? z : best))
 }
 
 /** The grid index of (f, zeta) in DETECTION_GRID (frequency-major). */
@@ -793,24 +813,275 @@ const NOT_ASSESSED_SPEED: SpeedCheck = { state: 'not-assessed', tiers: [] }
  * The axis estimate: detection over the whole grid, per-line labels and screening, the joint
  * variable projection fit, and the checks that decide whether the estimate is ringing of the
  * machine. `speedsMmS` are the coupon's speed tiers; each line's own speed and corner speed come
- * with its record.
+ * with its record. One axis alone, on the commanded time base; a coupon's two axes are analyzed
+ * together by poolCouponAxes.
  */
 export function poolAxisFits(fits: LineFit[], speedsMmS: number[]): AxisPool {
-  return poolWithArtifacts(fits, speedsMmS, null)
+  return analyzeAxis(fits, speedsMmS).pool()
 }
 
-/** poolAxisFits with the patterns to carry given (`preset`, no search) or searched (null). */
-function poolWithArtifacts(fits: LineFit[], speedsMmS: number[], preset: CarriedArtifacts | null): AxisPool {
-  const verdicts: LineVerdict[] = fits.map((f) => ({
-    usedInJointFit: false,
-    exclusion: f.window ? null : 'no-free-response',
-    detected: false,
-    detectionPBound: null,
-    frequencyHz: null,
-    amplitudeMm: null,
-  }))
-  const windowed = fits.map((f, i) => (f.window ? i : -1)).filter((i) => i >= 0)
-  const base: AxisPool = {
+/**
+ * The axes of one coupon in the joint X/Y model of the along-track lag (alongTrackLag.ts). Each
+ * axis is first analyzed on its commanded time base. When both axes pass their detection, the
+ * model is estimated jointly by alternating between the axes (block coordinate descent, the
+ * nonlinear Gauss-Seidel iteration; J. M. Ortega and W. C. Rheinboldt, "Iterative Solution of
+ * Nonlinear Equations in Several Variables", Academic Press 1970, s7.4): each step refits one
+ * axis's ring on the deposit times the other axis's latest fitted ring gives, until a sweep over
+ * both axes moves no frequency by more than LAG_PASS_TOLERANCE of its standard error. The axis
+ * whose ring the lag modulates more strongly goes first, because its first-pass estimate is the
+ * less trustworthy and the other axis's the more (see firstToCorrect). The literal two-pass scheme
+ * stops too early: the first pass's rings are fitted on the commanded time base, so the lag they
+ * predict is itself biased, and its residual leaves a spurious mode at the sum of the two
+ * frequencies. Each axis's first corrected step screens its lines again on the corrected time
+ * base (the lag scatters the per-line frequencies by rung on the commanded one), and every axis
+ * is finally estimated in full on its converged deposit times. The first pass's full estimate is
+ * computed only where it is reported (the joint model needs only its joint fit). The detection
+ * and its look-elsewhere bound are those of the commanded time base: the time base moves only the
+ * ring and flow-lag columns, and a test at fixed columns keeps its null law. An axis keeps the
+ * correction only when the other axis's corrected estimate is accepted, since the lag rests on
+ * that axis's ring; otherwise its commanded-time-base estimate stands. `axes` are the line fits
+ * of the coupon's groups; `maxPasses` is the iteration's safeguard.
+ */
+export function poolCouponAxes(axes: LineFit[][], speedsMmS: number[], maxPasses = MAX_LAG_PASSES): AxisPool[] {
+  const first = axes.map((fits) => analyzeAxis(fits, speedsMmS))
+  // The commanded-time-base estimates, computed only where they are reported.
+  const keep = (state: AlongTrackLagState) => first.map((a) => uncorrectedPool(a, state))
+  const uncorrected = () => keep('other-axis-not-measured')
+  if (axes.length !== 2) return uncorrected()
+  const detections = first.map((a) => a.detection)
+  if (detections.some((d) => d === null)) return uncorrected()
+  const lags = first.map(dominantLag)
+  if (lags.every((r) => r === null)) return uncorrected()
+  const deposit = (i: number) => detections[i]!.windows.map((w) => depositTimesUnder(w, lags[1 - i]!))
+  // An axis whose first pass fitted no ring has no lag to give: it goes first, on the lag of the
+  // other axis.
+  const leader = lags[0] === null ? 0 : lags[1] === null ? 1 : firstToCorrect(lags as CornerResponse[])
+  const order = leader === 0 ? [0, 1] : [1, 0]
+  // The first corrected step of each axis screens its lines and seeds its fit on its corrected
+  // time base and refits the noise models on the corrected residuals; the later steps hold them,
+  // so each step is a smooth function of the other axis's ring and the iteration contracts
+  // instead of cycling between AR orders the AICc selects anew.
+  const screenings: AxisScreening[] = []
+  const fits: JointFitResult[] = []
+  for (const i of order) {
+    const times = deposit(i)
+    const screened = screenLines(detections[i]!, times)
+    if ('refusal' in screened) return keep('joint-fit-failed')
+    screenings[i] = screened.screening
+    const zeta = lags[i]?.modes[0].dampingRatio ?? DETECTION_GRID[detections[i]!.axisMaxIndex].dampingRatio
+    const seed = correctedSeed(detections[i]!, screenings[i].included, times, zeta)
+    fits[i] = jointFit(detections[i]!, screenings[i].included, times, seed)
+    lags[i] = lagResponse(fits[i])
+    if (lags[i] === null) return keep('joint-fit-failed')
+  }
+  let converged = false
+  for (let pass = 1; pass < maxPasses && !converged; pass++) {
+    converged = true
+    for (const i of order) {
+      const next = jointRefit(detections[i]!, screenings[i].included, deposit(i), fits[i])
+      const se = frequencySe(next.joint)
+      // Without a standard error there is no precision to judge the convergence by.
+      if (se === null) return keep('joint-fit-failed')
+      if (Math.abs(next.joint.frequencyHz - fits[i].joint.frequencyHz) > LAG_PASS_TOLERANCE * se) converged = false
+      fits[i] = next
+      lags[i] = lagResponse(next)
+      if (lags[i] === null) return keep('joint-fit-failed')
+    }
+  }
+  if (!converged) return keep('joint-fit-failed')
+  const corrected = detections.map((d, i) => {
+    const point = { frequencyHz: fits[i].joint.frequencyHz, dampingRatio: fits[i].joint.dampingRatio }
+    const times = deposit(i)
+    const pool = completeAxis(d!, screenings[i], jointFit(d!, screenings[i].included, times, point), times)
+    return { ...pool, alongTrackLag: 'corrected' as const }
+  })
+  return corrected.map((pool, i) => (corrected[1 - i].accepted ? pool : uncorrectedPool(first[i], 'other-axis-not-measured')))
+}
+
+/**
+ * Which axis the joint iteration corrects first: the one whose ring the lag modulates more. The
+ * lag of axis G's nozzle is the other axis H's response, of amplitude c |kappa_H| at corner speed
+ * c, so G's ring of angular frequency w_G is read with a phase error up to w_G c |kappa_H| / v:
+ * the modulation index grows with G's own frequency times H's response, and the axis with the
+ * larger product has the more distorted first pass and the partner with the more trustworthy one.
+ */
+function firstToCorrect(responses: CornerResponse[]): 0 | 1 {
+  const index = (i: number) => {
+    const other = responses[1 - i].modes[0]
+    return responses[i].modes[0].frequencyHz * Math.hypot(other.cosCoefficient, other.sinCoefficient)
+  }
+  return index(0) >= index(1) ? 0 : 1
+}
+
+/**
+ * The lag an axis's first pass gives the other axis: its dominant mode's response to a unit corner
+ * speed step. On the commanded time base the joint fit can settle on the sideband the lag puts at
+ * the sum of the two frequencies; the second-mode search then finds the ring itself, and the
+ * larger of the two is the ring, since a phase modulation keeps more amplitude in the carrier
+ * than in either sideband below 1.4 rad (J0 above J1). Null when the axis has no joint fit.
+ */
+function dominantLag(analysis: AxisAnalysis): CornerResponse | null {
+  if (analysis.fit === null || analysis.secondMode === null) return null
+  const search = analysis.secondMode()
+  if (search.modes === null) return lagResponse(analysis.fit)
+  const { mode, rings } = search.modes.dominant
+  const unit = unitResponseMode(fittedRings(analysis.fit.inBases, rings), mode.frequencyHz, mode.dampingRatio)
+  return unit !== null ? { modes: [unit] } : null
+}
+
+/** Safeguard of the joint iteration (poolCouponAxes's default maxPasses): at most this many
+ *  corrected passes, after which an axis pair that has not converged keeps its
+ *  commanded-time-base estimates. Not a model parameter. */
+const MAX_LAG_PASSES = 8
+/** Convergence of the joint iteration: a pass that moves no frequency by more than a tenth of its
+ *  standard error has settled, since a bias of a tenth of the standard error raises the mean
+ *  squared error of the estimate by 1% (1 + 0.1^2); finer changes are below the precision the
+ *  inner Levenberg-Marquardt fits settle to on a strongly modulated ring. A numerical tolerance of
+ *  the iteration, not a model parameter. */
+const LAG_PASS_TOLERANCE = 0.1
+
+/**
+ * The ring statistic over the detection grid's frequencies at one damping ratio, summed over
+ * `lines` (indices into the windows), with each line on the deposit times and its null noise
+ * model and corner-model scale held from the detection.
+ */
+function correctedScan(
+  detection: AxisDetection,
+  lines: number[],
+  depositTimeS: Float64Array[],
+  dampingRatio: number,
+): Float64Array {
+  const { carried, chosen, states } = detection
+  const totals = new Float64Array(FREQUENCY_GRID_HZ_VALUES.length)
+  for (const l of lines) {
+    const rec = { ...detection.windows[l], depositTimeS: depositTimeS[l] }
+    const basis = lineBasis(rec, [], chosen.kind, carried.columns[l])
+    const h0 = states[l].h0
+    const noise = noiseModel(basis, h0.noise.fit, h0.noise.varianceSlope, cornerDeficit(rec, chosen.kind, h0.tauS))
+    const design = nullDesign(basis, noise, h0.tauS)
+    const scratch = ringScratch(basis.m)
+    const pr = new Float64Array(design.k)
+    const pi = new Float64Array(design.k)
+    FREQUENCY_GRID_HZ_VALUES.forEach((f, j) => (totals[j] += projectRing(basis, noise, design, f, dampingRatio, scratch, pr, pi).D))
+  }
+  return totals
+}
+
+/**
+ * The seed of a fit on the deposit times: the frequency of the largest ring statistic of
+ * `lines` on those times (correctedScan) at the grid damping nearest `dampingRatio`, among the
+ * frequencies of the grid points `points` (indices into DETECTION_GRID) when given. A fit on the
+ * commanded time base is no seed: read there, a ring phase modulated by more than about 1.4 rad (a
+ * lateral axis twice as fast as the axis along its lines reaches 1.9 rad on the top rung) keeps
+ * less amplitude at its own frequency than in the sideband at the sum of the two frequencies, J0
+ * below J1 (the Jacobi-Anger expansion), so the fit finds the sideband.
+ */
+function correctedSeed(
+  detection: AxisDetection,
+  lines: number[],
+  depositTimeS: Float64Array[],
+  dampingRatio: number,
+  points: number[] | null = null,
+): RingPoint {
+  const zeta = nearestGridZeta(dampingRatio)
+  const totals = correctedScan(detection, lines, depositTimeS, zeta)
+  const allowed = points ? new Set(points.map((g) => DETECTION_GRID[g].frequencyHz)) : null
+  let best = -1
+  for (let j = 0; j < totals.length; j++) {
+    if (allowed && !allowed.has(FREQUENCY_GRID_HZ_VALUES[j])) continue
+    if (best < 0 || totals[j] > totals[best]) best = j
+  }
+  return { frequencyHz: FREQUENCY_GRID_HZ_VALUES[best], dampingRatio: zeta }
+}
+
+/**
+ * The unit white noise model: with it a generalized least squares fit is ordinary least squares,
+ * the start of feasible GLS (the Cochrane-Orcutt procedure's first step) on deposit times, where
+ * the detection's noise models, fitted with the ring on the commanded time base, absorbed the
+ * lag's residual into their AR terms.
+ */
+const WHITE_START: ArFit = { coefficients: [], noiseVariance: 1 }
+
+/** The detection grid's frequencies, Hz. */
+const FREQUENCY_GRID_HZ_VALUES: number[] = [...new Set(DETECTION_GRID.map((p) => p.frequencyHz))]
+
+/** The response to a unit corner speed step of a joint fit's ring (the lag it causes on the other
+ *  axis); null when no line has a positive corner speed. The joint fit holds one mode, the
+ *  dominant one: on the commanded time base a further mode can be the sideband the lag itself puts
+ *  at the sum of the two axes' frequencies, which must not enter the lag meant to remove it. */
+function lagResponse(fit: JointFitResult): CornerResponse | null {
+  const mode = unitResponseMode(fittedRings(fit.inBases, fit.rings), fit.joint.frequencyHz, fit.joint.dampingRatio)
+  return mode !== null ? { modes: [mode] } : null
+}
+
+/** An axis's analysis on the commanded time base: its detection (null when the detection refused
+ *  the axis), its joint fit and that fit's second-mode search (null when refused before the fit),
+ *  and its pool, estimated in full on first use. */
+interface AxisAnalysis {
+  pool: () => AxisPool
+  detection: AxisDetection | null
+  fit: JointFitResult | null
+  secondMode: (() => SecondModeSearch) | null
+}
+
+/** The analysis of an axis with the patterns to carry given (`preset`, no search) or searched
+ *  (null); repeated with more patterns when the search with the fitted ring finds more. */
+function analyzeAxis(fits: LineFit[], speedsMmS: number[], preset: CarriedArtifacts | null = null): AxisAnalysis {
+  const detected = detectAxis(fits, speedsMmS, preset)
+  if ('refusal' in detected) return { pool: () => detected.refusal, detection: null, fit: null, secondMode: null }
+  const detection = detected.detection
+  const screened = screenLines(detection, null)
+  if ('refusal' in screened) return { pool: () => screened.refusal, detection, fit: null, secondMode: null }
+  const fit = jointFit(detection, screened.screening.included, null, null)
+  // A ring left out of the first artifact search leaks into the artifact columns on its own tier
+  // and makes an artifact's amplitude grow with the corner speed: the search runs again with the
+  // fitted ring in the null design, and the analysis is repeated with whatever more it finds.
+  if (!detection.preset && speedsMmS.length >= 2) {
+    const ring = [{ frequencyHz: fit.joint.frequencyHz, dampingRatio: fit.joint.dampingRatio }]
+    const again = withArtifacts(detection.windows, speedsMmS, detection.carried, ring, true, detection.chosen.kind)
+    if (again.carried.artifacts.length > detection.carried.artifacts.length) return analyzeAxis(fits, speedsMmS, again.carried)
+  }
+  let search: SecondModeSearch | null = null
+  const secondMode = () => (search ??= searchSecondMode(fit))
+  let pool: AxisPool | null = null
+  return { pool: () => (pool ??= completeAxis(detection, screened.screening, fit, null, secondMode())), detection, fit, secondMode }
+}
+
+/** An axis's commanded-time-base pool with the along-track lag state set when the axis has a
+ *  detection to report it on. */
+function uncorrectedPool(analysis: AxisAnalysis, state: AlongTrackLagState): AxisPool {
+  const pool = analysis.pool()
+  return analysis.detection === null ? pool : { ...pool, alongTrackLag: state }
+}
+
+/** What the screening and the estimation of an axis take over from its detection. */
+interface AxisDetection {
+  speedsMmS: number[]
+  /** The patterns were given, not searched. */
+  preset: boolean
+  /** The pool with the detection's fields filled; its line verdicts are copied per screening. */
+  base: AxisPool
+  /** Index into the analysis's line fits of each windowed line. */
+  windowed: number[]
+  windows: LineRecord[]
+  carried: CarriedArtifacts
+  chosen: ReturnType<typeof chooseCornerModel>
+  states: LineState[]
+  /** Each line's own maximum of its field. */
+  ownMaxima: { index: number; value: number }[]
+  /** Grid index of the axis's field maximum. */
+  axisMaxIndex: number
+}
+
+/** The lines of a detected axis that enter its joint fit, and every line's verdict. */
+interface AxisScreening {
+  verdicts: LineVerdict[]
+  /** The windowed lines (indices into the windows) that entered the joint fit. */
+  included: number[]
+}
+
+function emptyPool(verdicts: LineVerdict[]): AxisPool {
+  return {
     accepted: false,
     refusals: [],
     rescanAdvice: null,
@@ -832,41 +1103,57 @@ function poolWithArtifacts(fits: LineFit[], speedsMmS: number[], preset: Carried
     secondMode: null,
     artifacts: [],
     cornerModel: null,
+    alongTrackLag: null,
     lines: verdicts,
   }
-  const refuse = (reason: string, extras: Partial<AxisPool> = {}): AxisPool => ({
-    ...base,
-    ...extras,
-    refusals: [reason],
-  })
-  const tooFewLines = (count: number, outOfBand: number, excluded: number): AxisPool => {
-    const verdict =
-      `Only ${count} of the axis's lines produced a usable ringing trace (at least ` +
-      `${MIN_ACCEPTED_LINES} are needed for a trustworthy estimate).`
-    if (outOfBand * 2 > excluded) {
-      return refuse(`${verdict} The true resonance likely lies outside the measurable range.`)
-    }
-    return refuse(verdict, {
-      rescanAdvice:
-        "When most lines of a scan are refused, the scanner's lamp shadow is often falling " +
-        'across the measured edges; rescan with the coupon rotated a half turn on the glass.',
-    })
+}
+
+function refusal(base: AxisPool, reason: string, extras: Partial<AxisPool> = {}): AxisPool {
+  return { ...base, ...extras, refusals: [reason] }
+}
+
+function tooFewLines(base: AxisPool, count: number, outOfBand: number, excluded: number): AxisPool {
+  const verdict =
+    `Only ${count} of the axis's lines produced a usable ringing trace (at least ` +
+    `${MIN_ACCEPTED_LINES} are needed for a trustworthy estimate).`
+  if (outOfBand * 2 > excluded) {
+    return refusal(base, `${verdict} The true resonance likely lies outside the measurable range.`)
   }
+  return refusal(base, verdict, {
+    rescanAdvice:
+      "When most lines of a scan are refused, the scanner's lamp shadow is often falling " +
+      'across the measured edges; rescan with the coupon rotated a half turn on the glass.',
+  })
+}
+
+/** The detection stage: the pattern search, the null fits, the likelihood ratio fields, the axis
+ *  bound and the per-line labels; a refusal when it ends the analysis. */
+function detectAxis(
+  fits: LineFit[],
+  speedsMmS: number[],
+  preset: CarriedArtifacts | null,
+): { refusal: AxisPool } | { detection: AxisDetection } {
+  const verdicts: LineVerdict[] = fits.map((f) => ({
+    usedInJointFit: false,
+    exclusion: f.window ? null : 'no-free-response',
+    detected: false,
+    detectionPBound: null,
+    frequencyHz: null,
+    amplitudeMm: null,
+  }))
+  const windowed = fits.map((f, i) => (f.window ? i : -1)).filter((i) => i >= 0)
+  const base = emptyPool(verdicts)
   if (windowed.length < MIN_ACCEPTED_LINES) {
-    return tooFewLines(windowed.length, 0, fits.length - windowed.length)
+    return { refusal: tooFewLines(base, windowed.length, 0, fits.length - windowed.length) }
   }
 
-  // Detection stage: the artifact search, the null fits, the likelihood ratio fields, the axis
-  // bound.
   const windows = windowed.map((i) => fits[i].window!)
   const searched = withArtifacts(windows, speedsMmS, preset, [], preset === null)
   const chosen = chooseCornerModel(windows, searched)
   const bases = chosen.bases
-  const tauBounds = tauRange(bases)
   const states = chosen.fits.map((h0, l) => lineState(bases[l], h0))
   base.artifacts = searched.carried.artifacts
   base.cornerModel = { kind: chosen.kind, scale: chosen.fits[0].tauS }
-  const tau0 = states[0].h0.tauS
   const all = bases.map((_, l) => l)
   const G = DETECTION_GRID.length
   const axisMax = refittedMaximum(states, all)
@@ -877,32 +1164,70 @@ function poolWithArtifacts(fits: LineFit[], speedsMmS: number[], preset: Carried
     v.detectionPBound = bonferroni(G, own.value, 2)
     v.detected = v.detectionPBound <= DETECTION_ALPHA
   })
-  const linesDetected = verdicts.filter((v) => v.detected).length
   base.detectionPBound = pBound
-  base.linesDetected = linesDetected
+  base.linesDetected = verdicts.filter((v) => v.detected).length
   if (!(pBound <= DETECTION_ALPHA)) {
-    return refuse(
-      'No ringing was found on this axis. Across all its lines, the traces match drift and ' +
-        'scan noise.',
-      {
-        rescanAdvice:
-          'Rescan with the coupon rotated a half turn on the glass, since lamp shadow can ' +
-          'weaken the traced ringing.',
-      },
-    )
+    return {
+      refusal: refusal(
+        base,
+        'No ringing was found on this axis. Across all its lines, the traces match drift and ' +
+          'scan noise.',
+        {
+          rescanAdvice:
+            'Rescan with the coupon rotated a half turn on the glass, since lamp shadow can ' +
+            'weaken the traced ringing.',
+        },
+      ),
+    }
   }
+  return {
+    detection: {
+      speedsMmS,
+      preset: preset !== null,
+      base,
+      windowed,
+      windows,
+      carried: searched.carried,
+      chosen,
+      states,
+      ownMaxima,
+      axisMaxIndex: axisMax.index,
+    },
+  }
+}
 
-  // Per-line fits of the detected lines (the line's noise model refitted under the alternative at
-  // its own maximum, the axis tau), for screening.
+/**
+ * The screening of a detected axis's lines: each detected line's own fit (its noise model refitted
+ * under the alternative at its own maximum, the axis tau), the band-edge and damping-bound guards,
+ * and a Hampel identifier on the per-line frequencies; a refusal when fewer than
+ * MIN_ACCEPTED_LINES remain. On the commanded time base each line's fit starts at its own field
+ * maximum; on deposit times (`depositTimeS`, one array per window) it is an ordinary least squares
+ * fit (WHITE_START) from the maximum of its own ring statistic on those times (correctedSeed), at
+ * the damping of its own maximum.
+ */
+function screenLines(
+  detection: AxisDetection,
+  depositTimeS: Float64Array[] | null,
+): { refusal: AxisPool } | { screening: AxisScreening } {
+  const { windowed, states, ownMaxima, carried, chosen } = detection
+  const verdicts = detection.base.lines.map((v) => ({ ...v }))
+  const base: AxisPool = { ...detection.base, lines: verdicts }
+  const tau0 = states[0].h0.tauS
+  const tauBounds = tauRange(states.map((s) => s.basis))
   const lineFits = new Map<number, JointFit>()
   states.forEach((s, l) => {
     if (!verdicts[windowed[l]].detected) return
     const own = ownMaxima[l].index
-    const seed = DETECTION_GRID[own]
-    lineFits.set(
-      l,
-      varproFit([s.basis], [refine(s, own).fit.noise], [seed.frequencyHz, seed.dampingRatio, Math.log(tau0)], [true, true, false], tauBounds),
-    )
+    if (depositTimeS === null) {
+      const seed = DETECTION_GRID[own]
+      const noise = refine(s, own).fit.noise
+      lineFits.set(l, varproFit([s.basis], [noise], [seed.frequencyHz, seed.dampingRatio, Math.log(tau0)], [true, true, false], tauBounds))
+      return
+    }
+    const rec = { ...detection.windows[l], depositTimeS: depositTimeS[l] }
+    const basis = lineBasis(rec, [], chosen.kind, carried.columns[l])
+    const seed = correctedSeed(detection, [l], depositTimeS, DETECTION_GRID[own].dampingRatio)
+    lineFits.set(l, varproFit([basis], [noiseModel(basis, WHITE_START)], [seed.frequencyHz, seed.dampingRatio, Math.log(tau0)], [true, true, false], tauBounds))
   })
   lineFits.forEach((fit, l) => {
     const v = verdicts[windowed[l]]
@@ -924,37 +1249,134 @@ function poolWithArtifacts(fits: LineFit[], speedsMmS: number[], preset: Carried
       if (Math.abs(freqs[k] - center) > threshold) verdicts[windowed[l]].exclusion = 'frequency-outlier'
     })
   }
-  const included = all.filter((l) => verdicts[windowed[l]].exclusion === null)
+  const included = states.map((_, l) => l).filter((l) => verdicts[windowed[l]].exclusion === null)
   if (included.length < MIN_ACCEPTED_LINES) {
     const excluded = verdicts.filter((v) => v.exclusion !== null)
-    return tooFewLines(
-      included.length,
-      excluded.filter((v) => v.exclusion === 'out-of-band').length,
-      excluded.length,
-    )
+    return {
+      refusal: tooFewLines(
+        base,
+        included.length,
+        excluded.filter((v) => v.exclusion === 'out-of-band').length,
+        excluded.length,
+      ),
+    }
   }
   for (const l of included) verdicts[windowed[l]].usedInJointFit = true
-  base.linesUsed = included.length
+  return { screening: { verdicts, included } }
+}
 
-  // Joint variable projection with each line's noise model refitted under the alternative at the
-  // seed, then the second feasible GLS step with the noise refitted to the full-fit residuals.
-  // The ring is estimated in the model that encompasses both corner models (the flow-lag columns,
-  // their time constant free, and the bead-drag lobe at its null-fit length), so its interval does
-  // not rest on the AICc choice: an interval computed in the model a criterion selected is too
-  // narrow (H. Leeb and B. M. Potscher, "Model selection and inference: facts and fiction",
-  // Econometric Theory 21, 2005).
-  const inBases = included.map((l) =>
-    lineBasis(windows[l], [], 'flow-lag', [
-      ...searched.carried.columns[l],
-      ...cornerColumns(windows[l].tS, windows[l], 'bead-drag', chosen.beadScale),
-    ]),
+/**
+ * The estimation stage of a screened axis after its joint fit `fit`: the interval, the checks and
+ * the verdict, with the fit's second-mode search (`secondMode`, searched here when not given).
+ * With `depositTimeS` (one array per window, those the fit was made on) the ring and flow-lag
+ * columns sit at the deposit times the along-track lag gives; without, on the commanded time base.
+ */
+function completeAxis(
+  detection: AxisDetection,
+  screening: AxisScreening,
+  fit: JointFitResult,
+  depositTimeS: Float64Array[] | null,
+  secondMode: SecondModeSearch = searchSecondMode(fit),
+): AxisPool {
+  const { speedsMmS, windowed, chosen, states } = detection
+  const { included } = screening
+  const verdicts = screening.verdicts.map((v) => ({ ...v }))
+  const base: AxisPool = { ...detection.base, lines: verdicts, linesUsed: included.length }
+  const { inBases, estBounds, noise1, joint, rings } = fit
+  base.cornerModel = { kind: chosen.kind, scale: chosen.kind === 'flow-lag' ? joint.tauS : chosen.beadScale }
+  const interval = profileFrequencyInterval(inBases, noise1, joint, estBounds)
+  const se = interval ? (interval.upper - interval.lower) / (2 * interval.critical) : null
+  const ci95 = interval ? Math.max(interval.upper - joint.frequencyHz, joint.frequencyHz - interval.lower) : null
+  const omega = 2 * Math.PI * joint.frequencyHz
+  const amplitudes = rings.map((r, k) => Math.hypot(r.a, r.b) * Math.exp(-joint.dampingRatio * omega * depositTimes(inBases[k].rec)[0]))
+  included.forEach((l, k) => (verdicts[windowed[l]].amplitudeMm = amplitudes[k]))
+  Object.assign(base, {
+    frequencyHz: joint.frequencyHz,
+    dampingRatio: joint.dampingRatio,
+    frequencySeHz: se,
+    frequencyCi95Hz: ci95,
+    amplitudeMm: median(amplitudes),
+  })
+
+  // Diagnostics and checks.
+  base.decayStatistic = decayStatistic(inBases, noise1, joint, estBounds)
+  base.decayDemonstrated = base.decayStatistic > DECAY_CRITICAL
+  base.proportionality = proportionalityCheck(inBases, rings.map((r) => Math.hypot(r.a, r.b)))
+  // On deposit times each tier's fit starts from its own maximum on those times: on the commanded
+  // time base a strongly modulated ring's local maximum can be its sideband.
+  const tierSeed = depositTimeS
+    ? (lines: number[], points: number[]) => correctedSeed(detection, lines, depositTimeS, joint.dampingRatio, points)
+    : null
+  base.speedCheck = speedCheck(states, included, inBases, noise1, joint, speedsMmS, estBounds, tierSeed)
+  base.influenceCheck = speedsMmS.length === 1 ? influenceCheck(states) : 'not-assessed'
+  const detectedK = included.map((l, k) => (verdicts[windowed[l]].detected ? k : -1)).filter((k) => k >= 0)
+  const replicate = replicateCheck(
+    detectedK.map((k) => inBases[k]),
+    detectedK.map((k) => noise1[k]),
+    joint,
+    estBounds,
   )
+  base.replicateCheck = replicate.state
+  replicate.frequencies.forEach((f, j) => (verdicts[windowed[included[detectedK[j]]]].frequencyHz = f))
+
+  // A second mode, searched before the verdict: an unmodeled second mode distorts the single-mode
+  // fit's per-line amplitudes, so with one the dominant mode's proportionality comes from the
+  // two-mode fit.
+  Object.assign(base, withSecondMode(base, secondMode))
+  return verdict(base)
+}
+
+/** The joint fit of an estimation and what the estimation goes on with. */
+interface JointFitResult {
+  inBases: LineBasis[]
+  estBounds: [number, number]
+  /** The noise models of the second feasible GLS step. */
+  noise1: LineNoise[]
+  joint: JointFit
+  /** Each line's ring at the joint fit, aligned with inBases. */
+  rings: RingProjection[]
+}
+
+/** The joint-fit bases of the `included` lines: on the deposit times when given, in the model
+ *  that encompasses both corner models (see jointFit). */
+function jointBases(detection: AxisDetection, included: number[], depositTimeS: Float64Array[] | null): LineBasis[] {
+  const { carried, chosen } = detection
+  return included.map((l) => {
+    const rec = depositTimeS ? { ...detection.windows[l], depositTimeS: depositTimeS[l] } : detection.windows[l]
+    return lineBasis(rec, [], 'flow-lag', [...carried.columns[l], ...cornerColumns(rec, 'bead-drag', chosen.beadScale)])
+  })
+}
+
+/**
+ * The joint fit of a detected axis's `included` lines: with `depositTimeS` (one array per window)
+ * the ring and flow-lag columns sit at the deposit times the along-track lag gives, else on the
+ * commanded time base; from `start`, else from the detection field's maximum.
+ *
+ * Joint variable projection with each line's noise model refitted under the alternative at the
+ * seed, then the second feasible GLS step with the noise refitted to the full-fit residuals. On
+ * deposit times the first step is ordinary least squares instead (WHITE_START), since the
+ * detection's noise models were fitted with the ring on the commanded time base. The
+ * ring is estimated in the model that encompasses both corner models (the flow-lag columns, their
+ * time constant free, and the bead-drag lobe at its null-fit length), so its interval does not
+ * rest on the AICc choice: an interval computed in the model a criterion selected is too narrow
+ * (H. Leeb and B. M. Potscher, "Model selection and inference: facts and fiction", Econometric
+ * Theory 21, 2005).
+ */
+function jointFit(
+  detection: AxisDetection,
+  included: number[],
+  depositTimeS: Float64Array[] | null,
+  start: RingPoint | null,
+): JointFitResult {
+  const { chosen, states } = detection
+  const inBases = jointBases(detection, included, depositTimeS)
   const estBounds = tauRange(inBases)
-  const seedIndex = refittedMaximum(states, included).index
-  const seed = DETECTION_GRID[seedIndex]
+  const seedIndex = start ? gridIndex(Math.round(start.frequencyHz), nearestGridZeta(start.dampingRatio)) : refittedMaximum(states, included).index
+  const seed = start ?? DETECTION_GRID[seedIndex]
   const noiseAtSeed = included.map((l, k) => {
+    if (depositTimeS) return noiseModel(inBases[k], WHITE_START)
     const noise = refine(states[l], seedIndex).fit.noise
-    return noiseModel(inBases[k], noise.fit, noise.varianceSlope, cornerDeficit(inBases[k].rec.tS, inBases[k].rec, 'flow-lag', chosen.flowScale))
+    return noiseModel(inBases[k], noise.fit, noise.varianceSlope, cornerDeficit(inBases[k].rec, 'flow-lag', chosen.flowScale))
   })
   const first = varproFit(
     inBases,
@@ -973,7 +1395,7 @@ function poolWithArtifacts(fits: LineFit[], speedsMmS: number[], preset: Carried
   const noise1 =
     slope1 === 0
       ? ar1
-      : inBases.map((b, k) => noiseModel(b, ar1[k].fit, slope1, cornerDeficit(b.rec.tS, b.rec, b.cornerModel, first.tauS)))
+      : inBases.map((b, k) => noiseModel(b, ar1[k].fit, slope1, cornerDeficit(b.rec, b.cornerModel, first.tauS)))
   const joint = varproFit(
     inBases,
     noise1,
@@ -981,120 +1403,116 @@ function poolWithArtifacts(fits: LineFit[], speedsMmS: number[], preset: Carried
     [true, true, true],
     estBounds,
   )
-  // A ring left out of the first artifact search leaks into the artifact columns on its own tier
-  // and makes an artifact's amplitude grow with the corner speed: the search runs again with the
-  // fitted ring in the null design, and the analysis is repeated with whatever more it finds.
-  if (preset === null && speedsMmS.length >= 2) {
-    const again = withArtifacts(windows, speedsMmS, searched.carried, [{ frequencyHz: joint.frequencyHz, dampingRatio: joint.dampingRatio }], true, chosen.kind)
-    if (again.carried.artifacts.length > searched.carried.artifacts.length) return poolWithArtifacts(fits, speedsMmS, again.carried)
-  }
-  base.cornerModel = { kind: chosen.kind, scale: chosen.kind === 'flow-lag' ? joint.tauS : chosen.beadScale }
-  const interval = profileFrequencyInterval(inBases, noise1, joint, estBounds)
-  const se = interval ? (interval.upper - interval.lower) / (2 * interval.critical) : null
-  const ci95 = interval ? Math.max(interval.upper - joint.frequencyHz, joint.frequencyHz - interval.lower) : null
-  const designs1 = inBases.map((b, k) => nullDesign(b, noise1[k], joint.tauS))
-  const rings = inBases.map((b, k) =>
-    projectRing(b, noise1[k], designs1[k], joint.frequencyHz, joint.dampingRatio, ringScratch(b.m), new Float64Array(designs1[k].k), new Float64Array(designs1[k].k)),
+  return { inBases, estBounds, noise1, joint, rings: jointRings(inBases, noise1, joint) }
+}
+
+/**
+ * The joint fit of a detected axis's `included` lines on new deposit times with the noise models
+ * of `held` (their AR fits and variance slope, the variance function's covariate taken at the new
+ * deposit times), from held's estimate: one generalized least squares fit with the covariance
+ * held, the mean model refitted.
+ */
+function jointRefit(detection: AxisDetection, included: number[], depositTimeS: Float64Array[], held: JointFitResult): JointFitResult {
+  const inBases = jointBases(detection, included, depositTimeS)
+  const tauS = held.joint.tauS
+  const noise1 = inBases.map((b, k) =>
+    noiseModel(b, held.noise1[k].fit, held.noise1[k].varianceSlope, cornerDeficit(b.rec, b.cornerModel, tauS)),
   )
-  const omega = 2 * Math.PI * joint.frequencyHz
-  const amplitudes = rings.map((r, k) => Math.hypot(r.a, r.b) * Math.exp(-joint.dampingRatio * omega * inBases[k].rec.tS[0]))
-  included.forEach((l, k) => (verdicts[windowed[l]].amplitudeMm = amplitudes[k]))
-  Object.assign(base, {
-    frequencyHz: joint.frequencyHz,
-    dampingRatio: joint.dampingRatio,
-    frequencySeHz: se,
-    frequencyCi95Hz: ci95,
-    amplitudeMm: median(amplitudes),
+  const joint = varproFit(
+    inBases,
+    noise1,
+    [held.joint.frequencyHz, held.joint.dampingRatio, Math.log(tauS)],
+    [true, true, true],
+    held.estBounds,
+  )
+  return { inBases, estBounds: held.estBounds, noise1, joint, rings: jointRings(inBases, noise1, joint) }
+}
+
+/** Each line's ring at a joint fit, aligned with the bases. */
+function jointRings(inBases: LineBasis[], noises: LineNoise[], joint: JointFit): RingProjection[] {
+  return inBases.map((b, k) => {
+    const design = nullDesign(b, noises[k], joint.tauS)
+    return projectRing(b, noises[k], design, joint.frequencyHz, joint.dampingRatio, ringScratch(b.m), new Float64Array(design.k), new Float64Array(design.k))
   })
+}
 
-  // Diagnostics and checks.
-  base.decayStatistic = decayStatistic(inBases, noise1, joint, estBounds)
-  base.decayDemonstrated = base.decayStatistic > DECAY_CRITICAL
-  base.proportionality = proportionalityCheck(inBases, rings.map((r) => Math.hypot(r.a, r.b)))
-  base.speedCheck = speedCheck(states, included, inBases, noise1, joint, speedsMmS, estBounds)
-  base.influenceCheck = speedsMmS.length === 1 ? influenceCheck(states) : 'not-assessed'
-  const detectedK = included.map((l, k) => (verdicts[windowed[l]].detected ? k : -1)).filter((k) => k >= 0)
-  const replicate = replicateCheck(
-    detectedK.map((k) => inBases[k]),
-    detectedK.map((k) => noise1[k]),
-    joint,
-    estBounds,
-  )
-  base.replicateCheck = replicate.state
-  replicate.frequencies.forEach((f, j) => (verdicts[windowed[included[detectedK[j]]]].frequencyHz = f))
+/** The lines' fitted rings for the along-track response, aligned with `bases`. */
+function fittedRings(bases: LineBasis[], rings: { a: number; b: number }[]): FittedLineRing[] {
+  return bases.map((b, k) => ({
+    cornerSpeedMmS: b.rec.cornerSpeedMmS,
+    lateralTowardRunUp: b.rec.lateralTowardRunUp,
+    a: rings[k].a,
+    b: rings[k].b,
+  }))
+}
 
-  // A second mode, searched before the verdict: an unmodeled second mode distorts the single-mode
-  // fit's per-line amplitudes, so with one the dominant mode's proportionality comes from the
-  // two-mode fit.
-  Object.assign(base, withSecondMode(base, inBases, noise1, joint, estBounds))
-
-  // Verdict, the most specific failing gate first.
-  const result = { ...base }
+/** The verdict on an estimated axis, the most specific failing gate first. */
+function verdict(result: AxisPool): AxisPool {
   // The dominant mode's figures: the two-mode fit's when a second mode was found.
   const f = result.frequencyHz!
   if (f <= F_MIN_HZ + BOUND_MARGIN_HZ || f >= F_MAX_HZ - BOUND_MARGIN_HZ) {
-    return refuse(
+    return refusal(
+      result,
       `The frequency fitted across the axis's lines sits at the edge of the ${F_MIN_HZ} to ` +
         `${F_MAX_HZ} Hz search range, so it cannot be trusted. The true resonance likely ` +
         'lies outside the measurable range.',
-      result,
     )
   }
   if (result.dampingRatio! >= ZETA_MAX) {
-    return refuse(
+    return refusal(
+      result,
       "The damping ratio fitted across the axis's lines sits at the edge of the physically " +
         'plausible range, so the fit cannot be trusted.',
-      result,
     )
   }
   const speed = result.speedCheck
   if (speed.state === 'changed') {
-    return refuse(
+    return refusal(
+      result,
       'The frequency changed with the line speed, the way a print or scan pattern does. ' +
         'Ringing of the machine keeps its frequency at every speed, so no shaper is recommended.',
-      result,
     )
   }
   if (speed.state === 'not-confirmed') {
     const silent = speed.tiers.find((t) => !t.detected)
-    return refuse(
+    return refusal(
+      result,
       silent
         ? `The ${silent.speedMmS} mm/s lines alone show no ringing, so the frequency cannot be ` +
             'confirmed at both speeds. Reprint or rescan the coupon.'
         : 'The two speed tiers measured the frequency too imprecisely to confirm that it is ' +
             'the same at both speeds. Reprint or rescan the coupon.',
-      result,
     )
   }
   if (result.influenceCheck === 'failed') {
-    return refuse(
+    return refusal(
+      result,
       'The ringing found on this axis rests on a single line, so a print defect or dust on ' +
         'that line could have caused it. Rescan the coupon, or reprint it at a line speed of at ' +
         `least ${MIN_TWO_TIER_LINE_SPEED_MM_S} mm/s on a bed large enough for both speed tiers.`,
-      result,
     )
   }
   if (result.proportionality === 'failed') {
-    return refuse(
+    return refusal(
+      result,
       'The pattern on this axis does not grow with the corner speed the way ringing of the ' +
         'machine does. A steady vibration, such as a fan, or a pattern in the print or the scan ' +
         'is the likely cause, so no shaper is recommended.',
-      result,
     )
   }
   if (result.replicateCheck === 'failed') {
-    return refuse(
+    return refusal(
+      result,
       'The lines of this axis disagree on the ringing frequency by more than their measurement ' +
         'error. The print or scan is too inconsistent to trust a single value.',
-      result,
     )
   }
   if (result.frequencyCi95Hz === null || result.frequencyCi95Hz > MAX_CI95_REL * f) {
-    return refuse(
+    return refusal(
+      result,
       'The pooled frequency estimate is too uncertain to configure an input shaper: its 95% ' +
         'confidence interval is wider than the stopband of the shaper it would set. Reprint or ' +
         'rescan the coupon.',
-      result,
     )
   }
   return { ...result, accepted: true, refusals: [], rescanAdvice: null }
@@ -1110,23 +1528,40 @@ function poolWithArtifacts(fits: LineFit[], speedsMmS: number[], preset: Carried
  * reports the dominant mode (the larger median amplitude) and the other as its second mode, with
  * the input-proportionality check of that mode.
  */
-function withSecondMode(
-  pool: AxisPool,
-  bases: LineBasis[],
-  noises: LineNoise[],
-  joint: JointFit,
-  tauBounds: [number, number],
-): Partial<AxisPool> {
+function searchSecondMode(fit: JointFitResult): SecondModeSearch {
+  const { inBases: bases, noise1: noises, joint, estBounds: tauBounds } = fit
   const mode1 = { frequencyHz: joint.frequencyHz, dampingRatio: joint.dampingRatio }
   const states = bases.map((b, k) => lineState(b, nullHypothesisFit(b, noises[k].fit, joint.tauS, noises[k].varianceSlope, [mode1])))
   const all = states.map((_, l) => l)
   const top = refittedMaximum(states, all)
   const pBound = bonferroni(DETECTION_GRID.length, top.value, 2 * states.length)
-  if (!(pBound <= DETECTION_ALPHA)) return { secondModePBound: pBound }
+  if (!(pBound <= DETECTION_ALPHA)) return { pBound, modes: null }
   const seed = DETECTION_GRID[top.index]
-  const fit = twoModeFit(bases, noises, [joint.frequencyHz, joint.dampingRatio, seed.frequencyHz, seed.dampingRatio, Math.log(joint.tauS)], tauBounds)
-  if (fit === null) return { secondModePBound: pBound }
-  const [m1, m2] = fit.modes[0].amplitudeMm >= fit.modes[1].amplitudeMm ? fit.modes : [fit.modes[1], fit.modes[0]]
+  const two = twoModeFit(bases, noises, [joint.frequencyHz, joint.dampingRatio, seed.frequencyHz, seed.dampingRatio, Math.log(joint.tauS)], tauBounds)
+  if (two === null) return { pBound, modes: null }
+  const [dominant, other] = two.modes[0].mode.amplitudeMm >= two.modes[1].mode.amplitudeMm ? two.modes : [two.modes[1], two.modes[0]]
+  return { pBound, modes: { dominant, other } }
+}
+
+/** The outcome of the second-mode search of a joint fit: its Bonferroni bound and, when it found
+ *  a second mode, both modes of the two-mode fit, the dominant (larger amplitude) first. */
+interface SecondModeSearch {
+  pBound: number
+  modes: { dominant: FittedMode; other: FittedMode } | null
+}
+
+/** A mode of the two-mode fit with each line's ring of it, aligned with the fit's bases. */
+interface FittedMode {
+  mode: SecondMode
+  rings: RingProjection[]
+}
+
+/** The pool fields of a second-mode search: the dominant mode's figures and the second mode. */
+function withSecondMode(pool: AxisPool, search: SecondModeSearch): Partial<AxisPool> {
+  if (search.modes === null) return { secondModePBound: search.pBound }
+  const m1 = search.modes.dominant.mode
+  const m2 = search.modes.other.mode
+  const pBound = search.pBound
   return {
     frequencyHz: m1.frequencyHz,
     dampingRatio: m1.dampingRatio,
@@ -1139,19 +1574,20 @@ function withSecondMode(
   }
 }
 
-/** The joint fit of two modes; null when the fit degenerates (both modes on one frequency). */
+/** The joint fit of two modes, each with its lines' rings; null when the fit degenerates (both
+ *  modes on one frequency). */
 function twoModeFit(
   bases: LineBasis[],
   noises: LineNoise[],
   start: number[],
   tauBounds: [number, number],
-): { modes: [SecondMode, SecondMode] } | null {
+): { modes: [FittedMode, FittedMode] } | null {
   const lower = [F_MIN_HZ, 0, F_MIN_HZ, 0, Math.log(tauBounds[0])]
   const upper = [F_MAX_HZ, ZETA_MAX, F_MAX_HZ, ZETA_MAX, Math.log(tauBounds[1])]
   const project = (theta: number[], which: 0 | 1, residualOut?: (k: number) => Float64Array) =>
     bases.map((b, k) => {
       const [fa, za, fb, zb] = which === 1 ? [theta[0], theta[1], theta[2], theta[3]] : [theta[2], theta[3], theta[0], theta[1]]
-      const design = nullDesign(b, noises[k], Math.exp(theta[4]), ringColumns(b.rec.tS, fa, za))
+      const design = nullDesign(b, noises[k], Math.exp(theta[4]), ringColumns(depositTimes(b.rec), fa, za))
       return projectRing(b, noises[k], design, fb, zb, ringScratch(b.m), new Float64Array(design.k), new Float64Array(design.k), residualOut?.(k))
     })
   const total = bases.reduce((s, b) => s + b.m, 0)
@@ -1176,13 +1612,16 @@ function twoModeFit(
   const variances = dof > 0 ? parameterVariances(lm, lm.ssr / dof) : null
   const se = (j: number) => (variances && variances[j] !== null && variances[j]! > 0 ? Math.sqrt(variances[j]!) : null)
   const amplitude = (rings: RingProjection[], f: number, zeta: number) =>
-    median(rings.map((r, k) => Math.hypot(r.a, r.b) * Math.exp(-zeta * 2 * Math.PI * f * bases[k].rec.tS[0])))
-  const mode = (rings: RingProjection[], f: number, zeta: number, seIndex: number): SecondMode => ({
-    frequencyHz: f,
-    dampingRatio: zeta,
-    frequencySeHz: se(seIndex),
-    amplitudeMm: amplitude(rings, f, zeta),
-    proportionality: proportionalityCheck(bases, rings.map((r) => Math.hypot(r.a, r.b))),
+    median(rings.map((r, k) => Math.hypot(r.a, r.b) * Math.exp(-zeta * 2 * Math.PI * f * depositTimes(bases[k].rec)[0])))
+  const mode = (rings: RingProjection[], f: number, zeta: number, seIndex: number): FittedMode => ({
+    mode: {
+      frequencyHz: f,
+      dampingRatio: zeta,
+      frequencySeHz: se(seIndex),
+      amplitudeMm: amplitude(rings, f, zeta),
+      proportionality: proportionalityCheck(bases, rings.map((r) => Math.hypot(r.a, r.b))),
+    },
+    rings,
   })
   return { modes: [mode(rings1, theta[0], theta[1], 0), mode(rings2, theta[2], theta[3], 2)] }
 }
@@ -1217,7 +1656,8 @@ function localGrid(centers: number[]): number[] {
 /** The three-way two-tier speed check (closed testing on local grids, then the d test) on the
  *  joint-fit lines `included`: each tier's detection over its own lines' likelihood ratio fields,
  *  its frequency fitted on the lines' joint-fit windows `inBases` with their full-fit noise models
- *  `noise1` (both aligned with included). */
+ *  `noise1` (both aligned with included), from the tier's own maximum over the local grid, or,
+ *  given `tierSeed`, from the point it returns for the tier's lines and the local grid. */
 function speedCheck(
   states: LineState[],
   included: number[],
@@ -1226,6 +1666,7 @@ function speedCheck(
   joint: JointFit,
   speedsMmS: number[],
   tauBounds: [number, number],
+  tierSeed: ((lines: number[], points: number[]) => RingPoint) | null = null,
 ): SpeedCheck {
   if (speedsMmS.length < 2) return NOT_ASSESSED_SPEED
   const slow = Math.min(...speedsMmS)
@@ -1240,7 +1681,7 @@ function speedCheck(
     const pBound = bonferroni(points.length, local.value, 2 * members.length)
     const detected = pBound <= DETECTION_ALPHA
     if (!detected) return { ...blank, detectionPBound: pBound }
-    const seed = DETECTION_GRID[local.index]
+    const seed = tierSeed ? tierSeed(members.map((k) => included[k]), points) : DETECTION_GRID[local.index]
     const fit = varproFit(
       members.map((k) => inBases[k]),
       members.map((k) => noise1[k]),
@@ -1310,3 +1751,4 @@ function replicateCheck(
 
 /** |G|, the number of grid points the detection bound pays for. */
 export const DETECTION_GRID_SIZE = DETECTION_GRID.length
+

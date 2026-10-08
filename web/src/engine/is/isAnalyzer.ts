@@ -7,7 +7,8 @@ import type { IsAlignment } from './isFiducialAligner'
 import { assessMeasurementBackdrop } from '../measurementBackdrop'
 import type { BackdropAssessment } from '../measurementBackdrop'
 import { imageDirection, measuredDirection, traceGroup, tracedSpanPx } from './lineTracer'
-import { analyzeTracedLine, poolAxisFits } from './ringAnalyzer'
+import { analyzeTracedLine, poolCouponAxes } from './ringAnalyzer'
+import type { AxisPool, LineFit } from './ringAnalyzer'
 import { layerShiftDetected } from './layerShift'
 import { recommendShapers, recommendShapersForModes, zvResidualAtMode } from './shaperRecommender'
 import type { IsAxisResult, IsLineOutcome, IsResult, IsScanInfo } from './resultTypes'
@@ -174,13 +175,22 @@ export function analyzeIsCoupon(
       }
     }
 
-    const axes: IsAxisResult[] = []
-    geometry.groups.forEach((group, groupIndex) => {
+    // Every group is traced first; the groups' rings are then analyzed together, since each
+    // group's lines run along the other group's axis, whose ring shifts the nozzle along them
+    // (ringAnalyzer.poolCouponAxes). A group that could not be traced enters with no lines.
+    const traced = geometry.groups.map((group) => traceAxisGroup(cv, grays, alignments, spec, group, scanReference))
+    const pools = poolCouponAxes(
+      traced.map((t) => ('fits' in t ? t.fits : [])),
+      spec.speedsMmS,
+    )
+    const axes: IsAxisResult[] = geometry.groups.map((group, groupIndex) => {
+      const t = traced[groupIndex]
+      if (!('fits' in t)) return t.refused
       // The group's lines in the order they print within the layer.
       const printOrder = geometry.printOrder
         .filter((ref) => ref.groupIndex === groupIndex)
         .map((ref) => ref.lineIndex)
-      axes.push(measureGroup(cv, grays, alignments, spec, group, scanReference, printOrder))
+      return axisResult(group, t, pools[groupIndex], printOrder)
     })
 
     return {
@@ -302,6 +312,7 @@ function refusedAxis(
     zvSecondModeResidual: null,
     artifacts: [],
     cornerModel: null,
+    alongTrackLag: null,
     linesUsed: 0,
     linesTraced,
     scanIndex,
@@ -347,15 +358,25 @@ const ZETA_AT_BOUND_REASON =
   'The damping ratio fitted on this line sits at the edge of the physically plausible range, ' +
   'so the line was left out of the joint fit.'
 
-function measureGroup(
+/** A group traced in its scan: its per-line outcomes and the fits of its traced lines. */
+interface TracedAxisGroup {
+  scanIndex: 0 | 1
+  lines: IsLineOutcome[]
+  /** Geometry indices of the traced lines, aligned with fits. */
+  tracedIndices: number[]
+  fits: LineFit[]
+}
+
+/** Traces a group in the scan that reads it along the sensor rows and prepares its lines' fits;
+ *  the refused axis when no scan qualifies or no line could be traced. */
+function traceAxisGroup(
   cv: OpenCv,
   grays: Mat[],
   alignments: IsAlignment[],
   spec: IsTestSpec,
   group: IsLineGroup,
   scanReference: ScaleReference,
-  printOrder: number[],
-): IsAxisResult {
+): TracedAxisGroup | { refused: IsAxisResult } {
   // Group-to-scan assignment: the scan in which the group's measured direction is most
   // sensor-row aligned, accepted only when that alignment is dominant.
   const dir = measuredDirection(group.lines[0])
@@ -389,17 +410,19 @@ function measureGroup(
       startPx: null,
       endPx: null,
     }))
-    return refusedAxis(
-      group.axis,
-      [
-        `The ${group.axis.toUpperCase()} axis lines do not run along the scanner's sensor rows in ` +
-          'either scan, so their ring wavelength cannot be read reliably. Scan the coupon once ' +
-          'upright and once turned a quarter turn on the glass.',
-      ],
-      0,
-      null,
-      lines,
-    )
+    return {
+      refused: refusedAxis(
+        group.axis,
+        [
+          `The ${group.axis.toUpperCase()} axis lines do not run along the scanner's sensor rows in ` +
+            'either scan, so their ring wavelength cannot be read reliably. Scan the coupon once ' +
+            'upright and once turned a quarter turn on the glass.',
+        ],
+        0,
+        null,
+        lines,
+      ),
+    }
   }
 
   const alignment = alignments[scanIndex]
@@ -435,20 +458,27 @@ function measureGroup(
     .filter((i) => i >= 0)
 
   if (tracedIndices.length === 0) {
-    return refusedAxis(
-      group.axis,
-      [
-        `None of the ${group.axis.toUpperCase()} axis lines could be traced in the scan. The ` +
-          'coupon may be incompletely printed or partly outside the scan area.',
-      ],
-      0,
-      scanIndex,
-      lines,
-    )
+    return {
+      refused: refusedAxis(
+        group.axis,
+        [
+          `None of the ${group.axis.toUpperCase()} axis lines could be traced in the scan. The ` +
+            'coupon may be incompletely printed or partly outside the scan area.',
+        ],
+        0,
+        scanIndex,
+        lines,
+      ),
+    }
   }
 
   const fits = tracedIndices.map((i) => analyzeTracedLine(traced.traces[i]!))
-  const pool = poolAxisFits(fits, spec.speedsMmS)
+  return { scanIndex, lines, tracedIndices, fits }
+}
+
+/** The axis result of a traced group from its pool (ringAnalyzer.poolCouponAxes). */
+function axisResult(group: IsLineGroup, traced: TracedAxisGroup, pool: AxisPool, printOrder: number[]): IsAxisResult {
+  const { scanIndex, lines, tracedIndices, fits } = traced
   for (let k = 0; k < tracedIndices.length; k++) {
     const outcome = lines[tracedIndices[k]]
     const fit = fits[k]
@@ -501,6 +531,7 @@ function measureGroup(
     layerShiftDetected: layerShiftDetected(offsets, printed),
     artifacts: pool.artifacts,
     cornerModel: pool.cornerModel,
+    alongTrackLag: pool.alongTrackLag,
   }
 
   if (!pool.accepted) {

@@ -1,4 +1,4 @@
-import type { CheckState, IsAxisResult, SpeedCheckState } from '../engine/is/resultTypes'
+import type { AlongTrackLagState, CheckState, IsAxisResult, SpeedCheckState } from '../engine/is/resultTypes'
 import type { DetectedArtifact } from '../engine/is/artifactSearch'
 import { GT2_PITCH_MM } from '../engine/is/ringRegressors'
 
@@ -41,6 +41,13 @@ function patternSource(artifact: DetectedArtifact): string {
   return 'JPEG block of the scan'
 }
 
+/** The along-track lag correction's state, naming the other axis where it is the reason. */
+function alongTrackLagText(state: AlongTrackLagState, otherAxis: string): string {
+  if (state === 'corrected') return 'yes'
+  if (state === 'other-axis-not-measured') return `not possible, ${otherAxis} axis ringing not measured`
+  return 'not possible, the joint fit of both axes failed'
+}
+
 export interface CheckRow {
   label: string
   value: string
@@ -62,6 +69,12 @@ export function isCheckRows(a: IsAxisResult): CheckRow[] {
   // Only a one-tier coupon assesses the leave-one-line-out check.
   if (a.influenceCheck !== 'not-assessed') {
     rows.push({ label: 'Detection without any single line', value: stateYesNo(a.influenceCheck) })
+  }
+  // The other axis's ring shifts the nozzle along this axis's lines; only a fitted ring has a
+  // correction to report.
+  if (a.alongTrackLag !== null) {
+    const other = a.axis === 'x' ? 'Y' : 'X'
+    rows.push({ label: `Corrected for ${other} axis ringing along the lines`, value: alongTrackLagText(a.alongTrackLag, other) })
   }
   rows.push({ label: 'Layer shift detected', value: yesNo(a.layerShiftDetected) })
   if (a.secondModePBound !== null) {

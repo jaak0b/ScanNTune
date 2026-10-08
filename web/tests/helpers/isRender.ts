@@ -18,6 +18,15 @@ import { timeAtDistance } from '../../src/engine/is/lineTracer'
 // distance. `rampProfile: 'sCurve'` times the post-corner acceleration ramp by Marlin's
 // S_CURVE_ACCELERATION quintic Bezier, v0 + dv (10 tau^3 - 15 tau^4 + 6 tau^5) over the
 // trapezoid's duration (stepper.cpp _calc_bezier_curve_coeffs), instead of the trapezoid.
+//
+// Along-track lag: the axis along a group's lines is the other group's axis, and the corner
+// changes its velocity the same way (the Y group starts it from rest along +X, the X group stops
+// it from a -X run-up), so it answers with the ring the other group's truth gives it. When both
+// axes have a truth, the nozzle of a line lags its commanded position by that ring, taken as the
+// displacement along the other group's run-up, and the line's bead at commanded position s lies
+// where the nozzle passed s: at the time t solving s_cmd(t) - lag(t) = s (bisection), at which
+// the line's own lobe and ring are evaluated. `alongTrackLag: false` renders on the commanded
+// time base instead.
 
 export interface IsAxisTruth {
   frequencyHz: number
@@ -52,6 +61,8 @@ export interface IsRenderOptions {
   shrink?: number
   /** Velocity profile of the post-corner acceleration ramp. */
   rampProfile?: 'trapezoid' | 'sCurve'
+  /** Deposit each line where its nozzle, lagging by the other axis's ring, passed it. */
+  alongTrackLag?: boolean
 }
 
 type Resolved = Required<IsRenderOptions>
@@ -70,6 +81,7 @@ const DEFAULTS: Omit<Resolved, 'spec' | 'truth'> = {
   wavinessPeriodMm: 40,
   shrink: 0,
   rampProfile: 'trapezoid',
+  alongTrackLag: true,
 }
 
 /** Deterministic pseudo-random (mulberry32), same construction as paRender.ts. */
@@ -108,6 +120,20 @@ function timeAtDistanceSCurve(sMm: number, c: number, v: number, a: number): num
   }
   return 0.5 * (lo + hi)
 }
+
+/** Commanded distance covered by time t after the corner: the trapezoid, or Marlin's Bezier ramp
+ *  of the trapezoid's duration (see timeAtDistanceSCurve), then cruise. */
+function distanceAtTime(t: number, c: number, v: number, a: number, profile: 'trapezoid' | 'sCurve'): number {
+  const T = (v - c) / a
+  if (t >= T) return 0.5 * (c + v) * T + v * (t - T)
+  if (profile === 'trapezoid') return c * t + 0.5 * a * t * t
+  const tau = t / T
+  return c * t + (v - c) * T * (2.5 * tau ** 4 - 3 * tau ** 5 + tau ** 6)
+}
+
+/** Step of the deposit-time table along a lagged line, mm: linear interpolation over it misses a
+ *  0.25 mm ring of 0.7 mm wavelength (150 Hz at 106 mm/s) by under a tenth of a micrometre. */
+const LAG_TABLE_STEP_MM = 0.005
 
 function gauss(rand: () => number): number {
   const u = Math.max(rand(), 1e-12)
@@ -152,6 +178,34 @@ interface RingedLine {
   lengthMm: number
 }
 
+/** The coupon-frame direction a line's lateral displacement is drawn in (+Y for a horizontal
+ *  line, +X for a vertical one), as +1 along its run-up's direction of travel or -1 against it. */
+function towardRunUp(line: IsLine): number {
+  const horizontal = line.measured.y0 === line.measured.y1
+  const along = horizontal ? line.runUp.y1 - line.runUp.y0 : line.runUp.x1 - line.runUp.x0
+  return along >= 0 ? 1 : -1
+}
+
+/** The along-track lag of a line of the group whose axis is not `ringingAxis`, at corner speed c:
+ *  the ringing axis's ring along that axis's own group's run-up; null without both truths. */
+function lagFunction(
+  g: IsCouponGeometry,
+  o: Resolved,
+  lineAxis: IsAxis,
+  cornerSpeedMmS: number,
+): ((t: number) => number) | null {
+  if (!o.alongTrackLag || g.groups.length < 2 || !o.truth[lineAxis]) return null
+  const other = g.groups.find((group) => group.axis !== lineAxis)!
+  const truth = o.truth[other.axis]
+  if (!truth) return null
+  const sign = towardRunUp(other.lines[0])
+  const B = truth.ringAmpMm * (cornerSpeedMmS / o.spec.cornerSpeedMmS)
+  const omega = 2 * Math.PI * truth.frequencyHz
+  const omegaD = omega * Math.sqrt(1 - truth.dampingRatio * truth.dampingRatio)
+  const phi = truth.phaseRad ?? 0
+  return (t: number) => sign * B * Math.exp(-omega * truth.dampingRatio * t) * Math.cos(omegaD * t + phi)
+}
+
 function buildRingedLines(spec: IsTestSpec, g: IsCouponGeometry, o: Resolved): RingedLine[] {
   const out: RingedLine[] = []
   for (const group of g.groups) {
@@ -180,9 +234,35 @@ function buildRingedLines(spec: IsTestSpec, g: IsCouponGeometry, o: Resolved): R
       const omega = 2 * Math.PI * f
       const omegaD = omega * Math.sqrt(1 - zeta * zeta)
       const timeAt = o.rampProfile === 'sCurve' ? timeAtDistanceSCurve : timeAtDistance
-      const lat = (sMm: number) => {
-        const t = timeAt(sMm, line.cornerSpeedMmS, line.speedMmS, spec.accelMmS2)
-        return lobeA * Math.exp(-t / lobeTau) + B * Math.exp(-omega * zeta * t) * Math.cos(omegaD * t + phi)
+      const c = line.cornerSpeedMmS
+      const v = line.speedMmS
+      const a = spec.accelMmS2
+      const atTime = (t: number) =>
+        lobeA * Math.exp(-t / lobeTau) + B * Math.exp(-omega * zeta * t) * Math.cos(omegaD * t + phi)
+      const lag = lagFunction(g, o, group.axis, c)
+      let lat = (sMm: number) => atTime(timeAt(sMm, c, v, a))
+      if (lag) {
+        // The ring is bounded by its corner amplitude, so the deposit time lies between the
+        // commanded times of s - bound and s + bound.
+        const bound = Math.abs(o.truth[g.groups.find((other) => other.axis !== group.axis)!.axis]!.ringAmpMm) * (c / spec.cornerSpeedMmS)
+        const depositTime = (sMm: number) => {
+          let lo = timeAt(Math.max(0, sMm - bound), c, v, a)
+          let hi = timeAt(sMm + bound, c, v, a)
+          for (let k = 0; k < 60; k++) {
+            const mid = 0.5 * (lo + hi)
+            if (distanceAtTime(mid, c, v, a, o.rampProfile) - lag(mid) < sMm) lo = mid
+            else hi = mid
+          }
+          return 0.5 * (lo + hi)
+        }
+        const count = Math.ceil(lengthMm / LAG_TABLE_STEP_MM) + 2
+        const table = new Float64Array(count)
+        for (let k = 0; k < count; k++) table[k] = atTime(depositTime(k * LAG_TABLE_STEP_MM))
+        lat = (sMm: number) => {
+          const x = Math.min(count - 1.000001, sMm / LAG_TABLE_STEP_MM)
+          const k = Math.floor(x)
+          return table[k] + (x - k) * (table[k + 1] - table[k])
+        }
       }
       out.push({ line, horizontal, lat, maxAmpMm: Math.abs(B) + Math.abs(lobeA), lengthMm })
     }

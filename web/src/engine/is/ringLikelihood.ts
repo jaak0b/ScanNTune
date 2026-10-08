@@ -3,7 +3,7 @@ import type { ArFit } from '../correlatedNoise'
 import { nullDesign, noiseModel, projectColumns, projectPeriodic, projectRing, ringScratch } from './ringGls'
 import type { LineBasis, LineNoise, NullDesign, RingProjection } from './ringGls'
 import { F_MAX_HZ, F_MIN_HZ } from './types'
-import { FREQUENCY_GRID_HZ, cornerDeficit, ringColumns } from './ringRegressors'
+import { FREQUENCY_GRID_HZ, cornerDeficit, depositTimes, ringColumns } from './ringRegressors'
 
 // The generalized likelihood ratio test (GLRT) of a ring at one point theta = (f, zeta) of one
 // traced line, with the AR noise model refitted under each hypothesis (S. M. Kay, "Fundamentals of
@@ -217,8 +217,8 @@ export function nullHypothesisFit(
   fixedModes: RingPoint[] = [],
 ): NullFit {
   const order = initial.coefficients.length
-  const deficit = cornerDeficit(basis.rec.tS, basis.rec, basis.cornerModel, tauS)
-  const fixedColumns = fixedModes.flatMap((p) => ringColumns(basis.rec.tS, p.frequencyHz, p.dampingRatio))
+  const deficit = cornerDeficit(basis.rec, basis.cornerModel, tauS)
+  const fixedColumns = fixedModes.flatMap((p) => ringColumns(depositTimes(basis.rec), p.frequencyHz, p.dampingRatio))
   const start = evaluate(basis, { coefficients: initial.coefficients, varianceSlope }, deficit, tauS, null, fixedColumns)
   const fit = iterate(basis, start, order, deficit, tauS, null, fixedColumns)
   const m = basis.m

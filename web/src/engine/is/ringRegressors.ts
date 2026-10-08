@@ -83,6 +83,25 @@ export interface CommandedMotion {
 }
 
 /**
+ * A line's two time bases. tS is the commanded time since the corner of each sample: it maps one
+ * to one to the commanded arc length, so everything fixed in the print or the scan (drift, belt
+ * and scan patterns, the bead dragged at the corner) is a function of it. depositTimeS is when the
+ * nozzle actually deposited each sample: the axis along the line rings after the corner too, so
+ * the nozzle runs behind and ahead of its commanded position, and everything that happens in
+ * time (the ring of the measured axis, the extruded flow) is a function of the deposit time.
+ * Absent, the two are the same.
+ */
+export interface SampleTimes extends CommandedMotion {
+  tS: Float64Array
+  depositTimeS?: Float64Array
+}
+
+/** The deposit time of each sample (SampleTimes), seconds since the corner. */
+export function depositTimes(rec: SampleTimes): Float64Array {
+  return rec.depositTimeS ?? rec.tS
+}
+
+/**
  * The commanded arc length from the corner at each sample time, mm: c t + a t^2 / 2 on the
  * trapezoid ramp, then the tier speed (the inverse of couponGeometry.timeAtDistance).
  */
@@ -162,15 +181,11 @@ export function flowDeficit(tS: Float64Array, motion: CommandedMotion, tauS: num
  */
 export type CornerModelKind = 'flow-lag' | 'bead-drag'
 
-/** The corner model's columns at each sample time for its scale. */
-export function cornerColumns(
-  tS: Float64Array,
-  motion: CommandedMotion,
-  kind: CornerModelKind,
-  scale: number,
-): Float64Array[] {
-  if (kind === 'flow-lag') return flowLagColumns(tS, motion, scale)
-  return [arcLengthMm(tS, motion).map((s) => Math.exp(-s / scale))]
+/** The corner model's columns of a line for its scale: the flow lag at the deposit times, the
+ *  bead drag at the commanded arc length. */
+export function cornerColumns(rec: SampleTimes, kind: CornerModelKind, scale: number): Float64Array[] {
+  if (kind === 'flow-lag') return flowLagColumns(depositTimes(rec), rec, scale)
+  return [arcLengthMm(rec.tS, rec).map((s) => Math.exp(-s / scale))]
 }
 
 /**
@@ -178,14 +193,9 @@ export function cornerColumns(
  * for the flow lag, the lobe's own shape exp(-s / lambda) for the bead drag (the dragged bead is
  * the disturbed one).
  */
-export function cornerDeficit(
-  tS: Float64Array,
-  motion: CommandedMotion,
-  kind: CornerModelKind,
-  scale: number,
-): Float64Array {
-  if (kind === 'flow-lag') return flowDeficit(tS, motion, scale)
-  return arcLengthMm(tS, motion).map((s) => Math.exp(-s / scale))
+export function cornerDeficit(rec: SampleTimes, kind: CornerModelKind, scale: number): Float64Array {
+  if (kind === 'flow-lag') return flowDeficit(depositTimes(rec), rec, scale)
+  return arcLengthMm(rec.tS, rec).map((s) => Math.exp(-s / scale))
 }
 
 /** The commanded speed at time t after the corner on the trapezoid ramp. */

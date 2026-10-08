@@ -58,6 +58,7 @@ function trace(tS: number[], lateralMm: number[], observed: number[], fitStartMi
     alongPxPerMm: 23.6,
     acrossImagePx: new Float64Array(tS.length),
     acrossAxisPxPerMm: 23.6,
+    lateralTowardRunUp: 1,
   }
 }
 

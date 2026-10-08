@@ -29,6 +29,15 @@ export type CheckState = 'passed' | 'failed' | 'not-assessed'
  */
 export type SpeedCheckState = 'confirmed' | 'changed' | 'not-confirmed' | 'not-assessed'
 
+/**
+ * The along-track lag correction of an axis (ringAnalyzer.poolCouponAxes): 'corrected' when its
+ * estimate is corrected for the other axis's ring shifting the nozzle along its lines,
+ * 'other-axis-not-measured' when the other axis has no accepted ring to correct with (refused, or
+ * not on the coupon), 'joint-fit-failed' when the joint fit of both axes could not be completed
+ * (it did not settle, left too few lines, or left no standard error).
+ */
+export type AlongTrackLagState = 'corrected' | 'other-axis-not-measured' | 'joint-fit-failed'
+
 /** One speed tier's part of the speed check. */
 export interface TierCheck {
   speedMmS: number
@@ -146,6 +155,9 @@ export interface IsAxisResult {
   /** The corner model the analysis chose and its scale (flow-lag time constant in seconds, or
    *  bead-drag length in millimetres); null when the axis had too few lines to fit. */
   cornerModel: { kind: CornerModelKind; scale: number } | null
+  /** The along-track lag correction of the estimate; null when this axis was refused before its
+   *  ring was fitted. */
+  alongTrackLag: AlongTrackLagState | null
   linesUsed: number
   linesTraced: number
   /** Index of the scan (0 or 1) the axis was measured from; null when neither qualified. */

@@ -35,8 +35,13 @@ import type { TracedLine } from '../../src/engine/is/lineTracer'
 //   commanded flow (the starved bead after the corner is rougher), by a factor 1 + k D(t) / max D
 //   with D = 1 - q / v the flow deficit of the same first-order lag; isolated impulse outliers (dust, hairs, voids) on a fraction of samples;
 //   the along-track time warp: the corner's velocity step also rings the axis along the line, so
-//   the nozzle reaches arc position s late by delta(t) = (c / w_a) e^(-zeta_a w_a t) sin(w_d t)
-//   and every time-domain mechanism is evaluated at the warped time.
+//   the nozzle lags its commanded arc position by delta(t), by default the free response from
+//   rest (c / w_a) e^(-zeta_a w_a t) sin(w_d t); the bead at arc position s is deposited at the
+//   time t that solves s_cmd(t) - delta(t) = s exactly (bisection on the profile actually run),
+//   and every time-domain mechanism is evaluated at that deposit time.
+// - Lateral sign: the mechanisms are displacements along the run-up's direction of travel into
+//   the corner; the tracer's lateral coordinate points that way (+1, the default) or against it
+//   (-1), and the noise and the pixel locking act in the tracer's coordinate.
 
 export const SIM_PX_PER_MM = 600 / 25.4
 
@@ -87,6 +92,12 @@ export interface SimArtifacts {
 export interface SimAlongTrack {
   frequencyHz: number
   dampingRatio: number
+  /** Lag of the nozzle behind its commanded arc position at the corner on the TOP rung, mm,
+   *  lower rungs scaling with their rung, as ampMm e^(-zeta w t) cos(w_d t + phaseRad). Absent
+   *  means the full free response to the velocity step, c_top / w_a, with phase -pi/2. A joint
+   *  X/Y case passes the other group's `ring` here: the same axis answers the same step. */
+  ampMm?: number
+  phaseRad?: number
 }
 
 export interface TraceSimOptions {
@@ -116,6 +127,9 @@ export interface TraceSimOptions {
   impulseOutliers?: { fraction: number; ampMm: number }
   /** The along-track mode whose ring warps the time at which the nozzle passes each position. */
   alongTrack?: SimAlongTrack
+  /** +1 (default) when the traced lateral coordinate points along the run-up's direction of
+   *  travel into the corner, -1 against it. */
+  lateralTowardRunUp?: 1 | -1
   /** Unreadable samples: this fraction of the samples, in runs of 1 to maxRun samples. */
   gaps?: { fraction: number; maxRun: number }
   /** Velocity profile the printer actually ran after the corner. */
@@ -166,20 +180,57 @@ function trapezoidTime(s: number, c: number, v: number, a: number): number {
   return tRamp + (s - sRamp) / v
 }
 
+/** Distance covered by time t after the corner on the trapezoid. */
+function trapezoidDistance(t: number, c: number, v: number, a: number): number {
+  const tRamp = (v - c) / a
+  if (t <= tRamp) return c * t + 0.5 * a * t * t
+  return c * tRamp + 0.5 * a * tRamp * tRamp + v * (t - tRamp)
+}
+
+/** Distance covered by time t after the corner on Marlin's quintic Bezier ramp of the
+ *  trapezoid's duration. */
+function sCurveDistance(t: number, c: number, v: number, a: number): number {
+  const T = (v - c) / a
+  if (t >= T) return 0.5 * (c + v) * T + v * (t - T)
+  const u = t / T
+  return c * t + (v - c) * T * (2.5 * u ** 4 - 3 * u ** 5 + u ** 6)
+}
+
 /** Time to cover distance s on Marlin's quintic Bezier ramp of the trapezoid's duration. */
 function sCurveTime(s: number, c: number, v: number, a: number): number {
   const T = (v - c) / a
   const sRamp = 0.5 * (c + v) * T
   if (s > sRamp) return T + (s - sRamp) / v
-  const covered = (t: number) => {
-    const u = t / T
-    return c * t + (v - c) * T * (2.5 * u ** 4 - 3 * u ** 5 + u ** 6)
-  }
   let lo = 0
   let hi = T
   for (let k = 0; k < 80; k++) {
     const mid = 0.5 * (lo + hi)
-    if (covered(mid) < s) lo = mid
+    if (sCurveDistance(mid, c, v, a) < s) lo = mid
+    else hi = mid
+  }
+  return 0.5 * (lo + hi)
+}
+
+/**
+ * The time at which the nozzle deposits arc position s when it lags its commanded position by
+ * lag(t): the root of distance(t) - lag(t) = s, by bisection between the times the commanded
+ * profile reaches s - |lag|max and s + |lag|max (the root lies between them for any lag bounded
+ * by lagMaxMm).
+ */
+function depositTime(
+  s: number,
+  distance: (t: number) => number,
+  time: (s: number) => number,
+  lag: (t: number) => number,
+  lagMaxMm: number,
+): number {
+  let lo = time(Math.max(0, s - lagMaxMm))
+  let hi = time(s + lagMaxMm)
+  const f = (t: number) => distance(t) - lag(t) - s
+  if (f(lo) > 0 || f(hi) < 0) throw new Error('The along-track lag does not bracket the deposit time')
+  for (let k = 0; k < 80; k++) {
+    const mid = 0.5 * (lo + hi)
+    if (f(mid) < 0) lo = mid
     else hi = mid
   }
   return 0.5 * (lo + hi)
@@ -349,6 +400,12 @@ export function simulateAxis(options: TraceSimOptions): SimLine[] {
     const lateral = new Float64Array(count)
     const acrossNominal = new Float64Array(count)
     const timeOf = options.rampProfile === 'sCurve' ? sCurveTime : trapezoidTime
+    const distanceAt = options.rampProfile === 'sCurve' ? sCurveDistance : trapezoidDistance
+    const along = options.alongTrack
+    const alongAmp = along ? (along.ampMm ?? cTop / (2 * Math.PI * along.frequencyHz)) * (c / cTop) : 0
+    const sign = options.lateralTowardRunUp ?? 1
+    const lag = (t: number) =>
+      along ? modeAt(t, along.frequencyHz, along.dampingRatio, alongAmp, along.phaseRad ?? -Math.PI / 2) : 0
     const ring = options.ring ?? null
     let f = ring ? (ring.frequencyByTierHz?.[tierIndex] ?? ring.frequencyHz) : 0
     if (ring?.frequencyGradientHzPerMm) f += ring.frequencyGradientHzPerMm * (offsetMm - meanOffset)
@@ -361,16 +418,11 @@ export function simulateAxis(options: TraceSimOptions): SimLine[] {
     for (let k = 0; k < count; k++) {
       const s = TRACE_START_MM + k * stepMm
       tTraced[k] = trapezoidTime(s, c, v, a)
-      const tCommanded = timeOf(s, c, v, a)
-      let t = tCommanded
-      if (options.alongTrack) {
-        // The nozzle reaches s late by delta / v: the along-line displacement of the corner's
-        // velocity step c on the along-track mode, to first order in delta.
-        const { frequencyHz: fa, dampingRatio: za } = options.alongTrack
-        const wa = 2 * Math.PI * fa
-        const delta = (c / wa) * Math.exp(-za * wa * tCommanded) * Math.sin(wa * Math.sqrt(1 - za * za) * tCommanded)
-        t = tCommanded + delta / trapezoidSpeed(tCommanded, c, v, a)
-      }
+      // The nozzle lags its commanded arc position by the along-track mode's response to the
+      // corner's velocity step, so the bead at s is deposited when the lagging nozzle reaches s.
+      const t = along
+        ? depositTime(s, (u) => distanceAt(u, c, v, a), (x) => timeOf(x, c, v, a), lag, Math.abs(alongAmp))
+        : timeOf(s, c, v, a)
       let y = 0
       if (ring) y += modeAt(t, f, ring.dampingRatio, ring.ampMm * (c / cTop), ring.phaseRad ?? 0)
       for (const mode of options.extraModes ?? []) {
@@ -405,6 +457,9 @@ export function simulateAxis(options: TraceSimOptions): SimLine[] {
         const level = (1 - fr) * jpeg[j0] + fr * jpeg[(j0 + 1) % art.jpegBlock.periodPx]
         y += art.jpegBlock.ampMm * level
       }
+      // The mechanisms above are displacements along the run-up's direction of travel; the
+      // tracer reads them in its own lateral coordinate.
+      y *= sign
       const tilt = art?.pixelLock ? Math.tan((art.pixelLock.tiltDeg * Math.PI) / 180) : 0
       acrossNominal[k] = lockOffset + xPx * tilt
       if (art?.pixelLock) {
@@ -459,6 +514,7 @@ export function simulateAxis(options: TraceSimOptions): SimLine[] {
       alongPxPerMm: pxPerMm,
       acrossImagePx: acrossNominal,
       acrossAxisPxPerMm: pxPerMm,
+      lateralTowardRunUp: sign,
     }
     return {
       trace,
