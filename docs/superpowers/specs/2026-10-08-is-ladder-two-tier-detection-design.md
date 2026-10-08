@@ -48,8 +48,8 @@ to 8.
   the default, with a warning above it but no hard limit; the fastest corners print last in every layer,
   so a skipped step cannot shift lines printed before it; the printer comes to a full stop between lines,
   so a corner never hits a motor still shaking from the previous one; and only the test corners run
-  above the profile's own corner limit, while travels, primes, wipes and the frame run at the profile's
-  own corner limit and acceleration like a normal print. A layer shift that happens anyway is reported
+  above the profile's own corner limit, while travels, line starts, wipes and the frame run at the
+  profile's own corner limit and acceleration like a normal print. A layer shift that happens anyway is reported
   in the results.
 
 ## 1. Coupon and motion design
@@ -58,8 +58,8 @@ to 8.
 
 The coupon (`web/src/engine/is/couponGeometry.ts`) is a frame band with three fiducial holes and a solid
 origin corner (the plate-flow convention), around an open window. Each axis has one group of lines. A
-line starts one inset inside the coupon's outer edge, primes on the move inside the band, runs into the
-window as its run-up at its corner speed, turns the 90 degree ringing corner, crosses the window as the
+line starts one inset inside the coupon's outer edge, un-retracts standing still and prints its first
+3 mm stretch as an ordinary bead inside the band (section 1.8), runs into the window as its run-up at its corner speed, turns the 90 degree ringing corner, crosses the window as the
 measured segment at its tier speed, and ends in the opposite band with a deceleration tail, a coast and
 a wipe. The Y group runs up in +Y and measures in +X; the X group runs in along -X and measures in -Y.
 Corners sit on anti-staggered diagonals so no leg crosses a measured segment of its own group. The two
@@ -171,20 +171,21 @@ limit never brakes the commanded corner.
   speed and acceleration per motor), so no CoreXY adjustment is needed (amendment I15 a, verified from
   source).
 
-Per line and per layer the generator emits: planner stop, travel, any stationary prime remainder,
-planner stop, the moving prime, the raise to the line's commanded corner feed (round(60 c) / 60, and on
-the pedestal min(c, first layer speed)), the run-up, the measured segment, the tail, the coast, planner
+Per line and per layer the generator emits: planner stop, travel, the stationary un-retract, planner
+stop, the first stretch, the raise to the line's commanded corner feed (round(60 c) / 60, and on the
+pedestal min(c, first layer speed)), the run-up, the measured segment, the tail, the coast, planner
 stop, the lower back to the profile's square corner velocity (plus the derived junction deviation on
-Marlin), and the wipe with its retract. The raise is emitted only once the prime is queued: the prime to
-run-up junction is colinear, so the raised value governs the ringing corner alone, and every move that
-starts from rest (travel, prime, wipe) starts under the profile's own limit as in a normal print.
+Marlin), and the wipe with its retract. The raise is emitted only once the first stretch is queued: its
+junction with the run-up is colinear, so the raised value governs the ringing corner alone, and every
+move that starts from rest (travel, first stretch, wipe) starts under the profile's own limit as in a
+normal print.
 
 The per-line scheme exists because of Marlin's classic-jerk planner (amendment M1): a block planned with
 an empty queue starts at safe_speed, the smaller of its nominal speed and the jerk, per axis (per motor
 on CoreXY), and after `G4 P0` the queue is always empty. A limit raised for the whole line phase would
-start every travel, prime and wipe at a top-rung kick. The stop between the stationary prime remainder
-and the moving prime exists because an E-only block followed by the prime would otherwise let Marlin's
-junction deviation start the prime at about 11 mm/s.
+start every travel, first stretch and wipe at a top-rung kick. The stop between the stationary
+un-retract and the first stretch exists because an E-only block followed by the first stretch would
+otherwise let Marlin's junction deviation start that stretch at about 11 mm/s.
 
 Changed from the plan: the redesign raised the limit once for the whole line phase (its motor-safety
 item d); amendment M1 replaced that with the per-line raise and lower.
@@ -234,18 +235,30 @@ Changed from the plan: the redesign estimated the Klipper cap at 83.7 mm/s for 1
 12 mm band and rounding to nearest; the code uses the widened band and rounds down. The amendment's
 "about 552 mm/s^2" Marlin floor is 553 after rounding up.
 
-### 1.8 Prime cross-section
+### 1.8 Line start: stationary un-retract
 
-The moving prime at each line start used to put 0.905 mm of filament over 3 mm, about 0.73 mm^2 of
-cross-section, above Klipper's default `max_extrude_cross_section` of 4 x nozzle^2 (0.64 mm^2 for a 0.4 mm
-nozzle), so stock Klipper aborted the print with "Move exceeds maximum extrusion" (a pre-existing bug,
-amendment I15 b). `primeOnTheMove` now lives in the shared emitter (`web/src/engine/gcode/emitter.ts`)
-and caps the moving prime's E at floor(4 d^2 L / A_filament) in 1e-5 mm steps; any surplus deretract
-becomes a stationary un-retract right before the move, so the total filament is unchanged (defaults:
-0.89406 becomes 0.09582 stationary plus 0.79824 moving, 0.640 mm^2). Capping was chosen over a longer
-prime because a longer prime only covers the default retraction (a 5 mm Bowden retraction would need a
-21 mm prime, more than the band). The pressure advance and flow coupons have no moving prime; a
-cross-flow test checks every forward XY extrusion of the IS, PA and EM defaults against the limit.
+Owner rule: no G-code is designed around a firmware limit the user can configure differently. Each line
+therefore starts the way every slicer un-retracts: after the retracted travel, a stationary un-retract of
+the full retraction (the shared emitter's `retract(e, p, -1)`, the profile's retract length at its
+retract speed, 0.8 mm at 35 mm/s by default), a planner stop (section 1.5), then the first 3 mm of the
+leg, the geometry's `prime` segment, as an ordinary bead at the line's own width (0.42 mm on the measured
+layer, the 0.3024 mm pedestal width below) at 30 mm/s, capped by the first layer speed on the pedestal.
+The coordinates, the planner stops, the per-line raise after this stretch and the filament each line
+start restores are the same as before (defaults: 0.8 mm plus the 0.09406 mm bead on the measured layer,
+0.8 mm plus 0.06473 mm on the pedestal). The un-retract's start blob lies inside the band, which the band
+raster printed after the lines irons flat (section 1.1).
+
+History: the line start used to be a moving prime that folded the 0.8 mm deretract into the 3 mm
+stretch, 0.905 mm of filament over 3 mm or about 0.73 mm^2 of cross-section, above Klipper's default
+`max_extrude_cross_section` of 4 x nozzle^2 (0.64 mm^2 for a 0.4 mm nozzle), so stock Klipper aborted the
+print with "Move exceeds maximum extrusion" (amendment I15 b). 7a9a2d9 capped the moving prime at exactly
+that default (0.639997 mm^2) and un-retracted the surplus standing still, but a review found the cap still
+fails for a Klipper user whose extrusion factor is above 100% (`M221` persists), whose configured limit is
+lower, or whose profile filament diameter is below printer.cfg's. The owner then removed the moving prime:
+`primeOnTheMove` and `maxExtrudeCrossSectionMm2` are gone from the shared emitter, and no generator
+computes anything from a firmware's default limit. Every forward extrusion of the input shaper, pressure
+advance and flow coupons is an ordinary bead of about 0.08 mm^2; the cross-flow test in `emitter.spec.ts`
+and the planner oracle (section 1.11) keep stock Klipper's 0.64 mm^2 check only as a sanity tripwire.
 
 ### 1.9 Bed fit and placement
 
@@ -282,8 +295,8 @@ code:
 
 The old single-tier default (8 lines at 150 mm/s, 4000 mm/s^2 floor) was 105.76 mm square. The pinned
 snapshot `web/tests/fixtures/is_default.gcode` has 20 lines per layer (2 tiers x 5 lines x 2 axes), 120
-planner stops and 80 per-line raise and lower lines over the two layers, `M220 S100`, and 40 stationary
-prime remainders.
+planner stops and 80 per-line raise and lower lines over the two layers, `M220 S100`, and 40 line-start
+un-retracts of the full 0.8 mm retraction.
 
 Changed from the plan: the redesign expected 118.81 mm by default and a 21 mm read length on a 120 mm bed
 with the front placement; the interleave (section 1.2) gives 114.806 mm and 25 mm. Amendment I6 estimated
@@ -307,7 +320,7 @@ deviation, Marlin classic jerk and RRF, each on Cartesian and CoreXY kinematics,
 placement, with and without contrast base: 32 cases, all passing, about 1.3 s. A 90% speed factor is
 left set before each replay. Each case asserts:
 
-- no move exceeds Klipper's default extrusion cross-section;
+- no move exceeds Klipper's default extrusion cross-section (a sanity tripwire, section 1.8);
 - every ladder corner passes at its own commanded rung with no braking, with a motor step equal to the
   rung on Cartesian and twice the rung on CoreXY (the reversing motor);
 - the corner kicks never fall within a layer (fastest corners last);
@@ -315,7 +328,7 @@ left set before each replay. Each case asserts:
   junction touching those moves has a zero Cartesian velocity step;
 - every move from rest starts at or below the profile's limit (0.05 mm/s, or the 5 mm/s jerk per motor
   on classic-jerk Marlin);
-- each line's travel, moving prime and wipe begin a new planner segment (the planner came to rest);
+- each line's travel, first stretch and wipe begin a new planner segment (the planner came to rest);
 - after every corner the nozzle covers the measured move on the analysis time base, `timeAtDistance`,
   within 1e-6 s (on Marlin also with an S-curve ramp, from the end of the ramp on).
 
@@ -706,9 +719,10 @@ Marlin S-curve ramp with the ramp-end window reads 74.971 Hz (74.407 Hz without 
 
 32 of 32 planner cases pass (section 1.11). The G-code snapshot `is_default.gcode` was not changed by
 stage 2. `web/tests/engine/is/gcodeGenerator.spec.ts` checks, among others, that the speed factor reset
-and the profile corner limit come before any extrusion, that each line raises the limit after its prime
-and lowers it before its wipe, that the planner comes to rest three times per line, that the lines print
-rung by rung, that the moving prime is capped at Klipper's cross-section limit, that the coupon stays on
+and the profile corner limit come before any extrusion, that each line raises the limit after its first
+stretch and lowers it before its wipe, that the planner comes to rest three times per line, that the lines
+print rung by rung, that each line un-retracts the full retraction standing still and then prints its
+first stretch as an ordinary bead, that the coupon stays on
 the bed and inside its footprint, and the one-tier fallbacks with their notes.
 
 ### 3.4 CI
@@ -726,6 +740,9 @@ runners are estimated at 10 to 14 minutes and not yet measured.
 - **Zigzag replaced by the motor-safe ladder**: rung-major order, per-line corner limits, planner stops
   between lines, and the profile's own corner limit everywhere except the test corners.
 - **Acceleration floor removed.** The test runs at the profile's print acceleration.
+- **No G-code designed around a configurable firmware limit.** The moving prime capped at Klipper's
+  default `max_extrude_cross_section` is removed; each line un-retracts standing still and prints its
+  first stretch as an ordinary bead (section 1.8).
 - **`M220 S100` in the input shaper coupon only.** The pressure advance and flow coupons are exempt: their
   measurands do not depend on the absolute speed (`2026-07-15-cross-flow-exemptions.md`, section 6).
 - **An axis is refused when the two-speed check is "not confirmed".** A shaper recommendation must not

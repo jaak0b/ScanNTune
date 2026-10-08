@@ -121,8 +121,8 @@ function measuredChunk(lines: string[]): string[] {
 /**
  * Phase markers of one coupon layer: the perimeter loops start at the layer's first bare
  * deretract, the test lines at the first stationary retract after it, and the band raster at
- * the first bare deretract after the last wipe-on-retract (the lines' moving primes may carry
- * a stationary deretract remainder of their own, so the raster is found past the lines).
+ * the first bare deretract after the last wipe-on-retract (every test line starts with a bare
+ * deretract of its own, so the raster is found past the lines).
  */
 function phaseMarkers(chunk: string[]): { perimeterStart: number; linesStart: number; rasterStart: number } {
   const perimeterStart = chunk.findIndex((l) => /^G1 E[\d.]/.test(l))
@@ -270,7 +270,7 @@ describe('generateIsGcodeWithReport (Klipper)', () => {
     expect(cornerFeeds.slice(-4)).toEqual([6000, 6000, 6000, 6000])
   })
 
-  it("raises the corner limit to each line's own corner speed after its prime, and lowers it before the wipe", () => {
+  it("raises the corner limit to each line's own corner speed after its first stretch, and lowers it before the wipe", () => {
     // Raise values: the rung feeds F1200, F1794, F2683, F4012, F6000 as mm/s, rounded up to
     // 3 decimals (hand-derived); lower value: the profile's 5 mm/s.
     const raise = ['20', '29.9', '44.717', '66.867', '100']
@@ -288,13 +288,12 @@ describe('generateIsGcodeWithReport (Klipper)', () => {
     }
   })
 
-  it('brings the planner to rest three times per line: before the travel, the moving prime and the wipe', () => {
+  it('brings the planner to rest three times per line: before the travel, the first stretch and the wipe', () => {
     const chunk = measuredChunk(lines)
     expect(chunk.filter((l) => l === 'G4 P0')).toHaveLength(60)
     for (const line of allLines) {
       const idx = chunk.indexOf(cornerMoveStr(line))
-      // Backwards from the corner: raise, moving prime, stop, stationary remainder, travel,
-      // stop.
+      // Backwards from the corner: raise, first stretch, stop, un-retract, travel, stop.
       expect(chunk[idx - 3]).toBe('G4 P0')
       expect(chunk[idx - 5]).toMatch(/^G0 X/)
       expect(chunk[idx - 6]).toBe('G4 P0')
@@ -316,21 +315,22 @@ describe('generateIsGcodeWithReport (Klipper)', () => {
     }
   })
 
-  it("primes on the move at the leg start, capped at Klipper's extrusion cross-section limit", () => {
-    // The 3 mm prime carries the 0.8 mm deretract plus its own bead, 0.89406 mm of filament;
-    // Klipper's default max_extrude_cross_section (4 x 0.4^2 = 0.64 mm^2) allows 0.79824 mm
-    // over 3 mm, so the remaining 0.09582 mm is un-retracted standing still right before.
-    const chunk = measuredChunk(lines)
-    for (const line of allLines) {
-      const idx = chunk.indexOf(cornerMoveStr(line))
-      // Backwards from the corner: the corner-limit raise, the moving prime, the planner
-      // stop, the stationary remainder, the retracted travel.
-      expect(chunk[idx - 2], `prime of the ${line.speedMmS} mm/s line`).toMatch(
-        /^G1 X.* E0\.79824 F1800$/,
+  it('un-retracts the full retraction standing still at each line start, then prints an ordinary bead', () => {
+    // Hand-derived: the profile's 0.8 mm retraction at its 35 mm/s retract speed (F2100), then
+    // the 3 mm first stretch carrying only its own bead at 30 mm/s (F1800): 3 x 0.03135430 =
+    // 0.09406 mm for the 0.42 x 0.2 mm measured bead, 3 x 0.02157600 = 0.06473 mm for the
+    // 0.3024 x 0.2 mm pedestal bead (the rounded bead cross-section over the 1.75 mm filament).
+    const [pedestal, measured] = layerChunks(lines)
+    const firstStretchEnds = allLines.map(
+      (l) => `G1 X${(ox + l.prime.x1).toFixed(3)} Y${(oy + l.prime.y1).toFixed(3)} E`,
+    )
+    // Each first stretch with the two lines before it: the un-retract and the planner stop.
+    const lineStarts = (chunk: string[]) =>
+      chunk.flatMap((l, i) =>
+        firstStretchEnds.some((p) => l.startsWith(p)) ? [[chunk[i - 2], chunk[i - 1], l.split(' E')[1]]] : [],
       )
-      expect(chunk[idx - 4]).toBe('G1 E0.09582 F2100')
-      expect(chunk[idx - 5]).toMatch(/^G0 X/)
-    }
+    expect(lineStarts(pedestal)).toEqual(Array(20).fill(['G1 E0.800 F2100', 'G4 P0', '0.06473 F1800']))
+    expect(lineStarts(measured)).toEqual(Array(20).fill(['G1 E0.800 F2100', 'G4 P0', '0.09406 F1800']))
   })
 
   it('runs each measured segment at its tier feedrate with full flow across the whole protected span', () => {
@@ -972,12 +972,12 @@ describe('first layer speed', () => {
     expect(feedsOf(chunks[chunks.length - 1]).some((f) => f > firstLayerFeed)).toBe(true)
   })
 
-  it('caps the moving prime of every pedestal line at the first layer speed', () => {
-    // A 20 mm/s first layer speed caps the 30 mm/s prime to F1200 on the pedestal layer;
-    // the measured layer keeps the F1800 prime. Hand-derived feeds.
+  it('caps the first stretch of every pedestal line at the first layer speed', () => {
+    // A 20 mm/s first layer speed caps the 30 mm/s first stretch to F1200 on the pedestal
+    // layer; the measured layer keeps F1800. Hand-derived feeds.
     const slowFirst: PrinterProfile = { ...profile, firstLayerSpeedMmS: 20 }
     const chunks = layerChunks(generateIsGcodeWithReport(slowFirst, filament, spec).gcode.split('\n'))
-    // A prime ends where the line's prime stretch ends; its feed is the last field.
+    // A first stretch ends where the line's prime segment ends; its feed is the last field.
     const primeEnds = allLines.map(
       (l) => `G1 X${(ox + l.prime.x1).toFixed(3)} Y${(oy + l.prime.y1).toFixed(3)} E`,
     )
@@ -987,7 +987,7 @@ describe('first layer speed', () => {
         .map((l) => Number(l.match(/ F(\d+)$/)![1]))
     const pedestalPrimes = primeFeeds(chunks[0])
     const measuredPrimes = primeFeeds(chunks[chunks.length - 1])
-    // One moving prime per test line on each layer: ten lines per axis, both axes.
+    // One first stretch per test line on each layer: ten lines per axis, both axes.
     expect(pedestalPrimes).toEqual(Array(20).fill(1200))
     expect(measuredPrimes).toEqual(Array(20).fill(1800))
   })

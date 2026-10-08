@@ -6,8 +6,8 @@ export interface Emitter {
   lines: string[]
   x: number
   y: number
-  /** True while the filament is retracted. Every retract, un-retract, and priming move
-   *  updates it, so a travel knows whether it still has to retract. */
+  /** True while the filament is retracted. Every move that retracts or un-retracts updates
+   *  it, so a travel knows whether it still has to retract. */
   retracted: boolean
   /**
    * The regions of the layer being printed where no material lies under the nozzle path:
@@ -268,65 +268,6 @@ export function extrude(
 export function retract(e: Emitter, p: PrinterProfile, sign: 1 | -1): void {
   e.lines.push(`G1 E${(sign * -p.retractMm).toFixed(3)} F${Math.round(p.retractSpeedMmS * 60)}`)
   e.retracted = sign === 1
-}
-
-/**
- * Klipper's default max_extrude_cross_section is 4 * nozzle_diameter^2 (klippy/kinematics/
- * extruder.py, def_max_cross_section). A move whose filament per mm of path, times the
- * filament cross-section, exceeds it is refused with "Move exceeds maximum extrusion", which
- * aborts the print. Marlin and RepRapFirmware have no such check, so staying under Klipper's
- * default keeps a coupon printable on all three.
- */
-export const KLIPPER_MAX_EXTRUDE_CROSS_SECTION_NOZZLE_FACTOR = 4
-
-/** Klipper's default max_extrude_cross_section for the profile's nozzle, mm^2. */
-export function maxExtrudeCrossSectionMm2(p: PrinterProfile): number {
-  return KLIPPER_MAX_EXTRUDE_CROSS_SECTION_NOZZLE_FACTOR * p.nozzleDiameterMm * p.nozzleDiameterMm
-}
-
-/** The filament cross-section, mm^2: the area E is measured in. */
-function filamentAreaMm2(f: FilamentProfile): number {
-  return f.filamentDiameterMm * f.filamentDiameterMm * 0.25 * Math.PI
-}
-
-/**
- * Prime on the move to (x, y): the deretract is spread over a slow printing move together
- * with the move's own bead, instead of a stationary un-retract, which piles a blob at the line
- * start. The move's filament is capped at Klipper's default max_extrude_cross_section times
- * the path length (see maxExtrudeCrossSectionMm2), so the moving prime is never refused; any
- * deretract beyond the cap is restored by a stationary un-retract right before the move. The
- * two together restore exactly the filament the single move would have carried. `beforeMove`
- * lines (a planner stop, for example) are emitted right before the moving prime, after any
- * stationary remainder.
- */
-export function primeOnTheMove(
-  e: Emitter,
-  p: PrinterProfile,
-  f: FilamentProfile,
-  lineWidthMm: number,
-  x: number,
-  y: number,
-  speedMmS: number,
-  beforeMove: readonly string[] = [],
-): void {
-  // The bead's E over the printed segment plus the deretract, quantized once.
-  const len = printedSegmentLengthMm(e.x, e.y, x, y)
-  const total = quantizeE(p.retractMm + beadExtrusionMm(p, f, len, lineWidthMm))
-  // The cap in whole 1e-5 mm E steps, rounded down so the printed E stays under it.
-  const capSteps = Math.floor((maxExtrudeCrossSectionMm2(p) * len) / filamentAreaMm2(f) * 100000)
-  const totalSteps = Math.round(total * 100000)
-  const movingSteps = Math.min(totalSteps, capSteps)
-  if (totalSteps > movingSteps) {
-    const stationary = (totalSteps - movingSteps) / 100000
-    e.lines.push(`G1 E${stationary.toFixed(5)} F${Math.round(p.retractSpeedMmS * 60)}`)
-  }
-  e.lines.push(...beforeMove)
-  e.lines.push(
-    `G1 X${x.toFixed(3)} Y${y.toFixed(3)} E${(movingSteps / 100000).toFixed(5)} F${Math.round(speedMmS * 60)}`,
-  )
-  e.x = x
-  e.y = y
-  e.retracted = false
 }
 
 /**

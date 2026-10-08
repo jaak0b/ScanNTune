@@ -179,8 +179,8 @@ describe('the input shaper coupon on each firmware planner', () => {
     }
 
     // The raised corner limit covers exactly each line's run-up, measured segment, tail and
-    // coast; everything else (preamble, base, band, travels, primes, wipes) is queued under the
-    // profile's own limit.
+    // coast; everything else (preamble, base, band, travels, un-retracts, first stretches,
+    // wipes) is queued under the profile's own limit.
     const raised = new Set(r.moves.filter((m) => Math.abs(m.cornerLimit - PROFILE_LIMIT[planner]) > 1e-9))
     expect(raised.size).toBe(4 * 2 * linesPerLayer)
     // Inside the line phase only the ladder corners kick: every other junction there is
@@ -197,7 +197,7 @@ describe('the input shaper coupon on each firmware planner', () => {
     const startLimit = planner === 'marlinClassic' ? 5 : 0.05
     for (const s of r.starts) expect(s.motorSpeedMmS).toBeLessThanOrEqual(startLimit + 1e-9)
 
-    // Isolated kicks: the travel to each line, its moving prime and its wipe each begin a
+    // Isolated kicks: the travel to each line, its first stretch and its wipe each begin a
     // planner segment (the planner came to rest before them), so no corner kick follows a
     // travel or wipe junction and none lands on a rotor still ringing from the last line.
     const segmentStarts = new Set(r.starts.map((s) => s.move))

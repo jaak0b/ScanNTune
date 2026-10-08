@@ -5,10 +5,8 @@ import {
   beadVolumetricFlowMm3S,
   extrude,
   highFlowWarning,
-  maxExtrudeCrossSectionMm2,
   newEmitter,
   perimeterBandMm,
-  primeOnTheMove,
   perimeterLoopInsetsMm,
   quantizeE,
   rasterBase,
@@ -340,34 +338,10 @@ describe('beadVolumetricFlowMm3S and highFlowWarning', () => {
   })
 })
 
-describe('primeOnTheMove', () => {
-  it("names Klipper's default max_extrude_cross_section, 4 x nozzle^2", () => {
-    expect(maxExtrudeCrossSectionMm2(profile)).toBeCloseTo(0.64, 12)
-    expect(maxExtrudeCrossSectionMm2({ ...profile, nozzleDiameterMm: 0.6 })).toBeCloseTo(1.44, 12)
-  })
-
-  it('caps the moving prime at the cross-section limit and restores the rest standing still', () => {
-    // A 3 mm prime of a 0.42 x 0.2 mm bead with the default 0.8 mm deretract carries
-    // 0.8 + 3 x 0.03135430 = 0.89406 mm of filament, 0.715 mm^2 over 3 mm. The cap is
-    // 0.64 x 3 / 2.40528 = 0.79824 mm (rounded down), so 0.09582 mm is un-retracted first.
-    const e = newEmitter()
-    e.retracted = true
-    primeOnTheMove(e, profile, filament, 0.42, 3, 0, 30)
-    expect(e.lines).toEqual(['G1 E0.09582 F2100', 'G1 X3.000 Y0.000 E0.79824 F1800'])
-    expect(e.retracted).toBe(false)
-  })
-
-  it('keeps a prime under the limit as one moving move', () => {
-    // A 0.2 mm deretract: 0.2 + 0.09406 = 0.29406 mm over 3 mm, 0.236 mm^2.
-    const e = newEmitter()
-    primeOnTheMove(e, { ...profile, retractMm: 0.2 }, filament, 0.42, 3, 0, 30)
-    expect(e.lines).toEqual(['G1 X3.000 Y0.000 E0.29406 F1800'])
-  })
-})
-
 describe('extrusion cross-section of every coupon', () => {
   /** The largest filament cross-section (E per mm of path times the filament area) of any
-   *  forward-extruding XY move in the G-code, the quantity Klipper's check compares. */
+   *  forward-extruding XY move in the G-code, the quantity Klipper's extruder check compares
+   *  against its max_extrude_cross_section. */
   function maxCrossSectionMm2(gcode: string): number {
     const area = filament.filamentDiameterMm ** 2 * 0.25 * Math.PI
     let x = 0
@@ -388,7 +362,10 @@ describe('extrusion cross-section of every coupon', () => {
     return worst
   }
 
-  it('stays at or below 0.64 mm^2 on the input shaper, pressure advance and flow coupons', () => {
+  // A sanity tripwire, not a design target: every coupon move is an ordinary bead (about
+  // 0.08 mm^2 here), and the coupons un-retract standing still instead of folding filament
+  // into a move. A move above stock Klipper's 4 x 0.4^2 = 0.64 mm^2 would abort the print there.
+  it('keeps every forward extrusion of the input shaper, pressure advance and flow coupons at or below 0.64 mm^2', () => {
     const is = defaultIsTestRequest(profile)
     const gcodes = [
       generateIsGcodeWithReport(profile, filament, is).gcode,

@@ -28,7 +28,6 @@ import {
   NOMINAL_WIDTH_FACTOR,
   PEDESTAL_LAYERS,
   PEDESTAL_WIDTH_FACTOR,
-  primeOnTheMove,
   retract,
   travel,
 } from '../gcode/emitter'
@@ -122,7 +121,8 @@ export function generateIsGcodeWithReport(
   return { gcode: emitIsGcode(substituted, substitutedFilament, fitted), unknownVariables, warnings }
 }
 
-/** Feedrate of the moving prime at each line start. */
+/** Feedrate of each line's first stretch (its geometry's `prime`), printed as an ordinary bead
+ *  right after the line's stationary un-retract. */
 const PRIME_SPEED_MM_S = 30
 /** Coast length as a multiple of the nozzle diameter (standard slicer coasting default). */
 const COAST_NOZZLE_FACTOR = 1.5
@@ -254,9 +254,9 @@ function emitIsGcode(profile: PrinterProfile, filament: FilamentProfile, spec: I
     // first so the nozzle primes over sacrificial geometry instead of a test line's
     // first millimetres, and so the lines weld their tips into already-standing walls.
     // The raster comes last: it irons the through-band leg stretches (travel arrival,
-    // moving prime, start blob), the weld tips, and any residual stop blobs flat, so the
-    // scanned face stays flush. Pedestal width below, nominal width on the measured
-    // layers.
+    // un-retract start blob, first stretch), the weld tips, and any residual stop blobs
+    // flat, so the scanned face stays flush. Pedestal width below, nominal width on the
+    // measured layers.
     const pedestal = layer < PEDESTAL_LAYERS
     const width = pedestal ? PEDESTAL_WIDTH_FACTOR * nominal : nominal
     const firstLayerSpeed = firstLayerSpeedCap(profile, spec.contrastBase, layer)
@@ -264,8 +264,9 @@ function emitIsGcode(profile: PrinterProfile, filament: FilamentProfile, spec: I
     // window box is the hole that turns the outline loops into a band frame.
     basePerimeters(e, profile, filament, nominal, ox, oy, g.couponWidthMm, g.couponHeightMm,
       [windowBed], extrude, firstLayerSpeed)
-    // The test lines travel retracted and restore pressure with their moving primes, which
-    // the pedestal layer caps at its first layer speed like every other bead on it.
+    // The test lines travel retracted and restore pressure with a stationary un-retract at
+    // each line start. Each line's first stretch then prints at the prime speed, which the
+    // pedestal layer caps at its first layer speed like every other bead on it.
     retract(e, profile, 1)
     const primeSpeed = pedestal
       ? Math.min(PRIME_SPEED_MM_S, profile.firstLayerSpeedMmS)
@@ -303,16 +304,22 @@ function emitIsGcode(profile: PrinterProfile, filament: FilamentProfile, spec: I
       // The corner speed exactly as the run-up feed prints it, which the line's raised
       // corner limit must pass.
       const cornerFeedMmS = Math.round(runUpSpeed * 60) / 60
-      // Isolated kicks: the planner comes to rest before the travel and before the moving
-      // prime, so every move from rest starts under the profile's own corner limit, like
-      // the first move of any print, and no corner kick lands on a still-ringing rotor.
+      // Isolated kicks: the planner comes to rest before the travel and before the line's
+      // first bead, so every move from rest starts under the profile's own corner limit,
+      // like the first move of any print, and no corner kick lands on a still-ringing rotor.
+      // The stop after the stationary un-retract also keeps that E-only move from sharing a
+      // junction with the first bead, which on Marlin's junction deviation would start the
+      // bead at about 11 mm/s.
       L.push(PLANNER_STOP)
       travel(e, profile, ox + line.prime.x0, oy + line.prime.y0)
-      primeOnTheMove(e, profile, filament, width, ox + line.prime.x1, oy + line.prime.y1,
-        primeSpeed, [PLANNER_STOP])
-      // Raise the corner limit to this line's own corner speed only now that the prime is
-      // queued: the prime-to-run-up junction is colinear, so the raised value governs the
-      // ringing corner alone (see junctionLimitCommands for the per-firmware semantics).
+      retract(e, profile, -1)
+      L.push(PLANNER_STOP)
+      // The first stretch is an ordinary bead at the line's own width, printed slowly.
+      extrude(e, profile, filament, width, ox + line.prime.x1, oy + line.prime.y1, primeSpeed)
+      // Raise the corner limit to this line's own corner speed only now that the first
+      // stretch is queued: its junction with the run-up is colinear, so the raised value
+      // governs the ringing corner alone (see junctionLimitCommands for the per-firmware
+      // semantics).
       L.push(...junctionLimitCommands(profile, cornerFeedMmS, spec.accelMmS2))
       // Full-flow run-up straight into the corner at the corner speed: under that limit a
       // 90 degree corner entered at that velocity is taken without deceleration, so the
