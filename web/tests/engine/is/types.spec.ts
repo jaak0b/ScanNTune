@@ -89,14 +89,20 @@ describe('validateIsSpec', () => {
     // A slower derived tier is legal: its own ladder tops out at its speed.
     expect(() => validateIsSpec({ ...request, speedsMmS: [99, 150] })).not.toThrow()
   })
-  it('throws when the slower tier falls below the 20 mm/s bottom rung', () => {
-    expect(() => validateIsSpec({ ...request, cornerSpeedMmS: 20, speedsMmS: [19, 28] })).toThrow(
-      'Raise the line speed to at least 29 mm/s, or use one speed tier. Every speed tier ' +
-        'must be at least 20 mm/s, the bottom rung of its corner-speed ladder.',
-    )
+  it('accepts a slower tier below the 20 mm/s bottom rung, which the printer fit drops', () => {
+    // The tiers of a 28 mm/s line speed: 28 / 1.407282 = 19.90 -> 19 mm/s.
     expect(() =>
-      validateIsSpec({ ...request, cornerSpeedMmS: 20, speedsMmS: [20, 29] }),
+      validateIsSpec({ ...request, cornerSpeedMmS: 20, speedsMmS: [19, 28] }),
     ).not.toThrow()
+  })
+  it('still refuses a line speed below 20 mm/s', () => {
+    // The line speed is held to the corner speed, and the corner speed to the 20 mm/s floor.
+    expect(() => validateIsSpec({ ...request, cornerSpeedMmS: 20, speedsMmS: [19] })).toThrow(
+      'The line speed must be at least the 20 mm/s corner speed.',
+    )
+    expect(() => validateIsSpec({ ...request, cornerSpeedMmS: 19, speedsMmS: [19] })).toThrow(
+      'The corner speed must be at least 20 mm/s',
+    )
   })
   it('throws on lines per speed outside 3 to 15, and accepts the derived (null) count', () => {
     expect(() => validateIsSpec({ ...request, linesPerSpeed: 2 })).toThrow(/Lines per speed/)
@@ -165,11 +171,54 @@ describe('derived lines per speed (bead followability on the slower tier)', () =
     // lines.
     const four = fitted({ ...request, linesPerSpeed: 4 })
     expect(bandTopWarning(four, profile)).toBe(
-      'Raise the line speed or the print acceleration, or use more lines per speed, to read ' +
-        'a resonance near 150 Hz. Only 2 of the 106 mm/s lines leave a bead that can follow ' +
-        'ringing that fast, and the analysis needs 3.',
+      'Raise the line speed or the print acceleration to read a resonance near 150 Hz. Only ' +
+        '2 of the 106 mm/s lines leave a bead that can follow ringing that fast, and the ' +
+        'analysis needs 3.',
     )
     expect(bandTopWarning(fitted(request), profile)).toBeNull()
+  })
+})
+
+describe('fitSpecToPrinter speed tiers', () => {
+  const SLOW_TIER_NOTE =
+    'The 19 mm/s speed tier was removed because it is slower than the 20 mm/s lowest corner ' +
+    'speed. With one tier, the analysis cannot tell print and scan patterns apart from ' +
+    'ringing. Raise the line speed to at least 29 mm/s to keep both tiers.'
+
+  it('drops the slower tier of a 28 mm/s line speed, below the 20 mm/s bottom rung, and says so', () => {
+    // 28 / 1.407282 = 19.90 -> 19 mm/s; the smallest line speed with a 20 mm/s slower tier
+    // is ceil(20 * 1.407282) = ceil(28.15) = 29 mm/s.
+    const { spec, notes } = fitSpecToPrinter(
+      { ...request, cornerSpeedMmS: 20, speedsMmS: [19, 28] },
+      profile,
+    )
+    expect(spec.speedsMmS).toEqual([28])
+    expect(notes).toEqual([SLOW_TIER_NOTE])
+  })
+  it('keeps both tiers of a 29 mm/s line speed, whose slower tier is the 20 mm/s bottom rung', () => {
+    const { spec, notes } = fitSpecToPrinter(
+      { ...request, cornerSpeedMmS: 20, speedsMmS: [20, 29] },
+      profile,
+    )
+    expect(spec.speedsMmS).toEqual([20, 29])
+    expect(notes).toEqual([])
+  })
+  it('prints the same coupon as a one-tier request at the line speed', () => {
+    // The line count is derived from the tier that remains: at a 25 mm/s corner speed the
+    // 28 mm/s tier alone derives a different count than the 19 / 28 mm/s pair would.
+    const dropped = fitted({ ...request, cornerSpeedMmS: 25, speedsMmS: [19, 28] })
+    const oneTier = fitted({ ...request, cornerSpeedMmS: 25, speedsMmS: [28] })
+    expect(dropped).toEqual(oneTier)
+  })
+  it('drops the tier once, before the bed fit, when the bed is small as well', () => {
+    const smallBed = { ...profile, bedWidthMm: 70, bedDepthMm: 70 }
+    const { spec, notes } = fitSpecToPrinter(
+      { ...request, cornerSpeedMmS: 25, speedsMmS: [19, 28] },
+      smallBed,
+    )
+    expect(spec.speedsMmS).toEqual([28])
+    expect(notes[0]).toBe(SLOW_TIER_NOTE)
+    expect(notes.filter((n) => n.includes('speed tier was removed'))).toHaveLength(1)
   })
 })
 

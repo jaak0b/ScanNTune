@@ -74,9 +74,6 @@ const {
     // that are safe for their machine rather than silently inheriting a computed default.
     lineSpeedMmS: null,
     cornerSpeedMmS: null,
-    // Empty means the defaults: two speed tiers and the derived lines per speed.
-    speedTiers: null,
-    linesPerSpeedOverride: null,
     measuredLineMm: specDefaults.value.measuredLineMm,
     linePitchMm: specDefaults.value.linePitchMm,
     scanPlace: 'part' as ScanPlace,
@@ -93,24 +90,11 @@ const {
 const {
   lineSpeedMmS: tierSpeed,
   cornerSpeedMmS: cornerSpeed,
-  speedTiers,
-  linesPerSpeedOverride,
   measuredLineMm: measuredLine,
   linePitchMm: linePitch,
   scanPlace,
   partColors,
 } = settingsForm
-// The stored tier count is null until chosen; null is the default of two tiers.
-const SPEED_TIER_ITEMS = [
-  { title: 'Two', value: 2 },
-  { title: 'One', value: 1 },
-]
-const speedTierChoice = computed({
-  get: () => speedTiers.value ?? 2,
-  set: (v: number) => {
-    speedTiers.value = v
-  },
-})
 const scanPlaceItems = SCAN_PLACE_ITEMS
 const partColorsItems = PART_COLORS_ITEMS
 const scanPlanTexts: ScanPlanTexts = {
@@ -139,11 +123,12 @@ const speedsMissing = computed(() => tierSpeed.value === null || cornerSpeed.val
 
 const spec = computed<IsTestRequest | null>(() => {
   if (tierSpeed.value === null || cornerSpeed.value === null) return null
+  // Always two tiers and the derived line count; fitSpecToPrinter drops the slower tier when
+  // the line speed or the bed is too small for it, with a note.
   return {
     ...specDefaults.value,
-    speedsMmS: speedTierChoice.value === 1 ? [tierSpeed.value] : speedTiersFor(tierSpeed.value),
+    speedsMmS: speedTiersFor(tierSpeed.value),
     cornerSpeedMmS: cornerSpeed.value,
-    linesPerSpeed: linesPerSpeedOverride.value,
     measuredLineMm: measuredLine.value ?? specDefaults.value.measuredLineMm,
     linePitchMm: linePitch.value ?? specDefaults.value.linePitchMm,
     axes: ['x', 'y'] as IsAxis[],
@@ -175,19 +160,6 @@ const tiersText = computed(() =>
 const linesText = computed(() =>
   fittedSpec.value ? `${fittedSpec.value.linesPerSpeed} lines per speed` : '',
 )
-// The count an empty lines-per-speed field prints with, shown as the field's placeholder.
-const derivedLinesText = computed(() => {
-  const s = spec.value
-  // A request that fails validation or the fit shows that error instead (fitError).
-  if (!s || !fittedSpec.value) return ''
-  try {
-    const derived = fitSpecToPrinter({ ...s, linesPerSpeed: null }, store.selected ?? defaultPrinterProfile())
-    return String(derived.spec.linesPerSpeed)
-  } catch (e) {
-    console.error('Deriving the lines per speed failed for a request that fits', e)
-    return ''
-  }
-})
 // The fastest corner proven clean on a tested printer; above it the page warns.
 const fastCornerWarning = computed(() =>
   cornerSpeed.value !== null && cornerSpeed.value > DEFAULT_CORNER_SPEED_MM_S,
@@ -554,7 +526,7 @@ async function analyze(): Promise<void> {
         <v-expansion-panels flat class="advanced-panels mt-1">
           <v-expansion-panel data-testid="is-advanced-panel">
             <v-expansion-panel-title class="adv-title">
-              Advanced: line pitch, read length, lines per speed, speed tiers
+              Advanced: line pitch, read length
             </v-expansion-panel-title>
             <v-expansion-panel-text>
               <div class="fields">
@@ -572,25 +544,6 @@ async function analyze(): Promise<void> {
                   :step="5"
                   :min="20"
                   hint="Cover at least five wavelengths of the lowest resonance of interest."
-                />
-                <NumericField
-                  v-model="linesPerSpeedOverride"
-                  label="Lines per speed"
-                  :step="1"
-                  :min="3"
-                  :placeholder="derivedLinesText"
-                  persistent-placeholder
-                  hint="Leave empty to use the derived count. More lines tolerate damaged or unreadable lines in the scan."
-                  testid="is-lines-per-speed"
-                />
-                <v-select
-                  v-model="speedTierChoice"
-                  :items="SPEED_TIER_ITEMS"
-                  label="Speed tiers"
-                  density="comfortable"
-                  hint="With two tiers, real ringing keeps its frequency at both speeds while print and scan patterns change with the speed. The second speed is derived from the line speed."
-                  persistent-hint
-                  data-testid="is-speed-tiers"
                 />
               </div>
             </v-expansion-panel-text>

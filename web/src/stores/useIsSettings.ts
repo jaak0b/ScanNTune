@@ -4,22 +4,16 @@ import { createFlowSettingsStore, SCAN_PLAN_FIELDS, type FieldKinds, type ScanPl
 export type IsSettings = ScanPlanSettings & {
   lineSpeedMmS: number | null
   cornerSpeedMmS: number | null
-  /** Speed tiers: 1 or 2; null means the default, two tiers. */
-  speedTiers: number | null
-  /** An explicit lines per speed; null means the derived count. */
-  linesPerSpeedOverride: number | null
   measuredLineMm: number | null
   linePitchMm: number | null
 }
 
+// Retired fields are no longer declared, so their stored keys drop when an older entry loads:
+// the speed tier count, the lines per speed override, and the lines per speed of the earlier
+// one-tier coupon. The tiers and the line count are always derived now (fitSpecToPrinter).
 const FIELDS: FieldKinds<IsSettings> = {
   lineSpeedMmS: { kind: 'nullableNumber' },
   cornerSpeedMmS: { kind: 'nullableNumber' },
-  // Both added after entries were stored. An older entry's lines per speed was chosen for a
-  // one-tier coupon, so it is not carried over: the stored key is no longer declared and
-  // drops, and the override starts empty (the derived count).
-  speedTiers: { kind: 'nullableNumber', backfill: null },
-  linesPerSpeedOverride: { kind: 'nullableNumber', backfill: null },
   measuredLineMm: { kind: 'nullableNumber' },
   linePitchMm: { kind: 'nullableNumber' },
   ...SCAN_PLAN_FIELDS,

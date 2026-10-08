@@ -30,8 +30,6 @@ const EM: EmSettings = {
 const IS: IsSettings = {
   lineSpeedMmS: 150,
   cornerSpeedMmS: 20,
-  speedTiers: 2,
-  linesPerSpeedOverride: 5,
   measuredLineMm: 30,
   linePitchMm: 2.5,
   scanPlace: 'part',
@@ -180,8 +178,6 @@ describe('per-flow settings stores', () => {
     expect(useIsSettings().settings).toEqual({
       lineSpeedMmS: 150,
       cornerSpeedMmS: 20,
-      speedTiers: null,
-      linesPerSpeedOverride: null,
       measuredLineMm: 30,
       linePitchMm: 2.5,
       scanPlace: 'part',
@@ -189,15 +185,16 @@ describe('per-flow settings stores', () => {
     })
   })
 
-  it('loads an entry stored before speed tiers with two tiers and the derived line count', () => {
-    // A one-tier entry stored eight lines per speed; that count belonged to a one-tier
-    // coupon, so it is not carried over: the tiers and the override load empty (the
-    // defaults, two tiers and the derived count).
+  it('loads an entry stored with the retired speed tier and lines per speed settings, dropping them', () => {
+    // The tier count and the lines per speed override are no longer settings: the tiers and
+    // the line count are always derived. An entry that chose one tier and eight lines must
+    // still load, with only the current fields.
     const id = addProfile()
     const legacy = {
       lineSpeedMmS: 150,
       cornerSpeedMmS: 100,
-      linesPerSpeed: 8,
+      speedTiers: 1,
+      linesPerSpeedOverride: 8,
       measuredLineMm: 30,
       linePitchMm: 2.5,
       scanPlace: 'plate',
@@ -209,8 +206,6 @@ describe('per-flow settings stores', () => {
     expect(useIsSettings().settings).toEqual({
       lineSpeedMmS: 150,
       cornerSpeedMmS: 100,
-      speedTiers: null,
-      linesPerSpeedOverride: null,
       measuredLineMm: 30,
       linePitchMm: 2.5,
       scanPlace: 'plate',

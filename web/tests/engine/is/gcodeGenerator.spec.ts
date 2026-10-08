@@ -845,6 +845,22 @@ describe('validation and reporting', () => {
     ).toThrow(/speed tiers/i)
   })
 
+  it('prints one tier, with the note, when the line speed is too slow for two', () => {
+    // The tiers of a 28 mm/s line speed are 19 and 28 mm/s; the 19 mm/s tier is below the
+    // 20 mm/s bottom rung, so the coupon prints the 28 mm/s tier alone.
+    const r = generateIsGcodeWithReport(profile, filament, {
+      ...spec,
+      cornerSpeedMmS: 20,
+      speedsMmS: [19, 28],
+    })
+    expect(r.gcode.split('\n')[1]).toBe('; speed tiers 28 mm/s, acceleration 3000 mm/s^2')
+    expect(r.warnings).toContain(
+      'The 19 mm/s speed tier was removed because it is slower than the 20 mm/s lowest corner ' +
+        'speed. With one tier, the analysis cannot tell print and scan patterns apart from ' +
+        'ringing. Raise the line speed to at least 29 mm/s to keep both tiers.',
+    )
+  })
+
   it('reports unknown slicer variables from the start gcode', () => {
     const weird: PrinterProfile = { ...profile, startGcode: 'M104 S[not_a_real_variable]' }
     const r = generateIsGcodeWithReport(weird, filament, spec)

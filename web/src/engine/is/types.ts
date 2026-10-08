@@ -29,8 +29,10 @@ export type IsAxis = 'x' | 'y'
 
 export interface IsTestSpec {
   /**
-   * Cruise speeds of the measured segments, one ladder of lines per tier. Two tiers by
-   * default: the line speed and the slower derived tier of speedTiersFor.
+   * Cruise speeds of the measured segments, one ladder of lines per tier. A request carries
+   * two tiers, the line speed and the slower derived tier of speedTiersFor; fitSpecToPrinter
+   * drops the slower one only when it falls below the ladder's bottom rung or the bed is too
+   * small for both.
    */
   speedsMmS: number[]
   linesPerSpeed: number
@@ -90,7 +92,8 @@ export interface IsTestSpec {
  * What the page asks for: a spec whose line count may be left to the derivation. Null lines
  * per speed is resolved by fitSpecToPrinter (ladderLinesPerSpeed) after the firmware fit,
  * so the generator and the analysis both read one fitted IsTestSpec; the ramp timing comes
- * from the firmware.
+ * from the firmware. The page always leaves the count to the derivation; a fixed count pins
+ * the ladder length for an engine caller that needs one specific coupon.
  */
 export type IsTestRequest = Omit<IsTestSpec, 'linesPerSpeed' | 'exactRampTiming'> & {
   linesPerSpeed: number | null
@@ -235,18 +238,13 @@ export function validateIsSpec(spec: IsTestRequest): void {
         'corner excitation is too weak to leave a readable trace.',
     )
   }
+  // With the corner speed floor above, this also holds the line speed to at least
+  // MIN_CORNER_SPEED_MM_S. A slower tier below that floor is not an error: fitSpecToPrinter
+  // drops it (fitTiersToLadder).
   if (Math.max(...spec.speedsMmS) < spec.cornerSpeedMmS) {
     throw new Error(
       `The line speed must be at least the ${spec.cornerSpeedMmS} mm/s corner speed. A ` +
         'slower line caps the corner below the corner speed and weakens the excitation.',
-    )
-  }
-  if (Math.min(...spec.speedsMmS) < MIN_CORNER_SPEED_MM_S) {
-    throw new Error(
-      `Raise the line speed to at least ` +
-        `${Math.ceil(MIN_CORNER_SPEED_MM_S * TIER_SPEED_RATIO)} mm/s, or use one speed tier. ` +
-        `Every speed tier must be at least ${MIN_CORNER_SPEED_MM_S} mm/s, the bottom rung of ` +
-        'its corner-speed ladder.',
     )
   }
   if (spec.weldMm <= 0) throw new Error('Weld length must be positive')
@@ -365,26 +363,70 @@ export function bandTopWarning(spec: IsTestSpec, profile: PrinterProfile): strin
   if (followable >= MIN_ACCEPTED_LINES) return null
   const slowest = Math.min(...spec.speedsMmS)
   return (
-    'Raise the line speed or the print acceleration, or use more lines per speed, to read a ' +
-    `resonance near ${F_MAX_HZ} Hz. Only ${followable} of the ${slowest} mm/s lines leave a ` +
-    `bead that can follow ringing that fast, and the analysis needs ${MIN_ACCEPTED_LINES}.`
+    'Raise the line speed or the print acceleration to read a resonance near ' +
+    `${F_MAX_HZ} Hz. Only ${followable} of the ${slowest} mm/s lines leave a bead that can ` +
+    `follow ringing that fast, and the analysis needs ${MIN_ACCEPTED_LINES}.`
   )
 }
 
 /**
- * Fits the request to the selected printer: first to what its firmware can execute, then
- * resolves the lines per speed, then fits the bed. This is the single place a spec is fitted;
- * the generator and the analysis both read its result, so the coupon is analyzed exactly as it
- * was printed. Every change is described in a user-worded note; a request the printer cannot
- * host throws.
+ * Fits the request to the selected printer: first resolves the speed tiers against the
+ * ladder's bottom rung, then fits what the firmware can execute, then resolves the lines per
+ * speed and fits the bed. This is the single place a spec is fitted and the only place a tier
+ * is dropped; the generator and the analysis both read its result, so the coupon is analyzed
+ * exactly as it was printed. Every change is described in a user-worded note; a request the
+ * printer cannot host throws.
  */
 export function fitSpecToPrinter(
   request: IsTestRequest,
   profile: PrinterProfile,
 ): { spec: IsTestSpec; notes: string[] } {
-  const firmware = fitSpecToFirmware(request, profile)
+  const tiers = fitTiersToLadder(request)
+  const firmware = fitSpecToFirmware(tiers.request, profile)
   const bed = fitSpecToBed(firmware.request, profile)
-  return { spec: bed.spec, notes: [...firmware.notes, ...bed.notes] }
+  return { spec: bed.spec, notes: [...tiers.notes, ...firmware.notes, ...bed.notes] }
+}
+
+const ONE_TIER_CONSEQUENCE =
+  'With one tier, the analysis cannot tell print and scan patterns apart from ringing.'
+
+/**
+ * The request with its slower tier removed, keeping the line speed, and the user-worded note
+ * saying why. Both automatic tier drops (the ladder floor and the bed fit) go through here.
+ */
+function withoutSlowerTier<R extends Pick<IsTestSpec, 'speedsMmS'>>(
+  request: R,
+  reason: string,
+): { request: R; note: string } {
+  const dropped = Math.min(...request.speedsMmS)
+  return {
+    request: { ...request, speedsMmS: [Math.max(...request.speedsMmS)] },
+    note: `The ${dropped} mm/s speed tier was removed ${reason} ${ONE_TIER_CONSEQUENCE}`,
+  }
+}
+
+/**
+ * Drops the slower tier when it falls below MIN_CORNER_SPEED_MM_S, the bottom rung of every
+ * tier's corner-speed ladder: such a tier cannot host its ladder. With the derived tiers of
+ * speedTiersFor this happens below a line speed of ceil(MIN_CORNER_SPEED_MM_S *
+ * TIER_SPEED_RATIO), 29 mm/s. The line speed itself never falls below the rung, because
+ * validateIsSpec holds it to at least the corner speed.
+ */
+function fitTiersToLadder(request: IsTestRequest): { request: IsTestRequest; notes: string[] } {
+  if (request.speedsMmS.length < 2 || Math.min(...request.speedsMmS) >= MIN_CORNER_SPEED_MM_S) {
+    return { request, notes: [] }
+  }
+  const oneTier = withoutSlowerTier(
+    request,
+    `because it is slower than the ${MIN_CORNER_SPEED_MM_S} mm/s lowest corner speed.`,
+  )
+  const twoTierLineSpeed = Math.ceil(MIN_CORNER_SPEED_MM_S * TIER_SPEED_RATIO)
+  return {
+    request: oneTier.request,
+    notes: [
+      `${oneTier.note} Raise the line speed to at least ${twoTierLineSpeed} mm/s to keep both tiers.`,
+    ],
+  }
 }
 
 /**
@@ -481,19 +523,9 @@ function fitSpecToBed(
   const full = attempt(request.speedsMmS)
   if (full) return full
   if (request.speedsMmS.length > 1) {
-    const kept = Math.max(...request.speedsMmS)
-    const dropped = Math.min(...request.speedsMmS)
-    const single = attempt([kept])
-    if (single) {
-      return {
-        spec: single.spec,
-        notes: [
-          `The ${dropped} mm/s speed tier was removed ${BED_FIT_REASON} With one tier, the ` +
-            'analysis cannot tell print and scan patterns apart from ringing.',
-          ...single.notes,
-        ],
-      }
-    }
+    const oneTier = withoutSlowerTier(request, BED_FIT_REASON)
+    const single = attempt(oneTier.request.speedsMmS)
+    if (single) return { spec: single.spec, notes: [oneTier.note, ...single.notes] }
   }
   throw new Error('The coupon does not fit the configured bed even at the shortest line length')
 }
