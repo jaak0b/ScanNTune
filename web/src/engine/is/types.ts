@@ -97,9 +97,17 @@ export const DETECTION_ALPHA = 0.001
  * resonance lies inside the configured shaper's stopband.
  */
 export const MAX_CI95_REL = 0.1
-/** Minimum lines entering the joint fit before the axis estimate is meaningful. */
+/**
+ * Minimum lines entering the joint fit before the axis estimate is meaningful, and the floor of
+ * followable rungs the coupon design keeps. It is not the minimum for an accepted axis: the
+ * input-proportionality gate must reach the design power against a forced tone each line
+ * detects on its own (inputProportionality.ts), which depends on the lines' corner speeds and
+ * tiers and is judged per axis. On the default ladder (two tiers of rungs 20 to 100 mm/s) that
+ * takes 9 of the 10 lines; a one-tier ladder of 20 to 100 mm/s needs 9 rungs.
+ */
 export const MIN_ACCEPTED_LINES = 3
-/** Power the two-tier speed check is designed for at the weakest accepted measurement. */
+/** Power the two-tier speed check is designed for at the weakest accepted measurement, and the
+ *  design power of the input-proportionality gate. */
 export const SPEED_CHECK_POWER = 0.95
 
 /**

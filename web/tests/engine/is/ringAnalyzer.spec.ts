@@ -120,8 +120,21 @@ describe('poolAxisFits detection', () => {
     // A lobe decaying over 0.84 mm of arc length (two bead widths), 0.03 mm on the top rung.
     const p = pool(twoTier, simulate(twoTier, { noise: IID, spatialLobe: { ampMm: 0.03, lambdaMm: 0.84 } }, 2))
     expect(p.detectionPBound!).toBeGreaterThan(0.001)
-    expect(['flow-lag', 'bead-drag']).toContain(p.cornerModel!.kind)
+    expect(p.cornerModel!.kind).toBe('bead-drag')
     expect(p.cornerModel!.scale).toBeGreaterThan(0)
+  })
+
+  it('refuses an axis whose traces carry no measurable noise instead of throwing', () => {
+    // Every window's lateral deviation set to exactly zero: the null fit leaves a zero residual,
+    // whose noise model cannot weight the ring model.
+    const fits = simulate(twoTier, { noise: IID }).map((l) => analyzeTracedLine(l.trace))
+    for (const f of fits) f.window!.y.fill(0)
+    const p = poolAxisFits(fits, twoTier.speedsMmS)
+    expect(p.accepted).toBe(false)
+    expect(p.refusals).toEqual([
+      'The traced lines of this axis have no measurable noise, so the ring model cannot be ' +
+        'weighted. Rescan the coupon.',
+    ])
   })
 
   it('refuses too few lines with a fit window, pointing at the lamp shadow', () => {
@@ -151,6 +164,18 @@ describe('poolAxisFits estimation', () => {
     expect(Math.abs(p.frequencyHz! - 60)).toBeLessThan(0.3)
     expect(Math.abs(p.dampingRatio! - 0.05)).toBeLessThan(0.005)
     expect(p.linesUsed).toBe(10)
+  })
+
+  it('moves the joint fit off its grid seed', () => {
+    // The fit starts at the detection grid point nearest the truth, 60 Hz and damping 0.05. On a
+    // noisy trace the least squares optimum lies a fraction of a standard error (about 0.12 Hz)
+    // away, while a fit that stalls at its seed returns it to within 1e-7. On these seeds the fit
+    // used to stall.
+    for (const seed of [3, 4, 6]) {
+      const p = pool(twoTier, simulate(twoTier, { noise: IID, ring: { frequencyHz: 60, dampingRatio: 0.05, ampMm: 0.03 } }, seed))
+      expect(Math.abs(p.frequencyHz! - 60)).toBeGreaterThan(1e-3)
+      expect(Math.abs(p.dampingRatio! - 0.05)).toBeGreaterThan(1e-5)
+    }
   })
 
   it('passes every check on a real ring: speed, proportionality, replicates, decay', () => {
@@ -222,9 +247,10 @@ describe('poolAxisFits estimation', () => {
     expect(p.lines[3].exclusion).toBe('out-of-band')
     expect(p.lines[3].usedInJointFit).toBe(false)
     expect(p.accepted).toBe(true)
-    // The nine remaining lines' joint frequency has a standard error of about 0.11 Hz (the
-    // profile-likelihood interval in the encompassing corner model), so 0.4 Hz is 3.6 of them.
-    expect(Math.abs(p.frequencyHz! - 60)).toBeLessThan(0.4)
+    // The nine remaining lines' joint frequency has a standard error of about 0.10 Hz (the
+    // profile-likelihood interval in the encompassing corner model), so 0.3 Hz is 3 of them. The
+    // excluded line must not move the estimate: the same nine lines without it read 59.789 Hz.
+    expect(Math.abs(p.frequencyHz! - 60)).toBeLessThan(0.3)
   })
 })
 
@@ -302,6 +328,23 @@ describe('poolAxisFits checks', () => {
     ])
   })
 
+  it('refuses a forced tone on lines too few for the proportionality gate to reject it', () => {
+    // A 100 Hz tone, 0.004 mm, on the top two rungs of each tier only (four lines): the intercept
+    // test has one degree of freedom and a critical t of 636.6, so it cannot reject even this
+    // strong tone, and the speed and replicate checks pass it. The gate must refuse the axis
+    // instead of passing it unassessed.
+    const lines = simulate(twoTier, { noise: IID, artifacts: { forcedTone: { frequencyHz: 100, ampMm: 0.004 } }, lineIndices: [6, 7, 8, 9] })
+    const p = pool(twoTier, lines)
+    expect(p.detectionPBound!).toBeLessThanOrEqual(0.001)
+    expect(p.speedCheck.state).toBe('confirmed')
+    expect(p.proportionality).toBe('not-assessed')
+    expect(p.accepted).toBe(false)
+    expect(p.refusals).toEqual([
+      "The usable lines of this axis are too few to tell ringing of the machine from a steady " +
+        'vibration, such as a fan. Rescan the coupon, or reprint it if lines are damaged.',
+    ])
+  })
+
   it('detects a strong forced tone the noise model of the null absorbs, then refuses it', () => {
     // 0.01 mm at 100 Hz on every line with a random phase: a null noise model predicts it, so
     // without the refit the axis read as noise only; refitted it is found, and it fails the
@@ -318,11 +361,20 @@ describe('poolAxisFits checks', () => {
     expect(p.refusals.some((r) => r.includes('decay'))).toBe(false)
   })
 
-  it('reports the speed check as not assessed on a one-tier coupon', () => {
+  it('reports the speed check as not assessed on a one-tier coupon and refuses its five lines', () => {
+    // Five rungs from 20 to 100 mm/s on one tier leave the proportionality test three degrees of
+    // freedom (critical t 12.92): against a tone each line detects on its own it has power 0.20,
+    // short of the design power 0.95, so even a clear ring cannot be told from a forced tone.
     const p = pool(oneTier, simulate(oneTier, { noise: IID, ring: { frequencyHz: 60, dampingRatio: 0.05, ampMm: 0.03 } }))
     expect(p.speedCheck).toEqual({ state: 'not-assessed', tiers: [] })
     expect(p.influenceCheck).toBe('passed')
-    expect(p.accepted).toBe(true)
+    expect(p.proportionality).toBe('not-assessed')
+    expect(p.accepted).toBe(false)
+    expect(p.refusals).toEqual([
+      'The lines of a coupon with one speed tier cannot tell ringing of the machine from a steady ' +
+        'vibration, such as a fan. Reprint it at a line speed of at least 29 mm/s on a bed large ' +
+        'enough for both speed tiers.',
+    ])
   })
 
   it('refuses a one-tier detection that rests on a single line', () => {

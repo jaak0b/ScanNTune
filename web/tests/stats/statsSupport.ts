@@ -72,7 +72,9 @@ export function analyzeCouponCase(
   return poolCouponAxes([fits('x', x), fits('y', y)], spec.speedsMmS)
 }
 
-/** The production detection statistic Q at one grid point, over the lines `keep` selects. */
+/** The detection statistic Q at one grid point over the lines `keep` selects, with the flow-lag
+ *  null model (detectionStatisticAt): no pattern search and no corner-model choice, unlike the
+ *  production analysis, which may choose the bead-drag model. */
 export function statisticCase(
   spec: IsTestSpec,
   options: CaseOptions,
@@ -85,18 +87,29 @@ export function statisticCase(
   return detectionStatisticAt(lines.map((l) => analyzeTracedLine(l.trace)), frequencyHz, dampingRatio)
 }
 
-/** P(X >= x) for the noncentral chi-square with even dof and noncentrality lambda (the Poisson
- *  mixture of central chi-squares, Johnson, Kotz and Balakrishnan 1995, ch. 29). */
-export function noncentralSurvival(x: number, dof: number, lambda: number): number {
-  let total = 0
-  let weight = Math.exp(-lambda / 2)
-  for (let j = 0; j < 2000; j++) {
-    total += weight * chiSquareSurvivalEvenDof(x, dof + 2 * j)
-    weight *= lambda / 2 / (j + 1)
-    if (j > lambda && weight < 1e-18) break
+/**
+ * The counts a correct implementation stays within for `n` independent seeds that each succeed
+ * with probability `p`, failing with probability at most `tail` on each side: the smallest count
+ * whose binomial lower tail P(X <= count) exceeds `tail`, and the largest whose upper tail
+ * P(X >= count) does.
+ */
+export function binomialBounds(n: number, p: number, tail: number): { lower: number; upper: number } {
+  const pmf: number[] = []
+  let logTerm = n * Math.log(1 - p)
+  for (let k = 0; k <= n; k++) {
+    pmf.push(Math.exp(logTerm))
+    logTerm += Math.log((n - k) / (k + 1)) + Math.log(p / (1 - p))
   }
-  return total
+  let lower = 0
+  for (let below = pmf[0]; below <= tail && lower < n; below += pmf[++lower]);
+  let upper = n
+  for (let above = pmf[n]; above <= tail && upper > 0; above += pmf[--upper]);
+  return { lower, upper }
 }
+
+/** The noncentrality at which the noncentral chi2_dof exceeds `critical` with `power`: the
+ *  engine's own, which the proportionality gate uses too. */
+export { noncentralityForPower } from '../../src/engine/math'
 
 /** The x with P(chi2_dof >= x) = tail, by bisection (even dof). */
 export function chiSquareCritical(dof: number, tail: number): number {
@@ -105,18 +118,6 @@ export function chiSquareCritical(dof: number, tail: number): number {
   for (let k = 0; k < 200; k++) {
     const mid = 0.5 * (lo + hi)
     if (chiSquareSurvivalEvenDof(mid, dof) > tail) lo = mid
-    else hi = mid
-  }
-  return 0.5 * (lo + hi)
-}
-
-/** The noncentrality at which the noncentral chi2_dof exceeds `critical` with `power`. */
-export function noncentralityForPower(dof: number, critical: number, power: number): number {
-  let lo = 0
-  let hi = 10 * critical + 100
-  for (let k = 0; k < 200; k++) {
-    const mid = 0.5 * (lo + hi)
-    if (noncentralSurvival(critical, dof, mid) < power) lo = mid
     else hi = mid
   }
   return 0.5 * (lo + hi)

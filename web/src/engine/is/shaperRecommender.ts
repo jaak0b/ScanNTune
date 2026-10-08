@@ -30,6 +30,8 @@ export interface ShaperImpulses {
 export interface ShaperOption {
   type: ShaperType
   frequencyHz: number
+  /** The damping ratio the shaper is designed at; the firmware must build it with the same. */
+  dampingRatio: number
   /**
    * Worst-case residual vibration over the tolerance band around the measured resonance, as
    * a fraction (0.05 = 5%). Evaluated across a band, not only at the point estimate: the
@@ -215,6 +217,7 @@ export function recommendShapers(
     return {
       type,
       frequencyHz,
+      dampingRatio,
       bandResidualVibration: worstBandResidual(impulses, frequencyHz, dampingRatio, bandHalfWidth),
       maxAccelMmS2: maxAccel,
       smoothingMm: shaperSmoothingMm(impulses, maxAccel),
@@ -230,11 +233,13 @@ export function recommendShapers(
   return { options, recommended }
 }
 
-/** Klipper configuration snippet for a per-axis recommendation. */
+/** Klipper configuration snippet for a per-axis recommendation, with the damping ratio the
+ *  shaper was designed at, so the firmware builds the shaper that was scored. */
 export function formatKlipperShaper(axis: 'x' | 'y', option: ShaperOption): string {
   const f = option.frequencyHz.toFixed(1)
   const type = option.type.toLowerCase()
-  return `shaper_freq_${axis}: ${f}\nshaper_type_${axis}: ${type}`
+  const damping = option.dampingRatio.toFixed(3)
+  return `shaper_freq_${axis}: ${f}\nshaper_type_${axis}: ${type}\ndamping_ratio_${axis}: ${damping}`
 }
 
 // Shaper selection for an axis with more than one mode, following Klipper's shaper_calibrate.py
@@ -265,8 +270,9 @@ const KLIPPER_FREQ_STEP_HZ = 0.2
 const KLIPPER_MAX_FREQ_HZ = 200
 /** The acceleration Klipper's score evaluates the smoothing at, mm/s^2 (_get_shaper_smoothing). */
 const KLIPPER_SCORE_ACCEL_MM_S2 = 5000
-/** Spectrum bin width of the synthesized spectrum, Hz: half of Klipper's 0.5 s window bins, so
- *  every mode's peak spans several bins. */
+/** Spectrum bin width of the synthesized spectrum, Hz. Klipper reads its spectrum through an
+ *  analysis window of at least 0.5 s (its sample count rounded up to a power of two), so its bins
+ *  are 1 to 2 Hz wide; this grid is finer, so a mode's peak spans several bins. */
 const SPECTRUM_BIN_HZ = 0.5
 
 /**
@@ -308,12 +314,15 @@ interface FittedShaper {
 }
 
 /** Klipper's fit_shaper for one type: the frequency with the least remaining vibration, then the
- *  one scoring best among those within 10% (plus 0.0005) of it. */
+ *  one scoring best among those within 10% (plus 0.0005) of it. The test frequencies are
+ *  np.arange(min_freq, MAX_SHAPER_FREQ, 0.2), which stops short of MAX_SHAPER_FREQ, visited from
+ *  the highest down. */
 function fitShaper(type: ShaperType, freqs: number[], psd: number[]): FittedShaper {
   const results: FittedShaper[] = []
   let best: FittedShaper | null = null
-  const steps = Math.floor((KLIPPER_MAX_SHAPER_FREQ_HZ - KLIPPER_MIN_FREQ_HZ[type]) / KLIPPER_FREQ_STEP_HZ + 1e-9)
-  for (let s = steps; s >= 0; s--) {
+  // np.arange's length, ceil((stop - start) / step).
+  const count = Math.ceil((KLIPPER_MAX_SHAPER_FREQ_HZ - KLIPPER_MIN_FREQ_HZ[type]) / KLIPPER_FREQ_STEP_HZ)
+  for (let s = count - 1; s >= 0; s--) {
     const testFreq = KLIPPER_MIN_FREQ_HZ[type] + s * KLIPPER_FREQ_STEP_HZ
     const impulses = shaperImpulses(type, testFreq, KLIPPER_DESIGN_DAMPING)
     const vibrations = Math.max(...KLIPPER_TEST_DAMPING.map((dr) => remainingVibrations(impulses, dr, freqs, psd)))
@@ -324,6 +333,7 @@ function fitShaper(type: ShaperType, freqs: number[], psd: number[]): FittedShap
       option: {
         type,
         frequencyHz: testFreq,
+        dampingRatio: KLIPPER_DESIGN_DAMPING,
         bandResidualVibration: vibrations,
         maxAccelMmS2: maxAccel,
         smoothingMm: shaperSmoothingMm(impulses, maxAccel),

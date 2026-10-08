@@ -7,6 +7,8 @@
 // Algorithm AS 63) and a Lanczos log-gamma. All constants below are the published coefficients of
 // those algorithms.
 
+import { normalCdf } from './math'
+
 // Lanczos approximation coefficients (g = 7, n = 9), as published by Godfrey/Press et al.
 const LANCZOS = [
   676.5203681218851, -1259.1392167224028, 771.32342877765313, -176.61502916214059,
@@ -94,4 +96,32 @@ export function tQuantile(p: number, dof: number): number {
     if (hi - lo < 1e-12 * Math.max(1, hi)) break
   }
   return 0.5 * (lo + hi)
+}
+
+/**
+ * Power of the two-sided Student t test with critical value `critical` against the noncentral t
+ * with `dof` degrees of freedom and noncentrality `delta`: P(|T| > critical) for
+ * T = (Z + delta) / S, Z standard normal and S = sqrt(V / dof) with V chi-square on dof degrees of
+ * freedom, independent (the noncentral t of N. L. Johnson, S. Kotz and N. Balakrishnan,
+ * "Continuous Univariate Distributions", vol. 2, 2nd ed., 1995, ch. 31). Given S = s the event is
+ * a pair of normal tails, Phi(delta - c s) + Phi(-delta - c s), integrated over the density of S,
+ * 2 (dof / 2)^(dof / 2) s^(dof - 1) e^(-dof s^2 / 2) / Gamma(dof / 2), by composite Simpson's rule
+ * out to 14 standard deviations of S beyond 1.
+ */
+export function noncentralTPower(delta: number, dof: number, critical: number): number {
+  if (dof <= 0) throw new Error(`Student-t needs positive degrees of freedom, got ${dof}.`)
+  const half = dof / 2
+  const logFront = Math.log(2) + half * Math.log(half) - logGamma(half)
+  const top = 1 + 14 / Math.sqrt(2 * dof)
+  const intervals = 4000
+  const h = top / intervals
+  let sum = 0
+  for (let i = 0; i <= intervals; i++) {
+    const s = i * h
+    const density = s === 0 ? (dof === 1 ? Math.exp(logFront) : 0) : Math.exp(logFront + (dof - 1) * Math.log(s) - half * s * s)
+    const tails = normalCdf(delta - critical * s) + normalCdf(-delta - critical * s)
+    const weight = i === 0 || i === intervals ? 1 : i % 2 === 1 ? 4 : 2
+    sum += weight * density * tails
+  }
+  return Math.min(1, (sum * h) / 3)
 }

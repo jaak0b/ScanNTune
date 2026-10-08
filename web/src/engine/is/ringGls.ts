@@ -57,6 +57,8 @@ export interface LineBasis {
   fixedColumns: Float64Array[]
   /** Orthonormal basis of the unweighted fixed columns (ordinary least squares stages). */
   fixedQ: Float64Array[]
+  /** The largest norm of the unweighted fixed columns: their design's scale (orthonormalBasis). */
+  fixedNorm: number
   /** The data with the fixed columns projected out (unweighted). */
   yFixedFree: Float64Array
   /** First observed sample at or after the end of the acceleration ramp: from here the sample
@@ -92,6 +94,8 @@ export interface LineNoise {
   wY: Float64Array
   /** Orthonormal basis of the whitened drift columns. */
   wFixedQ: Float64Array[]
+  /** The largest norm of the whitened fixed columns: their design's scale (orthonormalBasis). */
+  wFixedNorm: number
   /** The whitened data with the whitened drift columns projected out. */
   wYFixedFree: Float64Array
 }
@@ -119,14 +123,35 @@ function dot(a: ArrayLike<number>, b: ArrayLike<number>): number {
   return s
 }
 
+/** The largest Euclidean norm among columns (0 for none). */
+function largestNorm(columns: ArrayLike<number>[]): number {
+  let largest = 0
+  for (const c of columns) largest = Math.max(largest, Math.sqrt(dot(c, c)))
+  return largest
+}
+
+/**
+ * The numerical rank tolerance of a rows x cols design whose largest column norm is `norm`,
+ * max(rows, cols) eps ||A|| (G. H. Golub and C. F. Van Loan, "Matrix Computations", 4th ed.,
+ * 2013, s5.4.1; the default of MATLAB's rank and NumPy's matrix_rank), with the largest column
+ * norm standing in for ||A||: a remainder below it is rounding of the design, not a direction.
+ */
+function rankTolerance(rows: number, cols: number, norm: number): number {
+  return Math.max(rows, cols) * Number.EPSILON * norm
+}
+
 /**
  * Orthonormal basis of the span of `columns` by modified Gram-Schmidt with one
- * reorthogonalization pass ("twice is enough", Giraud, Langou and Rozloznik 2005); a column whose
- * remainder falls below 1e-10 of its own norm is linearly dependent on the earlier ones and is
- * dropped.
+ * reorthogonalization pass ("twice is enough", Giraud, Langou and Rozloznik 2005). A column is
+ * linearly dependent on the earlier ones, and dropped, when its remainder falls below 1e-10 of its
+ * own norm or below the numerical rank tolerance of the design (rankTolerance). The design is
+ * `columns` after the columns `start` is an orthonormal basis of, whose own largest norm is
+ * `startNorm`.
  */
-export function orthonormalBasis(columns: ArrayLike<number>[], start: Float64Array[] = []): Float64Array[] {
+export function orthonormalBasis(columns: ArrayLike<number>[], start: Float64Array[] = [], startNorm = 0): Float64Array[] {
   const basis = start.slice()
+  const rows = columns.length > 0 ? columns[0].length : 0
+  const tolerance = rankTolerance(rows, start.length + columns.length, Math.max(startNorm, largestNorm(columns)))
   for (const column of columns) {
     const v = Float64Array.from(column)
     const norm0 = Math.sqrt(dot(v, v))
@@ -138,7 +163,7 @@ export function orthonormalBasis(columns: ArrayLike<number>[], start: Float64Arr
       }
     }
     const norm = Math.sqrt(dot(v, v))
-    if (!(norm > DEPENDENT_COLUMN * norm0)) continue
+    if (!(norm > Math.max(DEPENDENT_COLUMN * norm0, tolerance))) continue
     for (let i = 0; i < v.length; i++) v[i] /= norm
     basis.push(v)
   }
@@ -187,6 +212,7 @@ export function lineBasis(
     m,
     fixedColumns,
     fixedQ,
+    fixedNorm: largestNorm(fixedColumns),
     yFixedFree: residualize(rec.y, fixedQ),
     cruiseFrom,
     dt,
@@ -198,13 +224,13 @@ export function lineBasis(
 
 /** Residual sum of squares of the ordinary least squares null fit at tau. */
 export function olsNullSsr(line: LineBasis, tauS: number): number {
-  return ssrAfterLag(line.yFixedFree, orthonormalBasis(cornerColumns(line.rec, line.cornerModel, tauS), line.fixedQ))
+  return ssrAfterLag(line.yFixedFree, orthonormalBasis(cornerColumns(line.rec, line.cornerModel, tauS), line.fixedQ, line.fixedNorm))
 }
 
 /** Whitened residual sum of squares of the GLS null fit at tau. */
 export function glsNullSsr(line: LineBasis, noise: LineNoise, tauS: number): number {
   const lag = cornerColumns(line.rec, line.cornerModel, tauS).map((c) => noise.whiten(c))
-  return ssrAfterLag(noise.wYFixedFree, orthonormalBasis(lag, noise.wFixedQ))
+  return ssrAfterLag(noise.wYFixedFree, orthonormalBasis(lag, noise.wFixedQ, noise.wFixedNorm))
 }
 
 /** ||r||^2 minus its projection on orthonormal columns that are orthogonal to the drift. */
@@ -219,20 +245,28 @@ function ssrAfterLag(driftFree: Float64Array, lag: Float64Array[]): number {
 
 /** Ordinary least squares fit of the null model at tau: residual sum of squares and residuals. */
 export function olsNull(line: LineBasis, tauS: number): { ssr: number; residual: Float64Array } {
-  const lag = orthonormalBasis(cornerColumns(line.rec, line.cornerModel, tauS), line.fixedQ)
+  const lag = orthonormalBasis(cornerColumns(line.rec, line.cornerModel, tauS), line.fixedQ, line.fixedNorm)
   const yr = residualize(line.rec.y, line.fixedQ.concat(lag))
   return { ssr: dot(yr, yr), residual: yr }
 }
 
+/** A residual without measurable noise: no noise model can weight the ring model on it. The axis
+ *  analysis turns it into a refusal. */
+export class NoMeasurableNoiseError extends Error {
+  constructor() {
+    super('The traced lines of this axis have no measurable noise, so the ring model cannot be weighted.')
+    this.name = 'NoMeasurableNoiseError'
+  }
+}
+
 /**
  * The AR noise model of a residual: Burg's method over the runs of read samples (de Waele and
- * Broersen 2000), order by AICc (Hurvich and Tsai 1989) up to floor(10 log10 n).
+ * Broersen 2000), order by AICc (Hurvich and Tsai 1989) up to floor(10 log10 n). Throws
+ * NoMeasurableNoiseError on a residual without noise.
  */
 export function fitNoise(line: LineBasis, residual: Float64Array): LineNoise {
   const fit = selectOrderAiccSegments(latticeSegments(residual, line.rec.lattice))
-  if (!(fit.noiseVariance > 0) || !Number.isFinite(fit.noiseVariance)) {
-    throw new Error('The traced line has no measurable noise, so its ring model cannot be weighted.')
-  }
+  if (!(fit.noiseVariance > 0) || !Number.isFinite(fit.noiseVariance)) throw new NoMeasurableNoiseError()
   return noiseModel(line, fit)
 }
 
@@ -261,7 +295,8 @@ export function noiseModel(
     return whitener.unwhiten(Float64Array.from(e, (v, i) => v * scale[i]))
   }
   const wY = whiten(line.rec.y)
-  const wFixedQ = orthonormalBasis(line.fixedColumns.map((c) => whiten(c)))
+  const wFixed = line.fixedColumns.map((c) => whiten(c))
+  const wFixedQ = orthonormalBasis(wFixed)
   return {
     fit,
     whitener,
@@ -273,6 +308,7 @@ export function noiseModel(
     unwhiten,
     wY,
     wFixedQ,
+    wFixedNorm: largestNorm(wFixed),
     wYFixedFree: residualize(wY, wFixedQ),
   }
 }
@@ -350,7 +386,7 @@ export function pooledVarianceSlope(
 /** The whitened null design of a line at tau, with optional further raw null columns. */
 export function nullDesign(line: LineBasis, noise: LineNoise, tauS: number, extraRaw: Float64Array[] = []): NullDesign {
   const lagRaw = cornerColumns(line.rec, line.cornerModel, tauS)
-  const Q = noise.wFixedQ.concat(orthonormalBasis([...lagRaw, ...extraRaw].map((c) => noise.whiten(c)), noise.wFixedQ))
+  const Q = noise.wFixedQ.concat(orthonormalBasis([...lagRaw, ...extraRaw].map((c) => noise.whiten(c)), noise.wFixedQ, noise.wFixedNorm))
   const k = Q.length
   const m = line.m
   const qRows = new Float64Array(m * k)
@@ -671,11 +707,12 @@ export function rawFullResidual(
 
 /**
  * Least squares coefficients of target on columns by modified Gram-Schmidt QR and back
- * substitution; a column dependent on the earlier ones (remainder below 1e-10 of its norm) gets
- * coefficient 0.
+ * substitution; a column dependent on the earlier ones (remainder below 1e-10 of its norm or
+ * below the design's numerical rank tolerance, as in orthonormalBasis) gets coefficient 0.
  */
 function generalizedLeastSquares(columns: Float64Array[], target: Float64Array): number[] {
   const n = columns.length
+  const tolerance = rankTolerance(target.length, n, largestNorm(columns))
   const Q: (Float64Array | null)[] = []
   const R: number[][] = Array.from({ length: n }, () => new Array<number>(n).fill(0))
   for (let j = 0; j < n; j++) {
@@ -691,7 +728,7 @@ function generalizedLeastSquares(columns: Float64Array[], target: Float64Array):
       }
     }
     const norm = Math.sqrt(dot(v, v))
-    if (!(norm0 > 0) || !(norm > DEPENDENT_COLUMN * norm0)) {
+    if (!(norm0 > 0) || !(norm > Math.max(DEPENDENT_COLUMN * norm0, tolerance))) {
       Q.push(null)
       continue
     }

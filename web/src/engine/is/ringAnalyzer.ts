@@ -23,6 +23,7 @@ import {
 import { depositTimesUnder, unitResponseMode } from './alongTrackLag'
 import type { CornerResponse, FittedLineRing } from './alongTrackLag'
 import {
+  NoMeasurableNoiseError,
   fitNoise,
   fixedNullColumns,
   glsNullSsr,
@@ -113,14 +114,17 @@ import { tQuantile } from '../studentT'
 //      times one scale per speed tier, through zero. The intercept of the least squares
 //      regression of the per-line amplitudes on the corner speeds is t-tested against zero with
 //      the lines' own scatter as the error (Student 1908); a forced tone (rung-independent
-//      amplitude) has a large intercept and fails it.
+//      amplitude) has a large intercept and fails it. It is the only gate against a forced tone,
+//      so an axis whose lines give it less than the design power against a tone each line
+//      detects on its own is refused as not assessed.
 //    - Speed check with two tiers: each tier is tested on its own lines only on a local grid
 //      around the axis estimate and its arc-length artifact images f rho^(+/-1) (closed testing,
 //      Marcus, Peritz and Gabriel 1976), then fitted on its own; d = ln(f_slow / f_fast) with the
 //      delta-method standard error. Confirmed when the artifact hypothesis d = -ln rho is
 //      rejected one-sided and d = 0 is not rejected two-sided; changed with speed when d = 0 is
 //      rejected; otherwise not confirmed.
-//    - One tier: leave-one-line-out influence check of the detection (Cook 1977).
+//    - One tier: the detection is tested again with each single line deleted (a leave-one-out
+//      influence check).
 //    - Replicate check: Cochran's Q homogeneity test (Cochran 1954) on the inverse-variance
 //      weighted per-line frequencies of the detected lines.
 //    - Damping diagnostic: boundary likelihood-ratio test of zeta = 0 (Self and Liang 1987),
@@ -458,10 +462,16 @@ const VARIANCE_CRITICAL = normalQuantile(1 - DETECTION_ALPHA / 2) ** 2
 /**
  * The slope of the axis's innovation variance function (ringGls.pooledVarianceSlope) from the
  * lines' raw residuals under their AR models, or 0 when the likelihood ratio test does not reject
- * a constant variance at DETECTION_ALPHA.
+ * a constant variance at DETECTION_ALPHA. The covariate is each line's corner-model deficit at
+ * tauS unless `deficits` gives it.
  */
-function axisVarianceSlope(bases: LineBasis[], noises: LineNoise[], residuals: Float64Array[], tauS: number): number {
-  const deficits = bases.map((b) => cornerDeficit(b.rec, b.cornerModel, tauS))
+function axisVarianceSlope(
+  bases: LineBasis[],
+  noises: LineNoise[],
+  residuals: Float64Array[],
+  tauS: number,
+  deficits: Float64Array[] = bases.map((b) => cornerDeficit(b.rec, b.cornerModel, tauS)),
+): number {
   const innovations = residuals.map((r, l) => noises[l].whitener.whiten(r))
   const pooled = pooledVarianceSlope(innovations, deficits)
   return pooled.statistic > VARIANCE_CRITICAL ? pooled.slope : 0
@@ -555,13 +565,13 @@ function pooledAicc(fits: NullFit[], bases: LineBasis[]): number {
 function chooseCornerModel(
   windows: LineRecord[],
   flow: { bases: LineBasis[]; fits: NullFit[]; carried: CarriedArtifacts },
-): { bases: LineBasis[]; fits: NullFit[]; kind: CornerModelKind; flowScale: number; beadScale: number } {
+): { bases: LineBasis[]; fits: NullFit[]; kind: CornerModelKind; beadScale: number } {
   const bases = carriedBases(windows, flow.carried, 'bead-drag')
   const fits = nullFits(bases, tauRange(bases))
-  const scales = { flowScale: flow.fits[0].tauS, beadScale: fits[0].tauS }
+  const beadScale = fits[0].tauS
   return pooledAicc(fits, bases) < pooledAicc(flow.fits, flow.bases)
-    ? { bases, fits, kind: 'bead-drag', ...scales }
-    : { bases: flow.bases, fits: flow.fits, kind: 'flow-lag', ...scales }
+    ? { bases, fits, kind: 'bead-drag', beadScale }
+    : { bases: flow.bases, fits: flow.fits, kind: 'flow-lag', beadScale }
 }
 
 /** One line's detection state for a null fit (see detectionStates). */
@@ -1023,8 +1033,37 @@ interface AxisAnalysis {
 }
 
 /** The analysis of an axis with the patterns to carry given (`preset`, no search) or searched
- *  (null); repeated with more patterns when the search with the fitted ring finds more. */
+ *  (null); repeated with more patterns when the search with the fitted ring finds more. A trace
+ *  without measurable noise ends it in a refusal (noiseRefusal). */
 function analyzeAxis(fits: LineFit[], speedsMmS: number[], preset: CarriedArtifacts | null = null): AxisAnalysis {
+  try {
+    const analysis = analyzeAxisUnguarded(fits, speedsMmS, preset)
+    return { ...analysis, pool: () => noiseRefusal(fits, analysis.pool) }
+  } catch (error) {
+    if (!(error instanceof NoMeasurableNoiseError)) throw error
+    return { pool: () => noiseRefusal(fits, () => { throw error }), detection: null, fit: null, secondMode: null }
+  }
+}
+
+/** The pool `pool` computes, or the refusal of an axis whose traces carry no measurable noise. */
+function noiseRefusal(fits: LineFit[], pool: () => AxisPool): AxisPool {
+  try {
+    return pool()
+  } catch (error) {
+    if (!(error instanceof NoMeasurableNoiseError)) throw error
+    const verdicts: LineVerdict[] = fits.map((f) => ({
+      usedInJointFit: false,
+      exclusion: f.window ? null : 'no-free-response',
+      detected: false,
+      detectionPBound: null,
+      frequencyHz: null,
+      amplitudeMm: null,
+    }))
+    return refusal(emptyPool(verdicts), `${error.message} Rescan the coupon.`)
+  }
+}
+
+function analyzeAxisUnguarded(fits: LineFit[], speedsMmS: number[], preset: CarriedArtifacts | null): AxisAnalysis {
   const detected = detectAxis(fits, speedsMmS, preset)
   if ('refusal' in detected) return { pool: () => detected.refusal, detection: null, fit: null, secondMode: null }
   const detection = detected.detection
@@ -1037,7 +1076,7 @@ function analyzeAxis(fits: LineFit[], speedsMmS: number[], preset: CarriedArtifa
   if (!detection.preset && speedsMmS.length >= 2) {
     const ring = [{ frequencyHz: fit.joint.frequencyHz, dampingRatio: fit.joint.dampingRatio }]
     const again = withArtifacts(detection.windows, speedsMmS, detection.carried, ring, true, detection.chosen.kind)
-    if (again.carried.artifacts.length > detection.carried.artifacts.length) return analyzeAxis(fits, speedsMmS, again.carried)
+    if (again.carried.artifacts.length > detection.carried.artifacts.length) return analyzeAxisUnguarded(fits, speedsMmS, again.carried)
   }
   let search: SecondModeSearch | null = null
   const secondMode = () => (search ??= searchSecondMode(fit))
@@ -1300,18 +1339,22 @@ function completeAxis(
   base.decayStatistic = decayStatistic(inBases, noise1, joint, estBounds)
   base.decayDemonstrated = base.decayStatistic > DECAY_CRITICAL
   base.proportionality = proportionalityCheck(inBases, rings.map((r) => Math.hypot(r.a, r.b)))
+  // The speed and replicate checks judge the mode the axis reports: the two-mode fit's dominant
+  // mode when the second-mode search found one that outgrows the joint fit's mode.
+  const dominant = secondMode.modes?.swapped ? secondMode.modes.dominant.mode : null
+  const checked: JointFit = dominant ? { ...joint, frequencyHz: dominant.frequencyHz, dampingRatio: dominant.dampingRatio } : joint
   // On deposit times each tier's fit starts from its own maximum on those times: on the commanded
   // time base a strongly modulated ring's local maximum can be its sideband.
   const tierSeed = depositTimeS
-    ? (lines: number[], points: number[]) => correctedSeed(detection, lines, depositTimeS, joint.dampingRatio, points)
+    ? (lines: number[], points: number[]) => correctedSeed(detection, lines, depositTimeS, checked.dampingRatio, points)
     : null
-  base.speedCheck = speedCheck(states, included, inBases, noise1, joint, speedsMmS, estBounds, tierSeed)
+  base.speedCheck = speedCheck(states, included, inBases, noise1, checked, speedsMmS, estBounds, tierSeed)
   base.influenceCheck = speedsMmS.length === 1 ? influenceCheck(states) : 'not-assessed'
   const detectedK = included.map((l, k) => (verdicts[windowed[l]].detected ? k : -1)).filter((k) => k >= 0)
   const replicate = replicateCheck(
     detectedK.map((k) => inBases[k]),
     detectedK.map((k) => noise1[k]),
-    joint,
+    checked,
     estBounds,
   )
   base.replicateCheck = replicate.state
@@ -1371,15 +1414,26 @@ function jointFit(
   const estBounds = tauRange(inBases)
   const seedIndex = start ? gridIndex(Math.round(start.frequencyHz), nearestGridZeta(start.dampingRatio)) : refittedMaximum(states, included).index
   const seed = start ?? DETECTION_GRID[seedIndex]
+  // The variance slope of a detection noise model was estimated on the covariate of the detection's
+  // own corner model, so it is carried with that covariate.
   const noiseAtSeed = included.map((l, k) => {
     if (depositTimeS) return noiseModel(inBases[k], WHITE_START)
     const noise = refine(states[l], seedIndex).fit.noise
-    return noiseModel(inBases[k], noise.fit, noise.varianceSlope, cornerDeficit(inBases[k].rec, 'flow-lag', chosen.flowScale))
+    return noiseModel(inBases[k], noise.fit, noise.varianceSlope, states[l].h0.deficit)
   })
+  // The time constant starts at its best value at the seed over the joint-fit lines alone (golden
+  // section on a log scale), never at the detection's, which a line excluded by the screening
+  // still moves.
+  const cache = new Map<number, NullDesign[]>()
+  const tauStart = minimizeOverLogTau(
+    (tauS) => sumOfSquares(stackedResidual(inBases, noiseAtSeed, seed.frequencyHz, seed.dampingRatio, tauS, cache)),
+    estBounds[0],
+    estBounds[1],
+  )
   const first = varproFit(
     inBases,
     noiseAtSeed,
-    [seed.frequencyHz, seed.dampingRatio, Math.log(chosen.flowScale)],
+    [seed.frequencyHz, seed.dampingRatio, Math.log(tauStart)],
     [true, true, true],
     estBounds,
   )
@@ -1389,11 +1443,9 @@ function jointFit(
     return rawFullResidual(b, noiseAtSeed[k], design, first.frequencyHz, first.dampingRatio, ring, ringScratch(b.m))
   })
   const ar1 = inBases.map((b, k) => fitNoise(b, residuals1[k]))
-  const slope1 = axisVarianceSlope(inBases, ar1, residuals1, first.tauS)
-  const noise1 =
-    slope1 === 0
-      ? ar1
-      : inBases.map((b, k) => noiseModel(b, ar1[k].fit, slope1, cornerDeficit(b.rec, b.cornerModel, first.tauS)))
+  const covariates = inBases.map((b) => varianceCovariate(b.rec, chosen, first.tauS))
+  const slope1 = axisVarianceSlope(inBases, ar1, residuals1, first.tauS, covariates)
+  const noise1 = slope1 === 0 ? ar1 : inBases.map((b, k) => noiseModel(b, ar1[k].fit, slope1, covariates[k]))
   const joint = varproFit(
     inBases,
     noise1,
@@ -1414,7 +1466,7 @@ function jointRefit(detection: AxisDetection, included: number[], depositTimeS: 
   const inBases = jointBases(detection, included, depositTimeS)
   const tauS = held.joint.tauS
   const noise1 = inBases.map((b, k) =>
-    noiseModel(b, held.noise1[k].fit, held.noise1[k].varianceSlope, cornerDeficit(b.rec, b.cornerModel, tauS)),
+    noiseModel(b, held.noise1[k].fit, held.noise1[k].varianceSlope, varianceCovariate(b.rec, detection.chosen, tauS)),
   )
   const joint = varproFit(
     inBases,
@@ -1424,6 +1476,22 @@ function jointRefit(detection: AxisDetection, included: number[], depositTimeS: 
     held.estBounds,
   )
   return { inBases, estBounds: held.estBounds, noise1, joint, rings: jointRings(inBases, noise1, joint) }
+}
+
+/**
+ * The covariate of a joint fit's variance function: the deficit of the corner model the detection
+ * chose, the flow-lag deficit at the joint time constant or the bead-drag lobe at its null-fit
+ * length, so the estimation's variance function is the one the pooled AICc selected.
+ */
+function varianceCovariate(rec: LineRecord, chosen: AxisDetection['chosen'], tauS: number): Float64Array {
+  return chosen.kind === 'flow-lag' ? cornerDeficit(rec, 'flow-lag', tauS) : cornerDeficit(rec, 'bead-drag', chosen.beadScale)
+}
+
+/** The sum of squares of a vector. */
+function sumOfSquares(r: Float64Array): number {
+  let s = 0
+  for (const v of r) s += v * v
+  return s
 }
 
 /** Each line's ring at a joint fit, aligned with the bases. */
@@ -1498,6 +1566,19 @@ function verdict(result: AxisPool): AxisPool {
         'is the likely cause, so no shaper is recommended.',
     )
   }
+  // The proportionality test is the only gate against a forced tone; an axis whose lines cannot
+  // run it with the design power is refused like an unconfirmed speed check.
+  if (result.proportionality === 'not-assessed') {
+    return refusal(
+      result,
+      speed.state === 'not-assessed'
+        ? 'The lines of a coupon with one speed tier cannot tell ringing of the machine from a ' +
+            'steady vibration, such as a fan. Reprint it at a line speed of at least ' +
+            `${MIN_TWO_TIER_LINE_SPEED_MM_S} mm/s on a bed large enough for both speed tiers.`
+        : 'The usable lines of this axis are too few to tell ringing of the machine from a steady ' +
+            'vibration, such as a fan. Rescan the coupon, or reprint it if lines are damaged.',
+    )
+  }
   if (result.replicateCheck === 'failed') {
     return refusal(
       result,
@@ -1537,15 +1618,17 @@ function searchSecondMode(fit: JointFitResult): SecondModeSearch {
   const seed = DETECTION_GRID[top.index]
   const two = twoModeFit(bases, noises, [joint.frequencyHz, joint.dampingRatio, seed.frequencyHz, seed.dampingRatio, Math.log(joint.tauS)], tauBounds)
   if (two === null) return { pBound, modes: null }
-  const [dominant, other] = two.modes[0].mode.amplitudeMm >= two.modes[1].mode.amplitudeMm ? two.modes : [two.modes[1], two.modes[0]]
-  return { pBound, modes: { dominant, other } }
+  const swapped = two.modes[0].mode.amplitudeMm < two.modes[1].mode.amplitudeMm
+  const [dominant, other] = swapped ? [two.modes[1], two.modes[0]] : two.modes
+  return { pBound, modes: { dominant, other, swapped } }
 }
 
 /** The outcome of the second-mode search of a joint fit: its Bonferroni bound and, when it found
- *  a second mode, both modes of the two-mode fit, the dominant (larger amplitude) first. */
+ *  a second mode, both modes of the two-mode fit, the dominant (larger amplitude) first, and
+ *  whether the dominant one is the mode the search found rather than the joint fit's. */
 interface SecondModeSearch {
   pBound: number
-  modes: { dominant: FittedMode; other: FittedMode } | null
+  modes: { dominant: FittedMode; other: FittedMode; swapped: boolean } | null
 }
 
 /** A mode of the two-mode fit with each line's ring of it, aligned with the fit's bases. */
@@ -1700,7 +1783,8 @@ function speedCheck(
   return { state: 'not-confirmed', tiers }
 }
 
-/** One tier: the detection must survive leaving out any single line (Cook 1977). */
+/** One tier: the detection must survive leaving out any single line, the detection test repeated
+ *  with each line deleted in turn (a leave-one-out influence check). */
 function influenceCheck(states: LineState[]): CheckState {
   const K = states.length
   if (K < 2) return 'failed'

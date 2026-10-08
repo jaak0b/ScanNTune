@@ -98,10 +98,9 @@ function refusalCounts(a: IsAxisResult): string[] {
 const snippet = computed(() => {
   const accepted = acceptedAxes.value
   if (accepted.length === 0) return null
-  const lines = accepted.flatMap((a) => [
-    ...formatKlipperShaper(a.axis, a.recommended!).split('\n'),
-    `damping_ratio_${a.axis}: ${a.dampingRatio!.toFixed(3)}`,
-  ])
+  // The formatter sets the damping ratio the recommended shaper was designed at (the measured one
+  // for one mode, Klipper's default for two), so the firmware builds the shaper that was scored.
+  const lines = accepted.flatMap((a) => formatKlipperShaper(a.axis, a.recommended!).split('\n'))
   return { code: ['[input_shaper]', ...lines].join('\n'), note: 'Add the block to printer.cfg and restart the firmware.' }
 })
 </script>
