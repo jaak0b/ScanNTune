@@ -321,7 +321,7 @@ placement, with and without contrast base: 32 cases, all passing, about 1.3 s. A
 left set before each replay. Each case asserts:
 
 - no move exceeds Klipper's default extrusion cross-section (a sanity tripwire, section 1.8);
-- every ladder corner passes at its own commanded rung with no braking, with a motor step equal to the
+- every ladder corner passes at its own planned rung with no braking, with a motor step equal to the
   rung on Cartesian and twice the rung on CoreXY (the reversing motor);
 - the corner kicks never fall within a layer (fastest corners last);
 - the raised limit covers exactly each line's run-up, measured segment, tail and coast, and every other
@@ -332,16 +332,20 @@ left set before each replay. Each case asserts:
 - after every corner the nozzle covers the measured move on the analysis time base, `timeAtDistance`,
   within 1e-6 s (on Marlin also with an S-curve ramp, from the end of the ramp on).
 
-The emitted `M220 S100` itself is pinned by the firmware motion and generator specs. The matrix
-assertions compare corners and timing against the replayed feeds, which already include any speed
-factor, so they would still pass if the reset were missing (a review item in section 5).
+The emitted `M220 S100` itself is pinned by the firmware motion and generator specs, and the matrix
+guards its effect: each corner's speed and motor step, and the measured move's cruise, end speed and
+timing, are compared against the coupon's planned speeds (hand-pinned rung tables per firmware, F1200 to
+F6000 on Klipper and RRF and F1200 to F2796 on Marlin, capped at the 30 mm/s first layer speed on the
+pedestal, and the line's tier speed), never against the replayed feeds, which already include any speed
+factor. Removing `M220 S100` from the generated G-code fails all 32 cases; while the matrix compared
+against the replayed feeds, the same removal failed only the 8 classic-jerk Marlin cases.
 
 Self-tests cover a Klipper corner at the square corner velocity, the centripetal limit v^2 = 0.5 L a, a
 classic-jerk reversal at the jerk value, the empty-queue safe speed, a junction deviation corner at
 sqrt(a J (sqrt(2) + 1)), RRF jerk on the Cartesian direction on CoreXY, the S-curve ramp ending at the
 trapezoid distance, the cross-section flag and M220 scaling. Mutations were checked: dropping the
-per-line raise fails every Klipper case, and dropping the stop before the travel or before the wipe
-fails all 32. Stated limitations, not modelled: Klipper's `limited_cartesian` and `limited_corexy`
+per-line raise fails every Klipper case, dropping the stop before the travel or before the wipe
+fails all 32, and removing `M220 S100` fails all 32. Stated limitations, not modelled: Klipper's `limited_cartesian` and `limited_corexy`
 `max_x_accel` and `max_y_accel`, Marlin's `M200 L` volumetric limit, finite lookahead buffers, step
 quantization, and Z moves (treated as planner boundaries; the coupon moves Z only between layers).
 
@@ -798,8 +802,7 @@ runners are estimated at 10 to 14 minutes and not yet measured.
   (`web/tests/engine/is/ringAnalyzer.spec.ts`); the mirrored render's replicate check sits near its
   threshold (Q 34.3 against 27.9 under one intermediate variant); the one-tier influence refusal still
   says "reprint it with two speed tiers", a setting that no longer exists; `IsTestRequest.linesPerSpeed`
-  remains only for an engine caller (the bottom-rung statistics case); the planner oracle matrix does
-  not by itself detect a missing `M220 S100` (section 1.11).
+  remains only for an engine caller (the bottom-rung statistics case).
 - **Performance**: a detected axis takes about 1.4 to 1.6 s (stage 1 about 0.8 s); `isAnalyzer.spec.ts`
   takes 173 s of test time, its slowest case 33 s against a 240 s per-case timeout.
 - **Motor safety stays empirical**: the 100 mm/s default rests on one tested CoreXY printer. Approaching

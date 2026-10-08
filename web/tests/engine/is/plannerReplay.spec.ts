@@ -126,6 +126,28 @@ const PROFILE_LIMIT: Record<ReplayFirmware, number> = {
   rrf: 5,
 }
 
+/**
+ * The corner speed of each ladder rung as the default coupon commands it on the measured layer,
+ * mm/s, lowest rung first. Hand-derived once: the rungs 20 * (top / 20)^(j / (n - 1)) mm/s
+ * rounded to the whole mm/min the G-code prints. Klipper and RepRapFirmware print five rungs up
+ * to 100 mm/s (F1200, F1794, F2683, F4012, F6000); Marlin's junction deviation caps the corner
+ * at 46.6 mm/s at 3000 mm/s^2, so it prints three (F1200, F1832, F2796).
+ */
+const MEASURED_RUNG_MM_S: Record<Firmware, number[]> = {
+  Klipper: [20, 29.9, 44.716667, 66.866667, 100],
+  Marlin: [20, 30.533333, 46.6],
+  RepRapFirmware: [20, 29.9, 44.716667, 66.866667, 100],
+}
+/** The same rungs on the pedestal layer, where the profile's 30 mm/s first layer speed (F1800)
+ *  caps every line. */
+const PEDESTAL_RUNG_MM_S: Record<Firmware, number[]> = {
+  Klipper: [20, 29.9, 30, 30, 30],
+  Marlin: [20, 30, 30],
+  RepRapFirmware: [20, 29.9, 30, 30, 30],
+}
+/** The pedestal layer's line speed: the profile's 30 mm/s first layer speed. */
+const PEDESTAL_LINE_SPEED_MM_S = 30
+
 const cases: [ReplayFirmware, Firmware, ReplayKinematics, CouponPlacement, boolean][] = []
 for (const [planner, firmware] of PLANNERS) {
   for (const kinematics of ['cartesian', 'corexy'] as const) {
@@ -145,7 +167,9 @@ describe('the input shaper coupon on each firmware planner', () => {
     const spec = fitSpecToPrinter(request, profile).spec
     const g = isCouponGeometry(spec)
     const { ox, oy } = couponOrigin(profile, g.couponWidthMm, g.couponHeightMm, placement)
-    // A speed factor left at 90% before the print: the coupon's M220 S100 must undo it.
+    // A speed factor left at 90% before the print: the coupon's M220 S100 must undo it. The
+    // corner and timing checks below compare against the coupon's planned speeds, never the
+    // replayed feeds (which carry any speed factor left in force), so a missing reset fails them.
     const r = replayGcode(gcode, { firmware: planner, kinematics, initialSpeedFactor: 0.9 })
     const motorFactor = kinematics === 'corexy' ? 2 : 1
     const linesPerLayer = g.printOrder.length
@@ -154,24 +178,33 @@ describe('the input shaper coupon on each firmware planner', () => {
 
     // The ladder corners: the junction where a run-up ends on its line's corner and the
     // measured segment turns 90 degrees.
-    const cornerKeys = new Set(
-      g.groups.flatMap((grp) =>
-        grp.lines.map((l) => `${(ox + l.measured.x0).toFixed(3)},${(oy + l.measured.y0).toFixed(3)}`),
-      ),
+    const at = (x: number, y: number) => `${x.toFixed(3)},${y.toFixed(3)}`
+    const lineAtCorner = new Map(
+      g.groups.flatMap((grp) => grp.lines.map((l) => [at(ox + l.measured.x0, oy + l.measured.y0), l] as const)),
     )
     const isCorner = (j: PlannedJunction) =>
-      cornerKeys.has(`${j.x.toFixed(3)},${j.y.toFixed(3)}`) &&
+      lineAtCorner.has(at(j.x, j.y)) &&
       j.prev.e > 0 &&
       j.next.e > 0 &&
       Math.abs((j.prev.x1 - j.prev.x0) * (j.next.x1 - j.next.x0) + (j.prev.y1 - j.prev.y0) * (j.next.y1 - j.next.y0)) < 1e-6
     const corners = r.junctions.filter(isCorner)
     expect(corners).toHaveLength(2 * linesPerLayer)
-    for (const c of corners) {
-      // Each corner passes at its own commanded rung: no braking, and the motor step is the
+    // Each corner's planned speeds: its line's rung and tier speed on the measured layer, both
+    // capped at the first layer speed on the pedestal layer, which prints first.
+    const planned = corners.map((c, k) => {
+      const line = lineAtCorner.get(at(c.x, c.y))!
+      const pedestal = k < linesPerLayer
+      return {
+        rungMmS: (pedestal ? PEDESTAL_RUNG_MM_S : MEASURED_RUNG_MM_S)[firmware][line.rungIndex],
+        lineMmS: pedestal ? PEDESTAL_LINE_SPEED_MM_S : line.speedMmS,
+      }
+    })
+    corners.forEach((c, k) => {
+      // Each corner passes at its own planned rung: no braking, and the motor step is the
       // rung (Cartesian) or twice the rung (the CoreXY motor that reverses).
-      expect(Math.abs(c.speedMmS - c.prev.feedMmS)).toBeLessThan(1e-3)
-      expect(Math.abs(c.motorStepMmS - motorFactor * c.prev.feedMmS)).toBeLessThan(2e-3)
-    }
+      expect(Math.abs(c.speedMmS - planned[k].rungMmS)).toBeLessThan(1e-3)
+      expect(Math.abs(c.motorStepMmS - motorFactor * planned[k].rungMmS)).toBeLessThan(2e-3)
+    })
     // The kicks never fall within a layer: the fastest corners print last.
     for (let layer = 0; layer < 2; layer++) {
       const kicks = corners.slice(layer * linesPerLayer, (layer + 1) * linesPerLayer).map((c) => c.motorStepMmS)
@@ -201,7 +234,6 @@ describe('the input shaper coupon on each firmware planner', () => {
     // planner segment (the planner came to rest before them), so no corner kick follows a
     // travel or wipe junction and none lands on a rotor still ringing from the last line.
     const segmentStarts = new Set(r.starts.map((s) => s.move))
-    const at = (x: number, y: number) => `${x.toFixed(3)},${y.toFixed(3)}`
     const primeStarts = new Set(g.groups.flatMap((grp) => grp.lines.map((l) => at(ox + l.prime.x0, oy + l.prime.y0))))
     const primeEnds = new Set(g.groups.flatMap((grp) => grp.lines.map((l) => at(ox + l.prime.x1, oy + l.prime.y1))))
     const travelsToLines = r.moves.filter((m) => m.kind === 'xy' && m.e === 0 && primeStarts.has(at(m.x1, m.y1)))
@@ -213,12 +245,12 @@ describe('the input shaper coupon on each firmware planner', () => {
     for (const m of [...travelsToLines, ...primes, ...wipes]) expect(segmentStarts.has(m)).toBe(true)
 
     // After each corner the nozzle covers the measured segment on the time base the analysis
-    // uses: the commanded trapezoid from the rung to the line speed (on Marlin also with an
+    // uses: the planned trapezoid from the rung to the line speed (on Marlin also with an
     // S-curve ramp, from the end of the ramp on), cruising to the end of the measured move.
-    for (const c of corners) {
+    for (const [k, c] of corners.entries()) {
       const m = c.next
-      const corner = c.prev.feedMmS
-      const line = m.feedMmS
+      const corner = planned[k].rungMmS
+      const line = planned[k].lineMmS
       expect(Math.abs(m.cruiseMmS - line)).toBeLessThan(1e-6)
       expect(Math.abs(m.endMmS - line)).toBeLessThan(1e-6)
       const rampMm = (line * line - corner * corner) / (2 * spec.accelMmS2)
