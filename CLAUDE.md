@@ -46,7 +46,7 @@ npm run build        # vue-tsc typecheck + production build to web/dist
 npm test             # Vitest: engine unit tests + fixture-backed CV tests (whole suite: CI only)
 npm run test:stats   # Vitest: the input shaper statistics suite (web/tests/stats), not part of npm test (CI only)
 npm run e2e          # Playwright end-to-end over the real scans in web/e2e/fixtures (CI only)
-npx vitest run FILE  # the only test command for the owner's machine: the affected spec files
+npx vitest run FILE  # the only test command for the owner's machine: at most about three affected spec files
 ```
 
 Structure:
@@ -375,9 +375,10 @@ green (and, for any change to the measurement pipeline, the synthetic-fixture va
 automated gate is sufficient: do not additionally launch a dev server for manual browser verification unless
 the owner asks for it. On the owner's machine, never run a full suite: not `npm test` without file
 filters, not `npm run e2e`, and not `npm run test:stats` (the whole statistics suite). The full gate and the
-statistics suite run on CI only. A change runs only the tests it actually affects (the specific spec files,
-e.g. `npx vitest run tests/engine/em/emAnalyzer.spec.ts`), plus the type check (`npx vue-tsc --noEmit`).
-Make all the code changes first, then run the affected tests once at the end, plus at most once at the
+statistics suite run on CI only. A change runs only the tests it actually affects, at most a very small
+handful of spec files (about three, e.g. `npx vitest run tests/engine/em/emAnalyzer.spec.ts`), plus the
+type check (`npx vue-tsc --noEmit`). Any bigger set of tests, and every full suite, runs on GitHub CI after
+a push. Make all the code changes first, then run the affected tests once at the end, plus at most once at the
 start when a baseline is needed; do not re-run tests repeatedly while working. The exception is a bug fix,
 which is test-driven: write the failing test first, run it to see it fail, fix the code, run it to see it
 pass. A single statistics file (`tests/stats`) may be run locally only when the change adds or edits that
