@@ -119,22 +119,15 @@ jobs:
 
   # The statistical calibration suite of the input shaper analysis (web/tests/stats): fixed-seed
   # simulations kept out of the default run because they take minutes, not seconds. The job runs
-  # only when the changes job finds a changed dependency of the suite. The files run
-  # in 13 shards, at most three files each at the current 38 files, and vitest starts one worker
-  # per vCPU of the runner (four on the standard runner of a public repository), so every file of
-  # a shard starts at once and a shard takes its slowest file plus about two minutes of setup.
-  # Raise the shard count when files are added, to keep at most three files per shard. The
-  # per-test budget (vitest.stats.config.ts) ends before the job timeout, so a hung file fails
-  # under its own name. The suite needs no LFS fixtures.
+  # only when the changes job finds a changed dependency of the suite. The suite is two files
+  # (no false detection on pure noise, honest frequency interval), run in one job with one
+  # worker per vCPU of the runner. The per-test budget (vitest.stats.config.ts) ends before the
+  # job timeout, so a hung file fails under its own name. The suite needs no LFS fixtures.
   stats:
     needs: changes
     if: needs.changes.outputs.stats == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 25
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -145,7 +138,7 @@ jobs:
           cache: npm
           cache-dependency-path: web/package-lock.json
       - run: npm ci
-      - run: npm run test:stats -- --shard=${{ matrix.shard }}/13 --maxWorkers=$(nproc)
+      - run: npm run test:stats -- --maxWorkers=$(nproc)
 
   e2e:
     runs-on: ubuntu-latest

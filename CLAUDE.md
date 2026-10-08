@@ -106,8 +106,9 @@ Two durable gotchas:
   time via the Vite `define` `__APP_VERSION__`.
 
 CI: `.github/workflows/web-ci.yml` builds, unit-tests, and e2e-tests the app on pull requests and on pushes
-to `master`, and runs the input shaper statistics suite as its own `stats` job in 13 shards of at most 3 files
-(`npm run test:stats -- --shard=N/13`), only when the input shaper analysis or the suite's own files change
+to `master`, and runs the input shaper statistics suite (two files: no false detection on pure noise, honest
+frequency interval) as its own `stats` job (`npm run test:stats`), only when the input shaper analysis or the
+suite's own files change
 (the path list lives in the `changes` job of `web-ci.yml`); `.github/workflows/deploy-web.yml` builds `web/dist` and
 publishes it to GitHub Pages on every push to `master` (served at `https://scanntune.jaak0b.at/`).
 Note: push-triggered Pages deploys on this repo sometimes fail with "Deployment failed, try again later" (a GitHub-side flake, seen on both the old C# and the
