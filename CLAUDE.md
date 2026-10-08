@@ -43,9 +43,10 @@ Commands (run inside `web/`):
 npm install
 npm run dev          # Vite dev server at http://localhost:5173/
 npm run build        # vue-tsc typecheck + production build to web/dist
-npm test             # Vitest: engine unit tests + fixture-backed CV tests
-npm run test:stats   # Vitest: the input shaper statistics suite (web/tests/stats), not part of npm test
-npm run e2e          # Playwright end-to-end over the real scans in web/e2e/fixtures
+npm test             # Vitest: engine unit tests + fixture-backed CV tests (whole suite: CI only)
+npm run test:stats   # Vitest: the input shaper statistics suite (web/tests/stats), not part of npm test (CI only)
+npm run e2e          # Playwright end-to-end over the real scans in web/e2e/fixtures (CI only)
+npx vitest run FILE  # the only test command for the owner's machine: the affected spec files
 ```
 
 Structure:
@@ -372,11 +373,17 @@ shipped source, comments, or UI text: they are guidance for how to work, not doc
 **Verification bar.** The standard for "verified" is `npm run build` plus `npm test` plus `npm run e2e` all
 green (and, for any change to the measurement pipeline, the synthetic-fixture validation of rule 1). That
 automated gate is sufficient: do not additionally launch a dev server for manual browser verification unless
-the owner asks for it. On the owner's local dev machine, run ONLY the unit tests that cover the code
-actually changed (e.g. `npx vitest run tests/engine/em/emAnalyzer.spec.ts` with the specific spec paths);
-running the full suite locally (`npm test` without a file filter, or `npm run e2e`) is forbidden. The
-statistics suite runs on CI in four shards; locally it may be run only when the input shaper analysis
-changed. The full gate is CI's job now: it still defines "verified", but CI runs it, not the local machine.
+the owner asks for it. On the owner's machine, never run a full suite: not `npm test` without file
+filters, not `npm run e2e`, and not `npm run test:stats` (the whole statistics suite). The full gate and the
+statistics suite run on CI only. A change runs only the tests it actually affects (the specific spec files,
+e.g. `npx vitest run tests/engine/em/emAnalyzer.spec.ts`), plus the type check (`npx vue-tsc --noEmit`).
+Make all the code changes first, then run the affected tests once at the end, plus at most once at the
+start when a baseline is needed; do not re-run tests repeatedly while working. The exception is a bug fix,
+which is test-driven: write the failing test first, run it to see it fail, fix the code, run it to see it
+pass. A single statistics file (`tests/stats`) may be run locally only when the change adds or edits that
+exact file (`npx vitest run --config vitest.stats.config.ts tests/stats/NAME.stats.spec.ts`); otherwise
+statistics results come from CI. The full gate still defines "verified", but CI runs it, not the local
+machine.
 
 **Subagent routing.** When delegating to a subagent, prefer the `cavecrew-*` types wherever the task fits,
 because their output is caveman-compressed and keeps the parent context small: use `cavecrew-investigator`
