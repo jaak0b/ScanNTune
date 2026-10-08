@@ -61,9 +61,6 @@ interface FirmwareCommand {
   skewCode: string
 }
 
-const FIRMWARES = ['Klipper', 'Marlin', 'RepRapFirmware'] as const
-type Firmware = (typeof FIRMWARES)[number]
-
 // ---- Helpers ----
 
 /** Exact-text comparison via a retrying poll, safe for multi-line strings (Playwright's
@@ -73,9 +70,11 @@ async function expectExactText(locator: Locator, expected: string): Promise<void
   await expect.poll(() => locator.innerText()).toBe(expected)
 }
 
-async function selectFirmware(page: Page, firmware: Firmware): Promise<void> {
+/** Opens the Firmware select, checks it offers Klipper as its only option, and picks it. */
+async function selectOnlyFirmwareKlipper(page: Page): Promise<void> {
   await page.getByTestId('firmware-select').click()
-  await page.getByRole('option', { name: firmware, exact: true }).click()
+  await expect(page.getByRole('option')).toHaveText(['Klipper'])
+  await page.getByRole('option', { name: 'Klipper', exact: true }).click()
 }
 
 /** Reads a `scale-*`/`skew-*` tile's displayed value and checks its explicit sign and band. */
@@ -184,7 +183,7 @@ interface TwoScanCase {
   skewXY: Band
   moreScans: string
   shrinkageCode: string
-  firmware: Record<Firmware, FirmwareCommand>
+  klipper: FirmwareCommand
 }
 
 const twoScanCases: TwoScanCase[] = [
@@ -199,20 +198,10 @@ const twoScanCases: TwoScanCase[] = [
     moreScans:
       'XY plate: Scan this plate 2 more times to get a confidence range, which shows how tightly the value is pinned down.',
     shrinkageCode: 'XY 100.13 %',
-    firmware: {
-      Klipper: {
-        reset: 'SET_SKEW CLEAR=1',
-        skewCode:
-          'Paste into the Klipper console:\nSET_SKEW XY=99.575,100.427,70.713\nSKEW_PROFILE SAVE=ScanNTune\nSAVE_CONFIG',
-      },
-      Marlin: {
-        reset: 'M852 I0 J0 K0\nM500',
-        skewCode: 'M852 I-0.008528\nM500',
-      },
-      RepRapFirmware: {
-        reset: 'M556 S100 X0 Y0 Z0',
-        skewCode: 'M556 S100 X0.853',
-      },
+    klipper: {
+      reset: 'SET_SKEW CLEAR=1',
+      skewCode:
+        'Paste into the Klipper console:\nSET_SKEW XY=99.575,100.427,70.713\nSKEW_PROFILE SAVE=ScanNTune\nSAVE_CONFIG',
     },
   },
   {
@@ -226,20 +215,10 @@ const twoScanCases: TwoScanCase[] = [
     moreScans:
       'XY plate: Scan this plate 2 more times to get a confidence range, which shows how tightly the value is pinned down.',
     shrinkageCode: 'XY 100.23 %',
-    firmware: {
-      Klipper: {
-        reset: 'SET_SKEW CLEAR=1',
-        skewCode:
-          'Paste into the Klipper console:\nSET_SKEW XY=99.577,100.425,70.713\nSKEW_PROFILE SAVE=ScanNTune\nSAVE_CONFIG',
-      },
-      Marlin: {
-        reset: 'M852 I0 J0 K0\nM500',
-        skewCode: 'M852 I-0.008475\nM500',
-      },
-      RepRapFirmware: {
-        reset: 'M556 S100 X0 Y0 Z0',
-        skewCode: 'M556 S100 X0.848',
-      },
+    klipper: {
+      reset: 'SET_SKEW CLEAR=1',
+      skewCode:
+        'Paste into the Klipper console:\nSET_SKEW XY=99.577,100.425,70.713\nSKEW_PROFILE SAVE=ScanNTune\nSAVE_CONFIG',
     },
   },
 ]
@@ -257,12 +236,10 @@ for (const c of twoScanCases) {
     await expect(page.getByTestId('more-scans-XY')).toHaveText(c.moreScans)
     await expect(page.locator('[data-testid^="zero-note"]')).toHaveCount(0)
 
-    // Step 12: every firmware's reset command and skew-code.
-    for (const fw of FIRMWARES) {
-      await selectFirmware(page, fw)
-      await expectExactText(page.getByTestId('reset-skew-code'), c.firmware[fw].reset)
-      await expectExactText(page.getByTestId('skew-code'), c.firmware[fw].skewCode)
-    }
+    // Step 12: the Firmware select offers Klipper only; its reset command and skew-code.
+    await selectOnlyFirmwareKlipper(page)
+    await expectExactText(page.getByTestId('reset-skew-code'), c.klipper.reset)
+    await expectExactText(page.getByTestId('skew-code'), c.klipper.skewCode)
 
     // Step 13: Fix shrinkage tab, Format left at default (Shrinkage %), asserted once.
     await page.getByTestId('fix-tab-shrinkage').click()

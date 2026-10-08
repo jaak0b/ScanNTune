@@ -38,23 +38,17 @@ with it. The new scans read `scan-flip` `None` on every fixture.
   correct for this printed sample. This is the strongest tier: a real printed defect, a real
   firmware family the owner runs, and a real human judgment that the app's reading matches the
   physical part.
-- **Marlin (`M852`) and RepRapFirmware (`M556`) commands: owner-reviewed.** The owner does not run
-  either firmware on real hardware, so these commands cannot be hardware-validated by a print. Per
-  the project's two-tier approval model, the owner instead reviewed the app's emitted Marlin and RRF
-  output for this scan (captured below) and judged it correct from domain knowledge (the sign
-  convention documented in `correctionFormatter.ts`: RRF's `AxisTransform` adds the factor, opposite
-  of Marlin's planner, so the RRF value is the negation of the Marlin-style factor at the same
-  physical skew). **These two firmwares' values are recorded here for owner sign-off; they are not
-  yet hardware-confirmed and should be reviewed again before being frozen into a committed test.**
-- **The reset commands (step 2, `SET_SKEW CLEAR=1` / `M852 I0 J0 K0` / `M556 S100 X0 Y0 Z0`)** are
-  static per-firmware boilerplate with no scan-dependent figures; they inherit the same tier as
-  their firmware family above (Klipper reset is exercised as part of the owner's real hardware
-  workflow; Marlin/RRF resets are owner-reviewed text only).
+- **Marlin and RepRapFirmware commands: retired 2026-10-08.** By owner decision the app supports
+  Klipper only, so the owner-reviewed Marlin and RepRapFirmware values recorded here earlier were
+  removed together with those firmwares.
+- **The reset command (step 2, `SET_SKEW CLEAR=1`)** is static Klipper boilerplate with no
+  scan-dependent figures; it inherits the Klipper tier above (it is exercised as part of the owner's
+  real hardware workflow).
 - **The shrinkage fix (`shrinkage-code`, "XY N %")** is driven by the "Format" selector, which is
   independent of the Firmware selector (see "Firmware vs. Format are independent controls" below).
   Its default format, Shrinkage %, is a slicer-facing figure with no firmware-specific sign
   convention, so it carries the same tier as the scale figures it is computed from: hardware-validated
-  for this Klipper-associated capture. A separate Z figure appears alongside the XY figure when a
+  for this Klipper capture. A separate Z figure appears alongside the XY figure when a
   standing plate (XZ or YZ) measured Z. Every value recorded below was captured with no current
   shrinkage compensation entered (the current-compensation fields left empty), so each figure is the
   uncompounded measured deviation.
@@ -63,20 +57,19 @@ with it. The new scans read `scan-flip` `None` on every fixture.
 
 The XY/skew page has two separate selectors that are easy to conflate:
 
-- **Firmware** (top-right of the page, `Klipper` / `Marlin` / `RepRapFirmware`): drives the step 2
-  reset command AND the "Fix skew" tab's `skew-code`. This is a simple `v-select`; there is no
-  printer-profile system on this page (unlike PA/EM/IS). Switching it re-renders the already-computed
-  skew fix instantly; it does **not** require re-analyzing the scans.
-- **Format** (inside the "Fix shrinkage" tab, `Shrinkage %` / `Steps/mm` / `Rotation distance` / `Scale %`):
-  drives `shrinkage-code`. It is completely independent of the Firmware selector: switching Firmware between
-  Klipper/Marlin/RepRapFirmware while Format stays on `Shrinkage %` leaves `shrinkage-code` unchanged. This
-  was confirmed empirically: `shrinkage-code` read the identical string (`XY 100.16 %` for the
-  300 dpi case) under all three Firmware selections.
+- **Firmware** (top-right of the page): a simple `v-select` whose only option, since the owner's
+  2026-10-08 decision to support Klipper only, is `Klipper`. The step 2 reset command and the
+  "Fix skew" tab's `skew-code` are Klipper commands. There is no printer-profile system on this page
+  (unlike PA/EM/IS).
+- **Format** (inside the "Fix shrinkage" tab, `Shrinkage %` / `Rotation distance` / `Scale %`; the
+  former `Steps/mm` format was retired with Marlin): drives `shrinkage-code`. It is independent of the
+  Firmware selector. This was confirmed empirically while three firmwares were still offered:
+  `shrinkage-code` read the identical string (`XY 100.16 %` for the 300 dpi case) under every Firmware
+  selection.
 
-Every capture below used the default Format, `Shrinkage %` (the only one of the four formats that
-needs no additional user-entered "current steps/mm" or "current rotation distance" input, so it is
-reachable with no extra data entry). `shrinkage-code` is therefore recorded once per DPI case, not once
-per firmware.
+Every capture below used the default Format, `Shrinkage %` (it needs no additional user-entered
+"current rotation distance" input, so it is reachable with no extra data entry). `shrinkage-code` is
+therefore recorded once per DPI case.
 
 ## Seed calibration (scanner calibration carve-out)
 
@@ -174,22 +167,18 @@ Per-scan: `ring-count` `23 of 23` (both), `scan-angle` `359.5°` and `90.1°`, `
 | `more-scans-XY` | `XY plate: Scan this plate 2 more times to get a confidence range, which shows how tightly the value is pinned down.` | exact string | Deterministic UI text for exactly 2 measured scans (`MIN_SCANS_FOR_RANGE` is 4 in `scanCombiner.ts`); no range widget renders yet. |
 | `zero-note-*` | not present (no element matches `[data-testid^="zero-note"]`) | exact (absent) | Every figure is well outside its (not-yet-shown) confidence range at zero; no "well calibrated" or "no correction needed" note applies. |
 
-**Firmware commands, per firmware (Klipper hardware-validated; Marlin/RRF owner-reviewed, pending
-explicit owner sign-off on the literal strings below):**
+**Klipper commands (hardware-validated):**
 
 | firmware | reset command (step 2, always shown regardless of scan) | `skew-code` (exact text) |
 |---|---|---|
 | Klipper | `SET_SKEW CLEAR=1` | `Paste into the Klipper console:`<br>`SET_SKEW XY=99.575,100.427,70.713`<br>`SKEW_PROFILE SAVE=ScanNTune`<br>`SAVE_CONFIG` |
-| Marlin | `M852 I0 J0 K0`<br>`M500` | `M852 I-0.008528`<br>`M500` |
-| RepRapFirmware | `M556 S100 X0 Y0 Z0` | `M556 S100 X0.853` |
 
 `skew-code`'s displayed text includes the caption line ("Paste into the Klipper console:") because
 the `data-testid="skew-code"` attribute lands on `CodeBlock`'s outer wrapper div (Vue attribute
-fallthrough), which contains both the caption paragraph and the `<pre>` code; Marlin and RRF have no
-caption for this correction, so their `skew-code` text is only the command lines. Assert the whole
+fallthrough), which contains both the caption paragraph and the `<pre>` code. Assert the whole
 displayed string exactly, newlines included; there is no partial/regex assertion in this suite.
 
-`shrinkage-code` (Format: `Shrinkage %`, same value under all three firmware selections):
+`shrinkage-code` (Format: `Shrinkage %`):
 **`XY 100.13 %`**
 
 ### Case: 150 dpi, quarter-turn pair (`xy_0d_150dpi_black_white.jpg` + `xy_90d_150dpi_black_white.jpg`)
@@ -205,13 +194,11 @@ Per-scan: `ring-count` `23 of 23` (both), `scan-angle` `359.5°` and `90.1°`, `
 | `more-scans-XY` | `XY plate: Scan this plate 2 more times to get a confidence range, which shows how tightly the value is pinned down.` | exact string | Same rationale as the 300 dpi case. |
 | `zero-note-*` | not present | exact (absent) | Same rationale as the 300 dpi case. |
 
-**Firmware commands, per firmware:**
+**Klipper commands (hardware-validated):**
 
 | firmware | reset command | `skew-code` (exact text) |
 |---|---|---|
 | Klipper | `SET_SKEW CLEAR=1` | `Paste into the Klipper console:`<br>`SET_SKEW XY=99.577,100.425,70.713`<br>`SKEW_PROFILE SAVE=ScanNTune`<br>`SAVE_CONFIG` |
-| Marlin | `M852 I0 J0 K0`<br>`M500` | `M852 I-0.008475`<br>`M500` |
-| RepRapFirmware | `M556 S100 X0 Y0 Z0` | `M556 S100 X0.848` |
 
 `shrinkage-code` (Format: `Shrinkage %`): **`XY 100.23 %`**
 
@@ -363,9 +350,8 @@ render), because neither scan reached the `Measured` state.
 
 ## Open items for the owner
 
-1. **Marlin and RepRapFirmware command strings** (both DPI cases' `skew-code`, plus the static reset
-   commands) are recorded above from the running app but need the owner's explicit review sign-off
-   per the owner-reviewed tier, since the owner does not run either firmware on physical hardware.
+1. **Retired 2026-10-08.** The Marlin and RepRapFirmware command strings this item awaited sign-off
+   for were removed when the app became Klipper only (owner decision).
 2. **Resolution-mismatch handling is now correct (commit 181ba92); both 3.4 and 3.5 are handled, not
    gaps.** The former soft-warning / silent-accept behavior is gone. A per-scan resolution verdict
    now flags any scan whose measured resolution disagrees with the seeded calibration's DPI (or with

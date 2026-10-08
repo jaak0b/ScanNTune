@@ -4,7 +4,7 @@ Feature folder: `web/e2e/skew-shrinkage/`. Golden sample set and its provenance:
 `web/e2e/skew-shrinkage/golden/PROVENANCE.md`. All literal values in this spec are copied verbatim
 from that file; none are computed here. This is a phase 1 spec only: no `.spec.ts` exists yet and
 none should be written from this document without the owner's review of `PROVENANCE.md`'s open
-items (Marlin/RRF sign-off, the 3.4 gap).
+items (the 3.4 gap).
 
 This spec covers the `XY` plane only. `XZ` and `YZ` (the standing plates) need their own golden
 sample sets and their own flow specs; they are out of scope here.
@@ -92,20 +92,17 @@ degrees for skew) are stated once in "Assertions per case" and apply to both row
 10. Wait for the results section to appear: `scale-X` (`data-testid="scale-X"`) becoming visible is
     a sufficient signal (it renders together with the rest of the results panel).
 11. Read every field in "Assertions per case" below off the results panel.
-12. Switch the "Firmware" select (no testid today; it is the `v-select` inside `.firmware-select`,
-    labelled "Firmware" — add a testid, for example `firmware-select`, before writing the test) to
-    each of `Klipper`, `Marlin`, and `RepRapFirmware` in turn. Switching firmware does not require
-    re-uploading or re-analyzing: the skew fix re-renders immediately from the already-computed
-    result. For each firmware, read the step 2 reset command and the "Fix skew" tab's `skew-code`
-    (`data-testid="skew-code"`) and compare against "Firmware commands" below. The step 2 reset
-    command has no testid today; add one (for example `reset-skew-code`) before writing the test.
+12. Open the "Firmware" select (`data-testid="firmware-select"`) and assert it offers exactly one
+    option, `Klipper` (the app supports Klipper only, by the owner's 2026-10-08 decision); pick it.
+    Picking it does not require re-uploading or re-analyzing. Read the step 2 reset command
+    (`data-testid="reset-skew-code"`) and the "Fix skew" tab's `skew-code` (`data-testid="skew-code"`)
+    and compare against "Klipper commands" below.
 13. Click the "Fix shrinkage" tab (no testid today on the tab buttons themselves; they are
     `button.fix-tab` elements with the visible text `Fix skew` / `Fix shrinkage` — add testids, for
     example `fix-tab-skew` / `fix-tab-shrinkage`, before writing the test) and read `shrinkage-code`
     (`data-testid="shrinkage-code"`) once, with the Format selector left at its default, `Shrinkage %`.
-    `shrinkage-code` does not depend on which firmware was selected in step 12; see `PROVENANCE.md`'s
-    "Firmware vs. Format are independent controls" for the empirical confirmation. Assert it once
-    per case, not once per firmware.
+    `shrinkage-code` does not depend on the Firmware select; see `PROVENANCE.md`'s "Firmware vs.
+    Format are independent controls". Assert it once per case.
 
 ## Assertions per case
 
@@ -123,14 +120,12 @@ in this set are positive).
 | `more-scans-XY` | exact text `XY plate: Scan this plate 2 more times to get a confidence range, which shows how tightly the value is pinned down.` |
 | any `[data-testid^="zero-note"]` | element count 0 |
 
-Firmware commands (assert the exact displayed string, newlines included; see `PROVENANCE.md` for why
-Klipper's includes a caption line and Marlin/RRF's do not):
+Klipper commands (assert the exact displayed string, newlines included; see `PROVENANCE.md` for why
+`skew-code` includes a caption line):
 
 | firmware | reset command | `skew-code` |
 |---|---|---|
 | Klipper | `SET_SKEW CLEAR=1` | `Paste into the Klipper console:\nSET_SKEW XY=99.575,100.427,70.713\nSKEW_PROFILE SAVE=ScanNTune\nSAVE_CONFIG` |
-| Marlin | `M852 I0 J0 K0\nM500` | `M852 I-0.008528\nM500` |
-| RepRapFirmware | `M556 S100 X0 Y0 Z0` | `M556 S100 X0.853` |
 
 `shrinkage-code`: exact text `XY 100.13 %`.
 
@@ -144,13 +139,11 @@ Klipper's includes a caption line and Marlin/RRF's do not):
 | `more-scans-XY` | exact text `XY plate: Scan this plate 2 more times to get a confidence range, which shows how tightly the value is pinned down.` |
 | any `[data-testid^="zero-note"]` | element count 0 |
 
-Firmware commands:
+Klipper commands:
 
 | firmware | reset command | `skew-code` |
 |---|---|---|
 | Klipper | `SET_SKEW CLEAR=1` | `Paste into the Klipper console:\nSET_SKEW XY=99.577,100.425,70.713\nSKEW_PROFILE SAVE=ScanNTune\nSAVE_CONFIG` |
-| Marlin | `M852 I0 J0 K0\nM500` | `M852 I-0.008475\nM500` |
-| RepRapFirmware | `M556 S100 X0 Y0 Z0` | `M556 S100 X0.848` |
 
 `shrinkage-code`: exact text `XY 100.23 %`.
 
@@ -324,13 +317,13 @@ Journey: identical steps 1 through 6 above, then:
   (one scan flagged, singular `analyze-reason`) and 3.5 (both flagged, plural `analyze-reason`)
   disable Analyze and render no result; the old `scale-mismatch-warning` element no longer exists.
   Do not write any assertion against `scale-mismatch-warning`.
-- **`skew-code`'s displayed text includes a caption line for Klipper only.** Do not write a
+- **`skew-code`'s displayed text includes a caption line.** Do not write a
   selector or regex that strips the caption; transcribe the full displayed string as given in
   "Assertions per case" above, exactly as `PROVENANCE.md` recorded it.
 - Analysis on a 35 MP-class scan (the 300 dpi fixtures here) can take on the order of a minute in the
   Web Worker; size the visibility timeouts generously (for example 120000 ms, matching the skill's
   EM precedent), never shrink them for tidiness.
-- Firmware switching (step 12) is synchronous, client-side reactive state; it needs no explicit wait
+- Picking the firmware (step 12) is synchronous, client-side reactive state; it needs no explicit wait
   beyond Playwright's normal auto-retrying assertions, since no new analysis or network activity
   occurs.
 - The XZ and YZ planes, and multi-plane scan sets (a plate combining more than one plane), are out
