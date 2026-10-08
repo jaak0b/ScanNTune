@@ -102,28 +102,53 @@ describe('isCheckRows', () => {
     expect(rows).toContainEqual({ label: 'Second mode grows with corner speed', value: 'yes' })
     expect(rows).toContainEqual({ label: 'Print or scan pattern 1 period', value: '2.00 mm' })
     expect(rows).toContainEqual({ label: 'Print or scan pattern 1 source', value: 'GT2 belt pitch' })
+    expect(rows).toContainEqual({ label: 'Print or scan pattern 1 harmonic', value: '1' })
     expect(rows).toContainEqual({ label: 'Print or scan pattern 2 period', value: '1.71 mm' })
     expect(rows).toContainEqual({ label: 'Print or scan pattern 2 source', value: 'not a known period' })
-    expect(rows).toContainEqual({ label: 'Print or scan pattern 3 source', value: 'pixel locking of the tracer, harmonic 1' })
+    expect(rows).toContainEqual({ label: 'Print or scan pattern 3 source', value: 'pixel locking of the tracer' })
+    expect(rows).toContainEqual({ label: 'Print or scan pattern 3 harmonic', value: '1' })
+    expect(rows.map((r) => r.label)).not.toContain('Print or scan pattern 2 harmonic')
     expect(rows.map((r) => r.label)).not.toContain('Print or scan pattern 3 period')
     expect(rows).toContainEqual({ label: 'Corner model', value: 'extrusion lag' })
     expect(rows).toContainEqual({ label: 'Extrusion lag time constant', value: '41 ms' })
   })
 
-  it('reports the along-track lag correction with the other axis named, and omits it before a fit', () => {
-    expect(isCheckRows(axis({ alongTrackLag: 'corrected' }))).toContainEqual({
-      label: 'Corrected for X axis ringing along the lines',
-      value: 'yes',
-    })
-    expect(isCheckRows(axis({ axis: 'x', alongTrackLag: 'other-axis-not-measured' }))).toContainEqual({
-      label: 'Corrected for Y axis ringing along the lines',
-      value: 'not possible, Y axis ringing not measured',
-    })
-    expect(isCheckRows(axis({ alongTrackLag: 'joint-fit-failed' }))).toContainEqual({
-      label: 'Corrected for X axis ringing along the lines',
-      value: 'not possible, the joint fit of both axes failed',
-    })
-    expect(isCheckRows(axis({})).map((r) => r.label)).not.toContain('Corrected for X axis ringing along the lines')
+  it('names the GT2 second harmonic and a JPEG block as separate source and harmonic rows', () => {
+    const rows = isCheckRows(
+      axis({
+        artifacts: [
+          { periodMm: 1, pixelLockHarmonic: null, known: true, detectionPBound: 1e-15 },
+          { periodMm: 0.3387, pixelLockHarmonic: null, known: true, detectionPBound: 1e-11 },
+        ],
+      }),
+    )
+    expect(rows).toContainEqual({ label: 'Print or scan pattern 1 period', value: '1.00 mm' })
+    expect(rows).toContainEqual({ label: 'Print or scan pattern 1 source', value: 'GT2 belt pitch' })
+    expect(rows).toContainEqual({ label: 'Print or scan pattern 1 harmonic', value: '2' })
+    expect(rows).toContainEqual({ label: 'Print or scan pattern 2 period', value: '0.34 mm' })
+    expect(rows).toContainEqual({ label: 'Print or scan pattern 2 source', value: 'JPEG block of the scan' })
+    expect(rows.map((r) => r.label)).not.toContain('Print or scan pattern 2 harmonic')
+  })
+
+  it('reports an applied along-track lag correction as yes with no reason row', () => {
+    const rows = isCheckRows(axis({ alongTrackLag: 'corrected' }))
+    expect(rows).toContainEqual({ label: 'Corrected for X axis ringing along the lines', value: 'yes' })
+    expect(rows.map((r) => r.label)).not.toContain('Reason not corrected')
+  })
+
+  it('reports a missing along-track lag correction as no with the reason in its own row', () => {
+    const unmeasured = isCheckRows(axis({ axis: 'x', alongTrackLag: 'other-axis-not-measured' }))
+    expect(unmeasured).toContainEqual({ label: 'Corrected for Y axis ringing along the lines', value: 'no' })
+    expect(unmeasured).toContainEqual({ label: 'Reason not corrected', value: 'Y axis ringing not measured' })
+    const failed = isCheckRows(axis({ alongTrackLag: 'joint-fit-failed' }))
+    expect(failed).toContainEqual({ label: 'Corrected for X axis ringing along the lines', value: 'no' })
+    expect(failed).toContainEqual({ label: 'Reason not corrected', value: 'joint fit of both axes failed' })
+  })
+
+  it('omits the along-track lag rows before a joint fit', () => {
+    const labels = isCheckRows(axis({})).map((r) => r.label)
+    expect(labels).not.toContain('Corrected for X axis ringing along the lines')
+    expect(labels).not.toContain('Reason not corrected')
   })
 
   it('shows the bead drag length for the bead-drag corner model', () => {

@@ -43,12 +43,13 @@ function residualHeader(a: IsAxisResult): string {
     : 'Residual vibration across the tolerance band'
 }
 
-// The lines a refused axis left out of its joint fit are summarized in its alert as one
-// labeled count per category, so the alert reads as a short list of facts instead of
-// repeated prose; each label describes what the line looked like, not which internal gate
-// refused it. A line that entered the joint fit carries no refusal category, so the counts
-// cover exactly the lines the table below shows as "In joint fit: no". On a measured axis
-// the table alone shows the per-line outcomes.
+// The refused lines of a refused axis are summarized in its alert as one labeled count per
+// refusal category, so the alert reads as a short list of facts instead of repeated prose;
+// each label describes what the line looked like, not which internal gate refused it. Only a
+// line with a refusal category is counted; a line in the joint fit has none. An axis refused
+// before its joint fit (no ringing detected, or too few lines left after the screening) puts
+// no line in a joint fit, so the table below shows "In joint fit: no" also for lines the
+// counts leave out. On a measured axis the table alone shows the per-line outcomes.
 const CATEGORY_LABELS: Record<NonNullable<IsLineRefusalCategory>, string> = {
   'irregular-trace': 'Trace too irregular to read as ringing',
   'out-of-band': `Ringing outside the ${F_MIN_HZ} to ${F_MAX_HZ} Hz measurable range`,

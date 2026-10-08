@@ -32,20 +32,24 @@ function pBoundText(p: number | null): string {
   return p >= 0.001 ? p.toPrecision(2) : p.toExponential(1)
 }
 
-/** Where a detected print or scan pattern comes from: its known source, or none. */
-function patternSource(artifact: DetectedArtifact): string {
-  if (artifact.pixelLockHarmonic !== null) return `pixel locking of the tracer, harmonic ${artifact.pixelLockHarmonic}`
-  if (!artifact.known) return 'not a known period'
-  if (artifact.periodMm === GT2_PITCH_MM) return 'GT2 belt pitch'
-  if (artifact.periodMm === GT2_PITCH_MM / 2) return 'GT2 belt pitch, second harmonic'
-  return 'JPEG block of the scan'
+/** Where a detected print or scan pattern comes from (its known source, or none), and which
+ *  harmonic of that source it is where the source has harmonics. */
+function patternSource(artifact: DetectedArtifact): { source: string; harmonic: number | null } {
+  if (artifact.pixelLockHarmonic !== null) {
+    return { source: 'pixel locking of the tracer', harmonic: artifact.pixelLockHarmonic }
+  }
+  if (!artifact.known) return { source: 'not a known period', harmonic: null }
+  if (artifact.periodMm === GT2_PITCH_MM) return { source: 'GT2 belt pitch', harmonic: 1 }
+  if (artifact.periodMm === GT2_PITCH_MM / 2) return { source: 'GT2 belt pitch', harmonic: 2 }
+  return { source: 'JPEG block of the scan', harmonic: null }
 }
 
-/** The along-track lag correction's state, naming the other axis where it is the reason. */
-function alongTrackLagText(state: AlongTrackLagState, otherAxis: string): string {
-  if (state === 'corrected') return 'yes'
-  if (state === 'other-axis-not-measured') return `not possible, ${otherAxis} axis ringing not measured`
-  return 'not possible, the joint fit of both axes failed'
+/** Why the along-track lag correction was not applied, naming the other axis where it is the
+ *  reason; null when it was applied. */
+function alongTrackLagReason(state: AlongTrackLagState, otherAxis: string): string | null {
+  if (state === 'corrected') return null
+  if (state === 'other-axis-not-measured') return `${otherAxis} axis ringing not measured`
+  return 'joint fit of both axes failed'
 }
 
 export interface CheckRow {
@@ -74,7 +78,9 @@ export function isCheckRows(a: IsAxisResult): CheckRow[] {
   // correction to report.
   if (a.alongTrackLag !== null) {
     const other = a.axis === 'x' ? 'Y' : 'X'
-    rows.push({ label: `Corrected for ${other} axis ringing along the lines`, value: alongTrackLagText(a.alongTrackLag, other) })
+    const reason = alongTrackLagReason(a.alongTrackLag, other)
+    rows.push({ label: `Corrected for ${other} axis ringing along the lines`, value: reason === null ? 'yes' : 'no' })
+    if (reason !== null) rows.push({ label: 'Reason not corrected', value: reason })
   }
   rows.push({ label: 'Layer shift detected', value: yesNo(a.layerShiftDetected) })
   if (a.secondModePBound !== null) {
@@ -91,7 +97,9 @@ export function isCheckRows(a: IsAxisResult): CheckRow[] {
     if (artifact.periodMm !== null) {
       rows.push({ label: `Print or scan pattern ${i + 1} period`, value: `${artifact.periodMm.toFixed(2)} mm` })
     }
-    rows.push({ label: `Print or scan pattern ${i + 1} source`, value: patternSource(artifact) })
+    const { source, harmonic } = patternSource(artifact)
+    rows.push({ label: `Print or scan pattern ${i + 1} source`, value: source })
+    if (harmonic !== null) rows.push({ label: `Print or scan pattern ${i + 1} harmonic`, value: String(harmonic) })
   })
   if (a.cornerModel !== null) {
     const extrusion = a.cornerModel.kind === 'flow-lag'
