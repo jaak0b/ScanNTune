@@ -55,6 +55,7 @@ function trace(tS: number[], lateralMm: number[], observed: number[], fitStartMi
     fitStartMinS,
     lateralMm: Float64Array.from(lateralMm),
     observed: Uint8Array.from(observed),
+    alongPxPerMm: 23.6,
   }
 }
 
@@ -230,10 +231,52 @@ describe('poolAxisFits estimation', () => {
 })
 
 describe('poolAxisFits checks', () => {
-  it('refuses a belt-tooth pattern because its frequency changes with the line speed', () => {
-    // A 2 mm arc-length pattern, 0.002 mm, reads 53 Hz at 106 mm/s and 75 Hz at 150 mm/s.
+  it('identifies a GT2 belt-tooth pattern as a known artifact and finds no ringing', () => {
+    // The 2 mm GT2 pitch, 0.002 mm on every line of both tiers: the known-period stage finds it,
+    // and with it in the null design nothing is left to detect.
     const belt = { beltTooth: { periodMm: 2, ampMm: 0.002 } }
     const p = pool(twoTier, simulate(twoTier, { noise: IID, artifacts: belt }, 3))
+    expect(p.artifacts.map((a) => [a.periodMm, a.known])).toEqual([[2, true]])
+    expect(p.detectionPBound!).toBeGreaterThan(0.001)
+  })
+
+  it('finds a stationary pattern of unknown period and still measures the ring next to it', () => {
+    // A 1.7 mm arc-length pattern, 0.002 mm, beside a 60 Hz ring: the grid's period step at
+    // 1.7 mm is 1.7^2 / 150 = 0.019 mm (hand-computed), and the ring stays within 0.5 Hz.
+    const p = pool(
+      twoTier,
+      simulate(
+        twoTier,
+        {
+          noise: IID,
+          ring: { frequencyHz: 60, dampingRatio: 0.05, ampMm: 0.03 },
+          artifacts: { beltTooth: { periodMm: 1.7, ampMm: 0.002 } },
+        },
+        2,
+      ),
+    )
+    expect(p.artifacts).toHaveLength(1)
+    expect(p.artifacts[0].known).toBe(false)
+    expect(Math.abs(p.artifacts[0].periodMm - 1.7)).toBeLessThanOrEqual(0.019)
+    expect(p.accepted).toBe(true)
+    expect(Math.abs(p.frequencyHz! - 60)).toBeLessThan(0.5)
+  })
+
+  it('identifies the slowly decaying ring of a pedestal layer as an arc-length artifact', () => {
+    // A 30 Hz ring printed into the pedestal at 45 mm/s (a 1.5 mm period along the line), damping
+    // 0.02, 0.005 mm on every line: it persists over the window, so the grid stage finds it.
+    const pedestal = { frequencyHz: 30, dampingRatio: 0.02, ampMm: 0.005, speedMmS: 45 }
+    const p = pool(twoTier, simulate(twoTier, { noise: IID, pedestalRing: pedestal }, 3))
+    expect(p.artifacts.length).toBeGreaterThanOrEqual(1)
+    expect(Math.abs(p.artifacts[0].periodMm - 1.5)).toBeLessThanOrEqual(0.05)
+    expect(p.detectionPBound!).toBeGreaterThan(0.001)
+  })
+
+  it('refuses a strongly damped pedestal ring because its frequency changes with the line speed', () => {
+    // The pedestal ring at damping 0.1, 0.02 mm, decays within a few millimetres, so it reads as a
+    // ring: 70.7 Hz at 106 mm/s and 100 Hz at 150 mm/s.
+    const pedestal = { frequencyHz: 30, dampingRatio: 0.1, ampMm: 0.02, speedMmS: 45 }
+    const p = pool(twoTier, simulate(twoTier, { noise: IID, pedestalRing: pedestal }, 3))
     expect(p.speedCheck.state).toBe('changed')
     expect(p.refusals).toEqual([
       'The frequency changed with the line speed, the way a print or scan pattern does. Ringing ' +

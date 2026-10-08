@@ -451,6 +451,7 @@ export function simulateAxis(options: TraceSimOptions): SimLine[] {
       fitStartMinS: spec.exactRampTiming ? 0 : (v - c) / a,
       lateralMm: lateral,
       observed: Uint8Array.from(observed, (o) => (o ? 1 : 0)),
+      alongPxPerMm: pxPerMm,
     }
     return {
       trace,

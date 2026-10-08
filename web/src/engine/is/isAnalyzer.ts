@@ -300,6 +300,7 @@ function refusedAxis(
     secondModePBound: null,
     secondMode: null,
     zvSecondModeResidual: null,
+    artifacts: [],
     linesUsed: 0,
     linesTraced,
     scanIndex,
@@ -497,6 +498,7 @@ function measureGroup(
     replicateCheck: pool.replicateCheck,
     influenceCheck: pool.influenceCheck,
     layerShiftDetected: layerShiftDetected(offsets, printed),
+    artifacts: pool.artifacts,
   }
 
   if (!pool.accepted) {

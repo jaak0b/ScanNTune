@@ -61,6 +61,9 @@ export interface TracedLine {
   lateralMm: Float64Array
   /** 1 where the sample was read from the scan, 0 where it was filled in. */
   observed: Uint8Array
+  /** Scan pixels per commanded millimetre along the line (the alignment's), locating patterns
+   *  fixed in scan pixels such as JPEG blocks. */
+  alongPxPerMm: number
 }
 
 export interface TracedGroup {
@@ -303,6 +306,7 @@ function traceLine(
       : (line.speedMmS - line.cornerSpeedMmS) / spec.accelMmS2,
     lateralMm,
     observed,
+    alongPxPerMm: affinePxPerMm,
   }
 }
 

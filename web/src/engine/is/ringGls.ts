@@ -1,12 +1,13 @@
 import { arWhitener, latticeSegments, selectOrderAiccSegments } from '../correlatedNoise'
 import type { ArFit, ArWhitener } from '../correlatedNoise'
-import { driftBasis, flowLagColumns } from './ringRegressors'
+import { arcLengthMm, driftBasis, flowLagColumns, periodicColumns } from './ringRegressors'
 import type { CommandedMotion } from './ringRegressors'
 
 // Generalized least squares machinery of the input shaper ring model, per traced line. The
 // model of one line's fit window (t in seconds since the ringing corner):
 //
 //   y(t) = sum_k d_k cos(pi k (t - t0) / T)            drift (discrete cosine basis)
+//        + sum_P p_P cos(2 pi s / P) + q_P sin(2 pi s / P)    detected arc-length artifacts P
 //        + g (q_tau(t) / v(t) - 1) + h c e^(-t/tau) / v(t)  flow lag of the commanded flow
 //        + e^(-zeta w t) (a cos(w_d t) + b sin(w_d t))   ring, w = 2 pi f, w_d = w sqrt(1 - zeta^2)
 //        + AR(p) noise on the sample lattice, its innovation standard deviation scaled by
@@ -26,6 +27,9 @@ import type { CommandedMotion } from './ringRegressors'
 
 /** One line's fit window: the observed samples of the free ringdown. */
 export interface LineRecord extends CommandedMotion {
+  /** Scan pixels per commanded millimetre along the line (0 when unknown), locating patterns
+   *  fixed in scan pixels. */
+  alongPxPerMm: number
   /** Time since the corner of each observed sample, seconds. */
   tS: Float64Array
   /** Sample-lattice index of each observed sample (consecutive except across unread samples). */
@@ -38,15 +42,18 @@ export interface LineRecord extends CommandedMotion {
 export interface LineBasis {
   rec: LineRecord
   m: number
-  drift: Float64Array[]
-  /** Orthonormal basis of the unweighted drift columns (ordinary least squares stages). */
-  driftQ: Float64Array[]
-  /** The data with the drift columns projected out (unweighted). */
-  yDriftFree: Float64Array
+  /** The fixed null columns: the drift basis and the known arc-length-periodic columns. */
+  fixedColumns: Float64Array[]
+  /** Orthonormal basis of the unweighted fixed columns (ordinary least squares stages). */
+  fixedQ: Float64Array[]
+  /** The data with the fixed columns projected out (unweighted). */
+  yFixedFree: Float64Array
   /** First observed sample at or after the end of the acceleration ramp: from here the sample
    *  times lie on a uniform grid of step dt (constant cruise speed, constant lattice step). */
   cruiseFrom: number
   dt: number
+  /** The periods of the arc-length artifacts the fixed columns carry, mm. */
+  artifactPeriodsMm: number[]
 }
 
 /** A line's noise model: its AR fit, the whitening operator, the innovation scale of its
@@ -68,9 +75,9 @@ export interface LineNoise {
   unwhiten(e: ArrayLike<number>): Float64Array
   wY: Float64Array
   /** Orthonormal basis of the whitened drift columns. */
-  wDriftQ: Float64Array[]
+  wFixedQ: Float64Array[]
   /** The whitened data with the whitened drift columns projected out. */
-  wYDriftFree: Float64Array
+  wYFixedFree: Float64Array
 }
 
 /** The whitened null design of a line at one tau. */
@@ -132,9 +139,19 @@ function residualize(x: ArrayLike<number>, Q: Float64Array[]): Float64Array {
   return r
 }
 
-export function lineBasis(rec: LineRecord): LineBasis {
-  const m = rec.tS.length
+/** The fixed null columns of a record: the drift basis, then the cosine and sine columns of the
+ *  given arc-length artifact periods. */
+export function fixedNullColumns(rec: LineRecord, artifactPeriodsMm: number[] = []): Float64Array[] {
   const drift = driftBasis(rec.tS)
+  if (artifactPeriodsMm.length === 0) return drift
+  return [...drift, ...periodicColumns(arcLengthMm(rec.tS, rec), artifactPeriodsMm)]
+}
+
+/** A line's model parts that depend on neither the noise model nor tau; `artifactPeriodsMm` are
+ *  arc-length artifacts carried in the null design as fixed columns. */
+export function lineBasis(rec: LineRecord, artifactPeriodsMm: number[] = []): LineBasis {
+  const m = rec.tS.length
+  const fixedColumns = fixedNullColumns(rec, artifactPeriodsMm)
   const tRamp = Math.max(0, (rec.speedMmS - rec.cornerSpeedMmS) / rec.accelMmS2)
   let cruiseFrom = rec.tS.findIndex((t) => t >= tRamp)
   if (cruiseFrom < 0) cruiseFrom = m
@@ -142,19 +159,28 @@ export function lineBasis(rec: LineRecord): LineBasis {
   if (cruiseFrom < m - 1) {
     dt = (rec.tS[m - 1] - rec.tS[cruiseFrom]) / (rec.lattice[m - 1] - rec.lattice[cruiseFrom])
   }
-  const driftQ = orthonormalBasis(drift)
-  return { rec, m, drift, driftQ, yDriftFree: residualize(rec.y, driftQ), cruiseFrom, dt }
+  const fixedQ = orthonormalBasis(fixedColumns)
+  return {
+    rec,
+    m,
+    fixedColumns,
+    fixedQ,
+    yFixedFree: residualize(rec.y, fixedQ),
+    cruiseFrom,
+    dt,
+    artifactPeriodsMm,
+  }
 }
 
 /** Residual sum of squares of the ordinary least squares null fit at tau. */
 export function olsNullSsr(line: LineBasis, tauS: number): number {
-  return ssrAfterLag(line.yDriftFree, orthonormalBasis(flowLagColumns(line.rec.tS, line.rec, tauS), line.driftQ))
+  return ssrAfterLag(line.yFixedFree, orthonormalBasis(flowLagColumns(line.rec.tS, line.rec, tauS), line.fixedQ))
 }
 
 /** Whitened residual sum of squares of the GLS null fit at tau. */
 export function glsNullSsr(line: LineBasis, noise: LineNoise, tauS: number): number {
   const lag = flowLagColumns(line.rec.tS, line.rec, tauS).map((c) => noise.whiten(c))
-  return ssrAfterLag(noise.wYDriftFree, orthonormalBasis(lag, noise.wDriftQ))
+  return ssrAfterLag(noise.wYFixedFree, orthonormalBasis(lag, noise.wFixedQ))
 }
 
 /** ||r||^2 minus its projection on orthonormal columns that are orthogonal to the drift. */
@@ -169,8 +195,8 @@ function ssrAfterLag(driftFree: Float64Array, lag: Float64Array[]): number {
 
 /** Ordinary least squares fit of the null model at tau: residual sum of squares and residuals. */
 export function olsNull(line: LineBasis, tauS: number): { ssr: number; residual: Float64Array } {
-  const lag = orthonormalBasis(flowLagColumns(line.rec.tS, line.rec, tauS), line.driftQ)
-  const yr = residualize(line.rec.y, line.driftQ.concat(lag))
+  const lag = orthonormalBasis(flowLagColumns(line.rec.tS, line.rec, tauS), line.fixedQ)
+  const yr = residualize(line.rec.y, line.fixedQ.concat(lag))
   return { ssr: dot(yr, yr), residual: yr }
 }
 
@@ -211,7 +237,7 @@ export function noiseModel(
     return whitener.unwhiten(Float64Array.from(e, (v, i) => v * scale[i]))
   }
   const wY = whiten(line.rec.y)
-  const wDriftQ = orthonormalBasis(line.drift.map((c) => whiten(c)))
+  const wFixedQ = orthonormalBasis(line.fixedColumns.map((c) => whiten(c)))
   return {
     fit,
     whitener,
@@ -222,8 +248,8 @@ export function noiseModel(
     whiten,
     unwhiten,
     wY,
-    wDriftQ,
-    wYDriftFree: residualize(wY, wDriftQ),
+    wFixedQ,
+    wYFixedFree: residualize(wY, wFixedQ),
   }
 }
 
@@ -300,7 +326,7 @@ export function pooledVarianceSlope(
 /** The whitened null design of a line at tau, with optional further raw null columns. */
 export function nullDesign(line: LineBasis, noise: LineNoise, tauS: number, extraRaw: Float64Array[] = []): NullDesign {
   const lagRaw = flowLagColumns(line.rec.tS, line.rec, tauS)
-  const Q = noise.wDriftQ.concat(orthonormalBasis([...lagRaw, ...extraRaw].map((c) => noise.whiten(c)), noise.wDriftQ))
+  const Q = noise.wFixedQ.concat(orthonormalBasis([...lagRaw, ...extraRaw].map((c) => noise.whiten(c)), noise.wFixedQ))
   const k = Q.length
   const m = line.m
   const qRows = new Float64Array(m * k)
@@ -453,9 +479,36 @@ export function projectRing(
   residualOut?: Float64Array,
 ): RingProjection {
   whitenedRing(line, noise, frequencyHz, dampingRatio, scratch)
-  const { wr, wi } = scratch
+  return projectWhitened(design, line.m, scratch.wr, scratch.wi, pr, pi, residualOut)
+}
+
+/**
+ * Projects a pair of raw columns (any shape, such as an arc-length sinusoid) against a line's
+ * null design: projectRing for columns without a closed-form whitening, which are whitened
+ * explicitly by the noise model.
+ */
+export function projectColumns(
+  line: LineBasis,
+  noise: LineNoise,
+  design: NullDesign,
+  rawR: Float64Array,
+  rawI: Float64Array,
+  residualOut?: Float64Array,
+): RingProjection {
+  return projectWhitened(design, line.m, noise.whiten(rawR), noise.whiten(rawI), new Float64Array(design.k), new Float64Array(design.k), residualOut)
+}
+
+/** The Frisch-Waugh-Lovell projection of two whitened columns against a whitened null design. */
+function projectWhitened(
+  design: NullDesign,
+  m: number,
+  wr: Float64Array,
+  wi: Float64Array,
+  pr: Float64Array,
+  pi: Float64Array,
+  residualOut?: Float64Array,
+): RingProjection {
   const { qRows, k, yr } = design
-  const m = line.m
   pr.fill(0)
   pi.fill(0)
   let gR = 0
@@ -488,8 +541,8 @@ export function projectRing(
     G12 -= pr[j] * pi[j]
   }
   const det = G11 * G22 - G12 * G12
-  // Degenerate ring columns (collinear with each other or with the null design) carry no
-  // two-dimensional ring direction: no reduction is credited.
+  // Degenerate columns (collinear with each other or with the null design) carry no
+  // two-dimensional direction: no reduction is credited.
   if (!(G11 > 0 && G22 > 0 && det > 1e-12 * G11 * G22)) {
     if (residualOut) residualOut.set(yr)
     return { D: 0, a: 0, b: 0, gR, gI, G11, G12, G22 }
@@ -530,7 +583,7 @@ export function rawFullResidual(
   const m = line.m
   const target = new Float64Array(m)
   for (let i = 0; i < m; i++) target[i] = noise.wY[i] - ring.a * scratch.wr[i] - ring.b * scratch.wi[i]
-  const rawColumns = [...line.drift, ...design.lagRaw, ...design.extraRaw]
+  const rawColumns = [...line.fixedColumns, ...design.lagRaw, ...design.extraRaw]
   const beta = generalizedLeastSquares(rawColumns.map((c) => noise.whiten(c)), target)
   const residual = new Float64Array(m)
   for (let i = 0; i < m; i++) {

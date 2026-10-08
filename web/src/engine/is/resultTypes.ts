@@ -1,6 +1,7 @@
 import type { IsAxis } from './types'
 import type { ShaperOption } from './shaperRecommender'
 import type { LineFitRefusalCategory, LineJointExclusion, SecondMode } from './ringAnalyzer'
+import type { DetectedArtifact } from './artifactSearch'
 
 /**
  * Why a line was left out of the axis's joint fit, as a category the UI can count and label:
@@ -138,6 +139,9 @@ export interface IsAxisResult {
   /** The residual vibration Marlin's ZV shaper at the dominant mode leaves at the second mode, as
    *  a fraction; null without a second mode. */
   zvSecondModeResidual: number | null
+  /** Arc-length artifacts (belt teeth, JPEG blocks, other stationary patterns of the print or the
+   *  scan) the analysis detected and carried in its model; empty without a search. */
+  artifacts: DetectedArtifact[]
   linesUsed: number
   linesTraced: number
   /** Index of the scan (0 or 1) the axis was measured from; null when neither qualified. */

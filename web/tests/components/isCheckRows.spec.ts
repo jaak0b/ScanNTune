@@ -29,6 +29,7 @@ function axis(overrides: Partial<IsAxisResult>): IsAxisResult {
     secondModePBound: null,
     secondMode: null,
     zvSecondModeResidual: null,
+    artifacts: [],
     linesUsed: 10,
     linesTraced: 10,
     scanIndex: 0,

@@ -1,9 +1,9 @@
 import { burgArSegments, latticeSegments, spectralDensity } from '../correlatedNoise'
 import type { ArFit } from '../correlatedNoise'
-import { nullDesign, noiseModel, projectRing, ringScratch } from './ringGls'
+import { nullDesign, noiseModel, projectColumns, projectRing, ringScratch } from './ringGls'
 import type { LineBasis, LineNoise, NullDesign, RingProjection } from './ringGls'
 import { F_MAX_HZ, F_MIN_HZ } from './types'
-import { FREQUENCY_GRID_HZ, flowDeficit, ringColumns } from './ringRegressors'
+import { FREQUENCY_GRID_HZ, arcLengthMm, flowDeficit, periodicColumns, ringColumns } from './ringRegressors'
 
 // The generalized likelihood ratio test (GLRT) of a ring at one point theta = (f, zeta) of one
 // traced line, with the AR noise model refitted under each hypothesis (S. M. Kay, "Fundamentals of
@@ -77,6 +77,14 @@ export interface RingPoint {
   dampingRatio: number
 }
 
+/** A stationary arc-length component: a sinusoid of the commanded arc length with this period. */
+export interface PeriodicComponent {
+  periodMm: number
+}
+
+/** The component a likelihood ratio tests: a ring, or an arc-length artifact. */
+export type TestedComponent = RingPoint | PeriodicComponent
+
 /** The likelihood ratio of a ring at one point of one line, with its alternative fit. */
 export interface RingRatio {
   /** The Bartlett-scaled -2 ln of the likelihood ratio: chi2_2 under the null at a fixed point. */
@@ -116,7 +124,7 @@ function evaluate(
   shape: NoiseShape,
   deficit: Float64Array,
   tauS: number,
-  point: RingPoint | null,
+  point: TestedComponent | null,
   fixedColumns: Float64Array[],
 ): HypothesisFit {
   const noise = noiseModel(basis, unitModel(shape.coefficients), shape.varianceSlope, deficit)
@@ -136,7 +144,7 @@ function alternativeWith(
   basis: LineBasis,
   noise: LineNoise,
   design: NullDesign,
-  point: RingPoint | null,
+  point: TestedComponent | null,
 ): HypothesisFit {
   const m = basis.m
   if (point === null) {
@@ -150,17 +158,13 @@ function alternativeWith(
     }
   }
   const whitened = new Float64Array(m)
-  const ring = projectRing(
-    basis,
-    noise,
-    design,
-    point.frequencyHz,
-    point.dampingRatio,
-    ringScratch(m),
-    new Float64Array(design.k),
-    new Float64Array(design.k),
-    whitened,
-  )
+  let ring: RingProjection
+  if ('periodMm' in point) {
+    const [cos, sin] = periodicColumns(arcLengthMm(basis.rec.tS, basis.rec), [point.periodMm])
+    ring = projectColumns(basis, noise, design, cos, sin, whitened)
+  } else {
+    ring = projectRing(basis, noise, design, point.frequencyHz, point.dampingRatio, ringScratch(m), new Float64Array(design.k), new Float64Array(design.k), whitened)
+  }
   const ssr = design.ssr - ring.D
   return {
     noise,
@@ -179,7 +183,7 @@ function iterate(
   order: number,
   deficit: Float64Array,
   tauS: number,
-  point: RingPoint | null,
+  point: TestedComponent | null,
   fixedColumns: Float64Array[],
 ): HypothesisFit {
   let best = start
@@ -229,7 +233,7 @@ export function nullHypothesisFit(
 export function ringLikelihoodRatio(
   basis: LineBasis,
   h0: NullFit,
-  point: RingPoint,
+  point: TestedComponent,
   starts: ArFit[] = [],
 ): RingRatio {
   let start = alternativeWith(basis, h0.noise, h0.design, point)

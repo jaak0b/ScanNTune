@@ -83,6 +83,49 @@ export interface CommandedMotion {
 }
 
 /**
+ * The commanded arc length from the corner at each sample time, mm: c t + a t^2 / 2 on the
+ * trapezoid ramp, then the tier speed (the inverse of couponGeometry.timeAtDistance).
+ */
+export function arcLengthMm(tS: Float64Array, motion: CommandedMotion): Float64Array {
+  const c = motion.cornerSpeedMmS
+  const v = motion.speedMmS
+  const a = motion.accelMmS2
+  const tRamp = Math.max(0, (v - c) / a)
+  const sRamp = c * tRamp + 0.5 * a * tRamp * tRamp
+  return tS.map((t) => (t <= tRamp ? c * t + 0.5 * a * t * t : sRamp + v * (t - tRamp)))
+}
+
+/** Pitch of a GT2 timing belt, mm (the GT2 tooth profile): its tooth mesh repeats along the
+ *  belt's travel, so the print carries it fixed in arc length. */
+export const GT2_PITCH_MM = 2
+/** The JPEG 8 x 8 pixel DCT block (ITU-T T.81) and the 16 px minimum coded unit of 4:2:0 chroma
+ *  subsampling: a compressed scan carries them fixed in scan pixels. */
+export const JPEG_BLOCK_PX = [8, 16]
+
+/**
+ * The known periods of arc-length-stationary patterns on a line, mm: the GT2 pitch and its first
+ * harmonic, and the JPEG blocks through the scan's pixels per millimetre along the line (none
+ * when that is unknown). Only periods whose frequency at the line's cruise speed lies inside the
+ * search band are kept: a sinusoid outside the band is nearly orthogonal to every ring column.
+ */
+export function knownArtifactPeriodsMm(motion: CommandedMotion, alongPxPerMm: number): number[] {
+  const periods = [GT2_PITCH_MM, GT2_PITCH_MM / 2]
+  if (alongPxPerMm > 0) for (const px of JPEG_BLOCK_PX) periods.push(px / alongPxPerMm)
+  return periods.filter((p) => {
+    const f = motion.speedMmS / p
+    return f >= F_MIN_HZ && f <= F_MAX_HZ
+  })
+}
+
+/** The cosine and sine columns of arc-length periods at each sample, two per period. */
+export function periodicColumns(sMm: Float64Array, periodsMm: number[]): Float64Array[] {
+  return periodsMm.flatMap((p) => [
+    sMm.map((s) => Math.cos((2 * Math.PI * s) / p)),
+    sMm.map((s) => Math.sin((2 * Math.PI * s) / p)),
+  ])
+}
+
+/**
  * The flow-lag columns of a line at tau: the particular solution of the lag for a steady run-up
  * (flowLagRegressor) and the homogeneous solution c e^(-t / tau) / v(t). The lag equation
  * tau q' = v(t) - q has the general solution particular + C e^(-t / tau); the free coefficient C

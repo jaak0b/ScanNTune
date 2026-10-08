@@ -13,12 +13,12 @@ import {
   FREQUENCY_GRID_HZ,
   ZETA_GRID,
   ZETA_MAX,
-  driftBasis,
   flowDeficit,
   ringColumns,
 } from './ringRegressors'
 import {
   fitNoise,
+  fixedNullColumns,
   glsNullSsr,
   levenbergMarquardt,
   lineBasis,
@@ -32,7 +32,6 @@ import {
   projectRing,
   rawFullResidual,
   ringScratch,
-  solveSymmetric,
 } from './ringGls'
 import type { LineBasis, LineNoise, LineRecord, LmResult, NullDesign, RingProjection } from './ringGls'
 import {
@@ -42,10 +41,13 @@ import {
   nullHypothesisFit,
   ringLikelihoodRatio,
 } from './ringLikelihood'
-import type { NullFit, RingRatio } from './ringLikelihood'
+import type { NullFit, RingPoint, RingRatio } from './ringLikelihood'
+import { gridCandidates, knownCandidates, searchStage } from './artifactSearch'
+import { proportionalityCheck } from './inputProportionality'
+import type { DetectedArtifact } from './artifactSearch'
 import { defaultMaxArOrder } from '../correlatedNoise'
 import { MAD_TO_SIGMA, chiSquareSurvival, chiSquareSurvivalEvenDof, mad, median, normalQuantile } from '../math'
-import { tCdf, tQuantile } from '../studentT'
+import { tQuantile } from '../studentT'
 
 // Detects and measures the ringing of one machine axis from its traced lines. The resonance is
 // one machine property shared by every line, so the lines share the nonlinear parameters while
@@ -219,6 +221,8 @@ export interface AxisPool {
   /** The second mode, when its search detected one; the axis's own figures are then the
    *  dominant mode's from the two-mode fit. */
   secondMode: SecondMode | null
+  /** Arc-length artifacts the search detected and the analysis carried in its null design. */
+  artifacts: DetectedArtifact[]
   lines: LineVerdict[]
 }
 
@@ -334,20 +338,22 @@ export function analyzeTracedLine(line: TracedLine): LineFit {
   const tS = Float64Array.from(lattice, (k) => line.tS[k])
   // The window must leave residual degrees of freedom after the null and ring columns and the
   // largest AR order the noise model may take.
-  const columns = driftBasis(tS).length + 4
+  const record: LineRecord = {
+    tS,
+    lattice: Int32Array.from(lattice),
+    y: Float64Array.from(lattice, (k) => line.lateralMm[k]),
+    speedMmS: line.speedMmS,
+    cornerSpeedMmS: line.cornerSpeedMmS,
+    accelMmS2: line.accelMmS2,
+    alongPxPerMm: line.alongPxPerMm,
+  }
+  const columns = fixedNullColumns(record).length + 4
   if (m - columns - defaultMaxArOrder(m) - 2 <= 0) return refuse()
   return {
     screening: 'windowed',
     refusalReason: null,
     refusalCategory: null,
-    window: {
-      tS,
-      lattice: Int32Array.from(lattice),
-      y: Float64Array.from(lattice, (k) => line.lateralMm[k]),
-      speedMmS: line.speedMmS,
-      cornerSpeedMmS: line.cornerSpeedMmS,
-      accelMmS2: line.accelMmS2,
-    },
+    window: record,
     offsetMm,
   }
 }
@@ -376,7 +382,7 @@ function tauRange(bases: LineBasis[]): [number, number] {
  * ordinary least squares residual, tau again by GLS under those noise models, then each line's
  * AR refitted to its GLS residual by iterated Cochrane-Orcutt.
  */
-function nullFits(bases: LineBasis[], tauBounds: [number, number]): NullFit[] {
+function nullFits(bases: LineBasis[], tauBounds: [number, number], fixedModes: RingPoint[] = []): NullFit[] {
   const tauOls = olsTau(bases, tauBounds)
   const initial = bases.map((b) => fitNoise(b, olsNull(b, tauOls).residual))
   const tau = minimizeOverLogTau(
@@ -384,7 +390,7 @@ function nullFits(bases: LineBasis[], tauBounds: [number, number]): NullFit[] {
     tauBounds[0],
     tauBounds[1],
   )
-  const plain = bases.map((b, l) => nullHypothesisFit(b, initial[l].fit, tau))
+  const plain = bases.map((b, l) => nullHypothesisFit(b, initial[l].fit, tau, 0, fixedModes))
   const noises = plain.map((h) => h.noise)
   if (axisVarianceSlope(bases, noises, plain.map((h) => h.residual), tau) === 0) return plain
   // A ring the null model leaves in its residual also raises the early variance. The variance
@@ -394,7 +400,7 @@ function nullFits(bases: LineBasis[], tauBounds: [number, number]): NullFit[] {
   const withoutRing = bases.map((b, l) => residualWithoutStrongestRing(b, plain[l]))
   const slope = axisVarianceSlope(bases, noises, withoutRing, tau)
   if (slope === 0) return plain
-  return bases.map((b, l) => nullHypothesisFit(b, plain[l].noise.fit, tau, slope))
+  return bases.map((b, l) => nullHypothesisFit(b, plain[l].noise.fit, tau, slope, fixedModes))
 }
 
 /** The raw residual of a line's null fit with its strongest held-noise ring candidate added. */
@@ -444,14 +450,44 @@ export function detectionStatisticAt(fits: LineFit[], frequencyHz: number, dampi
   return bases.reduce((sum, b, l) => sum + ringLikelihoodRatio(b, h0[l], { frequencyHz, dampingRatio }).statistic, 0)
 }
 
-/** The detection states of the lines: null fits, held-noise fields, refits at the null spectrum
- *  peaks on the least damped grid row. */
-function detectionStates(bases: LineBasis[], tauBounds: [number, number]): LineState[] {
-  return nullFits(bases, tauBounds).map((h0, l) => {
-    const state: LineState = { basis: bases[l], h0, field: heldNoiseField(bases[l], h0), refitted: new Map() }
-    for (const f of noiseSpectrumPeaks(h0.noise.fit, cruiseSampleIntervalS(bases[l]))) refine(state, gridIndex(f, ZETA_GRID[0]))
-    return state
-  })
+/**
+ * The lines' bases and null fits with the arc-length artifacts (artifactSearch.ts) the search
+ * detects beyond `found`: the known periods first, then the spatial-frequency grid, each stage at
+ * half the false-alarm level and repeated with every detection in the null design. `fixedModes`
+ * are fitted rings carried in the null design during the search; with `search` false the found
+ * artifacts are only built in.
+ */
+function withArtifacts(
+  windows: LineRecord[],
+  speedsMmS: number[],
+  found: DetectedArtifact[] = [],
+  fixedModes: RingPoint[] = [],
+  search = true,
+): { bases: LineBasis[]; fits: NullFit[]; artifacts: DetectedArtifact[] } {
+  const artifacts = found.slice()
+  const periods = artifacts.map((a) => a.periodMm)
+  let bases = windows.map((w) => lineBasis(w, periods))
+  let fits = nullFits(bases, tauRange(bases), fixedModes)
+  if (!search || speedsMmS.length < 2) return { bases, fits, artifacts }
+  for (const known of [true, false]) {
+    for (;;) {
+      const candidates = known ? knownCandidates(bases) : gridCandidates(speedsMmS)
+      const hit = searchStage(bases, fits, candidates, DETECTION_ALPHA / 2)
+      if (hit === null || periods.includes(hit.periodMm)) break
+      periods.push(hit.periodMm)
+      artifacts.push({ ...hit, known })
+      bases = windows.map((w) => lineBasis(w, periods))
+      fits = nullFits(bases, tauRange(bases), fixedModes)
+    }
+  }
+  return { bases, fits, artifacts }
+}
+
+/** One line's detection state for a null fit (see detectionStates). */
+function lineState(basis: LineBasis, h0: NullFit): LineState {
+  const state: LineState = { basis, h0, field: heldNoiseField(basis, h0), refitted: new Map() }
+  for (const f of noiseSpectrumPeaks(h0.noise.fit, cruiseSampleIntervalS(basis))) refine(state, gridIndex(f, ZETA_GRID[0]))
+  return state
 }
 
 /** The grid index of (f, zeta) in DETECTION_GRID (frequency-major). */
@@ -522,6 +558,19 @@ function refittedMaximum(
     if (pending.length === 0) return top
     for (const l of pending) refine(states[l], top.index)
   }
+}
+
+/**
+ * A line's own maximum: its held-noise field's maximum refitted first, since a point other lines
+ * raised by refits can otherwise hide a larger refit of the line's own strongest candidate, then
+ * the refitted maximum of its field.
+ */
+function ownMaximum(states: LineState[], l: number): { index: number; value: number } {
+  const field = states[l].field
+  let heldTop = 0
+  for (let g = 1; g < field.length; g++) if (field[g] > field[heldTop] && !states[l].refitted.has(g)) heldTop = g
+  if (!states[l].refitted.has(heldTop)) refine(states[l], heldTop)
+  return refittedMaximum(states, [l])
 }
 
 /** Bonferroni bound of a maximum of chi2_dof statistics over `count` grid points. */
@@ -677,7 +726,11 @@ const NOT_ASSESSED_SPEED: SpeedCheck = { state: 'not-assessed', tiers: [] }
  * machine. `speedsMmS` are the coupon's speed tiers; each line's own speed and corner speed come
  * with its record.
  */
-export function poolAxisFits(fits: LineFit[], speedsMmS: number[]): AxisPool {
+export function poolAxisFits(
+  fits: LineFit[],
+  speedsMmS: number[],
+  presetArtifacts: DetectedArtifact[] | null = null,
+): AxisPool {
   const verdicts: LineVerdict[] = fits.map((f) => ({
     usedInJointFit: false,
     exclusion: f.window ? null : 'no-free-response',
@@ -707,6 +760,7 @@ export function poolAxisFits(fits: LineFit[], speedsMmS: number[]): AxisPool {
     influenceCheck: 'not-assessed',
     secondModePBound: null,
     secondMode: null,
+    artifacts: [],
     lines: verdicts,
   }
   const refuse = (reason: string, extras: Partial<AxisPool> = {}): AxisPool => ({
@@ -731,16 +785,20 @@ export function poolAxisFits(fits: LineFit[], speedsMmS: number[]): AxisPool {
     return tooFewLines(windowed.length, 0, fits.length - windowed.length)
   }
 
-  // Detection stage: the null fits, the likelihood ratio fields, the axis bound.
-  const bases = windowed.map((i) => lineBasis(fits[i].window!))
+  // Detection stage: the artifact search, the null fits, the likelihood ratio fields, the axis
+  // bound.
+  const windows = windowed.map((i) => fits[i].window!)
+  const searched = withArtifacts(windows, speedsMmS, presetArtifacts ?? [], [], presetArtifacts === null)
+  const bases = searched.bases
   const tauBounds = tauRange(bases)
-  const states = detectionStates(bases, tauBounds)
+  const states = searched.fits.map((h0, l) => lineState(bases[l], h0))
+  base.artifacts = searched.artifacts
   const tau0 = states[0].h0.tauS
   const all = bases.map((_, l) => l)
   const G = DETECTION_GRID.length
   const axisMax = refittedMaximum(states, all)
   const pBound = bonferroni(G, axisMax.value, 2 * states.length)
-  const ownMaxima = states.map((_, l) => refittedMaximum(states, [l]))
+  const ownMaxima = states.map((_, l) => ownMaximum(states, l))
   ownMaxima.forEach((own, l) => {
     const v = verdicts[windowed[l]]
     v.detectionPBound = bonferroni(G, own.value, 2)
@@ -836,6 +894,13 @@ export function poolAxisFits(fits: LineFit[], speedsMmS: number[]): AxisPool {
     [true, true, true],
     tauBounds,
   )
+  // A ring left out of the first artifact search leaks into the artifact columns on its own tier
+  // and makes an artifact's amplitude grow with the corner speed: the search runs again with the
+  // fitted ring in the null design, and the analysis is repeated with whatever more it finds.
+  if (presetArtifacts === null && speedsMmS.length >= 2) {
+    const again = withArtifacts(windows, speedsMmS, searched.artifacts, [{ frequencyHz: joint.frequencyHz, dampingRatio: joint.dampingRatio }])
+    if (again.artifacts.length > searched.artifacts.length) return poolAxisFits(fits, speedsMmS, again.artifacts)
+  }
   const interval = profileFrequencyInterval(inBases, noise1, joint, tauBounds)
   const se = interval ? (interval.upper - interval.lower) / (2 * interval.critical) : null
   const ci95 = interval ? Math.max(interval.upper - joint.frequencyHz, joint.frequencyHz - interval.lower) : null
@@ -857,14 +922,13 @@ export function poolAxisFits(fits: LineFit[], speedsMmS: number[]): AxisPool {
   // Diagnostics and checks.
   base.decayStatistic = decayStatistic(inBases, noise1, joint, tauBounds)
   base.decayDemonstrated = base.decayStatistic > DECAY_CRITICAL
-  base.proportionality = proportionalityCheck(inBases, rings)
+  base.proportionality = proportionalityCheck(inBases, rings.map((r) => Math.hypot(r.a, r.b)))
   base.speedCheck = speedCheck(states, included, inBases, noise1, joint, speedsMmS, tauBounds)
   base.influenceCheck = speedsMmS.length === 1 ? influenceCheck(states) : 'not-assessed'
   const detectedK = included.map((l, k) => (verdicts[windowed[l]].detected ? k : -1)).filter((k) => k >= 0)
   const replicate = replicateCheck(
     detectedK.map((k) => inBases[k]),
     detectedK.map((k) => noise1[k]),
-    detectedK.map((k) => lineFits.get(included[k]) ?? joint),
     joint,
     tauBounds,
   )
@@ -965,12 +1029,7 @@ function withSecondMode(
   tauBounds: [number, number],
 ): Partial<AxisPool> {
   const mode1 = { frequencyHz: joint.frequencyHz, dampingRatio: joint.dampingRatio }
-  const states = bases.map((b, k) => {
-    const h0 = nullHypothesisFit(b, noises[k].fit, joint.tauS, noises[k].varianceSlope, [mode1])
-    const state: LineState = { basis: b, h0, field: heldNoiseField(b, h0), refitted: new Map() }
-    for (const f of noiseSpectrumPeaks(h0.noise.fit, cruiseSampleIntervalS(b))) refine(state, gridIndex(f, ZETA_GRID[0]))
-    return state
-  })
+  const states = bases.map((b, k) => lineState(b, nullHypothesisFit(b, noises[k].fit, joint.tauS, noises[k].varianceSlope, [mode1])))
   const all = states.map((_, l) => l)
   const top = refittedMaximum(states, all)
   const pBound = bonferroni(DETECTION_GRID.length, top.value, 2 * states.length)
@@ -1034,7 +1093,7 @@ function twoModeFit(
     dampingRatio: zeta,
     frequencySeHz: se(seIndex),
     amplitudeMm: amplitude(rings, f, zeta),
-    proportionality: proportionalityCheck(bases, rings),
+    proportionality: proportionalityCheck(bases, rings.map((r) => Math.hypot(r.a, r.b))),
   })
   return { modes: [mode(rings1, theta[0], theta[1], 0), mode(rings2, theta[2], theta[3], 2)] }
 }
@@ -1056,43 +1115,6 @@ function decayStatistic(bases: LineBasis[], noises: LineNoise[], joint: JointFit
   return Math.max(0, (undamped.lm.ssr - joint.lm.ssr) / joint.sigma2)
 }
 
-/**
- * Input proportionality: the ring is the linear response to the corner's velocity step, so each
- * line's ring amplitude at the corner is proportional to its corner speed, one scale per speed
- * tier, and the regression of the amplitudes on the corner speeds passes through zero. The
- * ordinary least squares fit amplitude = b0 + b_T c (one slope per tier, one shared intercept)
- * and the two-sided Student t test of b0 = 0 with K - 1 - T degrees of freedom (Seber and Lee,
- * "Linear Regression Analysis", 2003, s4.4) use the residual scatter of the lines themselves as
- * the error, so a misfit of the same order on every line widens the test instead of rejecting a
- * real ring, and the corner-time phase, which a corner position error of hundredths of a
- * millimetre at a slow corner shifts by tenths of a radian, does not enter. A forced tone keeps
- * its amplitude on every rung, so its intercept carries the whole amplitude and the test rejects.
- */
-function proportionalityCheck(bases: LineBasis[], rings: ReturnType<typeof projectRing>[]): CheckState {
-  const tiers = [...new Set(bases.map((b) => b.rec.speedMmS))]
-  const K = bases.length
-  const dof = K - 1 - tiers.length
-  if (dof < 1) return 'not-assessed'
-  // Columns: intercept, then one corner-speed column per tier.
-  const columns = [bases.map(() => 1), ...tiers.map((v) => bases.map((b) => (b.rec.speedMmS === v ? b.rec.cornerSpeedMmS : 0)))]
-  const amplitude = rings.map((r) => Math.hypot(r.a, r.b))
-  const n = columns.length
-  const A = columns.map((ci) => columns.map((cj) => ci.reduce((s, v, k) => s + v * cj[k], 0)))
-  const g = columns.map((ci) => ci.reduce((s, v, k) => s + v * amplitude[k], 0))
-  const beta = solveSymmetric(A, g)
-  const e0 = solveSymmetric(A, columns.map((_, i) => (i === 0 ? 1 : 0)))
-  if (beta === null || e0 === null) return 'not-assessed'
-  let ssr = 0
-  for (let k = 0; k < K; k++) {
-    let fitted = 0
-    for (let j = 0; j < n; j++) fitted += beta[j] * columns[j][k]
-    ssr += (amplitude[k] - fitted) ** 2
-  }
-  const se = Math.sqrt((ssr / dof) * e0[0])
-  if (!(se > 0)) return beta[0] === 0 ? 'passed' : 'failed'
-  const p = 2 * (1 - tCdf(Math.abs(beta[0]) / se, dof))
-  return p > DETECTION_ALPHA ? 'passed' : 'failed'
-}
 
 /** Grid indices whose frequency lies within MAX_CI95_REL of any of the centers. */
 function localGrid(centers: number[]): number[] {
@@ -1164,13 +1186,13 @@ function influenceCheck(states: LineState[]): CheckState {
 
 /**
  * Cochran's Q over the detected joint-fit lines' own frequencies, each fitted with its full-fit
- * noise model and the axis tau from its screening fit (or the joint estimate). Returns the state
- * and each line's frequency, aligned with `bases`.
+ * noise model and the axis tau, starting from the joint estimate: the check asks whether the
+ * lines agree on the axis's mode, so every line's fit seeks the local optimum of that mode.
+ * Returns the state and each line's frequency, aligned with `bases`.
  */
 function replicateCheck(
   bases: LineBasis[],
   noises: LineNoise[],
-  seeds: JointFit[],
   joint: JointFit,
   tauBounds: [number, number],
 ): { state: CheckState; frequencies: number[] } {
@@ -1180,7 +1202,7 @@ function replicateCheck(
     const fit = varproFit(
       [basis],
       [noises[j]],
-      [seeds[j].frequencyHz, seeds[j].dampingRatio, Math.log(joint.tauS)],
+      [joint.frequencyHz, joint.dampingRatio, Math.log(joint.tauS)],
       [true, true, false],
       tauBounds,
     )
