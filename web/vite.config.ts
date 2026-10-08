@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs'
-import { defineConfig } from 'vitest/config'
+import { configDefaults, defineConfig } from 'vitest/config'
 import vue from '@vitejs/plugin-vue'
 import vuetify from 'vite-plugin-vuetify'
 
@@ -16,6 +16,8 @@ export default defineConfig({
   test: {
     environment: 'happy-dom',
     include: ['tests/**/*.spec.ts'],
+    // The statistical calibration suite runs on its own (npm run test:stats, vitest.stats.config.ts).
+    exclude: [...configDefaults.exclude, 'tests/stats/**'],
     // OpenCV.js is a large wasm module; give the fixture-backed engine tests room.
     testTimeout: 30000,
   },

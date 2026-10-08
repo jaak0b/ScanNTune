@@ -9,6 +9,7 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:stats": "vitest run --config vitest.stats.config.ts",
     "e2e": "playwright test",
     "mutation": "node scripts/mutation-changed.mjs",
     "mutation:full": "stryker run"
