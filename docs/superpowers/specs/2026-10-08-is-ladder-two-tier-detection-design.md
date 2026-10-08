@@ -509,9 +509,11 @@ least squares surface (2c07f43).
 ### 2.9 Screening and checks
 
 Screening: each detected line gets its own fit (seeded at its own maximum, axis tau). A line is excluded
-when its frequency is within 2 Hz of a band edge, its damping is at the 0.4 bound, or a Hampel
-identifier (median and MAD, 3 robust sigmas, floored at the larger of 2 Hz and 5% of the median, the
-shaper's agreement band) marks it an outlier. At least 3 lines (`MIN_ACCEPTED_LINES`) must remain.
+when its frequency is within 2 Hz of a band edge or a Hampel identifier (median and MAD, 3 robust
+sigmas, floored at the larger of 2 Hz and 5% of the median, the shaper's agreement band) marks it an
+outlier. At least 3 lines (`MIN_ACCEPTED_LINES`) must remain. A line's own damping ratio does not
+screen it: one line carries little information about the damping, so its own fit often reaches the
+0.4 bound on a good trace, and the axis damping comes from the joint fit of all lines.
 
 Checks, each at alpha = 0.001:
 

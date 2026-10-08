@@ -65,7 +65,6 @@ const CATEGORY_LABELS: Record<NonNullable<IsLineRefusalCategory>, string> = {
 const EXCLUSION_LABELS: Record<IsLineExclusion, string> = {
   'no-free-response': 'No free ringdown after the corner',
   'out-of-band': `Fitted frequency at the edge of the ${F_MIN_HZ} to ${F_MAX_HZ} Hz search range`,
-  'zeta-at-bound': 'Fitted damping ratio at the edge of the physical range',
   'frequency-outlier': 'Fitted frequency is an outlier among the lines',
   'not-traced': 'Line not found in the scan',
 }

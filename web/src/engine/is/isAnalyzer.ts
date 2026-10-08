@@ -353,10 +353,6 @@ const OUT_OF_BAND_REASON =
   'The ringing frequency fitted on this line sits at the edge of the search range, so the ' +
   'line was left out of the joint fit.'
 
-const ZETA_AT_BOUND_REASON =
-  'The damping ratio fitted on this line sits at the edge of the physically plausible range, ' +
-  'so the line was left out of the joint fit.'
-
 /** A group traced in its scan: its per-line outcomes and the fits of its traced lines. */
 interface TracedAxisGroup {
   scanIndex: 0 | 1
@@ -501,9 +497,6 @@ function axisResult(group: IsLineGroup, traced: TracedAxisGroup, pool: AxisPool,
     } else if (verdict.exclusion === 'out-of-band') {
       outcome.refusalReason = OUT_OF_BAND_REASON
       outcome.refusalCategory = 'out-of-band'
-    } else if (verdict.exclusion === 'zeta-at-bound') {
-      outcome.refusalReason = ZETA_AT_BOUND_REASON
-      outcome.refusalCategory = 'irregular-trace'
     } else {
       outcome.refusalReason = fit.refusalReason
       outcome.refusalCategory = fit.refusalCategory

@@ -241,6 +241,21 @@ describe('poolAxisFits estimation', () => {
     expect(Math.abs(p.frequencyHz! - 60)).toBeLessThan(0.3)
   })
 
+  it('keeps a good line whose own damping ratio fit runs to the upper bound', () => {
+    // Truth 45.3 Hz at zeta 0.3, 0.15 mm on the top rung. On this seed line 5's own fit stops at
+    // the 0.4 damping bound while its frequency, 48.5 Hz, agrees with the other lines: one line
+    // cannot pin the damping down, so the line must still enter the joint fit. The joint
+    // frequency's standard error is about 1.35 Hz here, so 4 Hz is three of them.
+    const lines = simulate(twoTier, { noise: IID, ring: { frequencyHz: 45.3, dampingRatio: 0.3, ampMm: 0.15 } }, 8_000_032)
+    const p = pool(twoTier, lines)
+    expect(p.lines[5].detected).toBe(true)
+    expect(p.lines[5].exclusion).toBeNull()
+    expect(p.lines[5].usedInJointFit).toBe(true)
+    expect(p.linesUsed).toBe(10)
+    expect(p.accepted).toBe(true)
+    expect(Math.abs(p.frequencyHz! - 45.3)).toBeLessThan(4)
+  })
+
   it('excludes a line whose own ring sits at the edge of the search range', () => {
     const lines = simulate(twoTier, { noise: IID, ring: { frequencyHz: 60, dampingRatio: 0.05, ampMm: 0.03 } })
     addToLine(lines[3], 0.1, 152, 0.05)

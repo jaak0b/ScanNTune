@@ -129,7 +129,7 @@ import { tQuantile } from '../studentT'
 //    - Damping diagnostic: boundary likelihood-ratio test of zeta = 0 (Self and Liang 1987),
 //      null law 0.5 chi2_0 + 0.5 chi2_1, reported, never a gate.
 // 7. Screening and guards: a Hampel identifier on the per-line frequencies of the detected lines,
-//    the band-edge and damping-bound guards, at least MIN_ACCEPTED_LINES lines, and the
+//    the band-edge guard, at least MIN_ACCEPTED_LINES lines, and the
 //    MAX_CI95_REL confidence gate.
 // 8. Along-track lag (poolCouponAxes; alongTrackLag.ts): the axis along a group's lines is the
 //    other group's axis, and it rings after the corner too, so the nozzle lags its commanded
@@ -170,7 +170,7 @@ const DECAY_CRITICAL = Z_ONE_SIDED * Z_ONE_SIDED
 export type LineFitRefusalCategory = 'irregular-trace' | 'out-of-band'
 
 /** Why a line was excluded from the joint fit. */
-export type LineJointExclusion = 'no-free-response' | 'out-of-band' | 'zeta-at-bound' | 'frequency-outlier'
+export type LineJointExclusion = 'no-free-response' | 'out-of-band' | 'frequency-outlier'
 
 /** One traced line prepared for the axis analysis: its fit window, or why it has none. */
 export interface LineFit {
@@ -1234,8 +1234,8 @@ function detectAxis(
 
 /**
  * The screening of a detected axis's lines: each detected line's own fit (its noise model refitted
- * under the alternative at its own maximum, the axis tau), the band-edge and damping-bound guards,
- * and a Hampel identifier on the per-line frequencies; a refusal when fewer than
+ * under the alternative at its own maximum, the axis tau), the band-edge guard and a Hampel
+ * identifier on the per-line frequencies; a refusal when fewer than
  * MIN_ACCEPTED_LINES remain. On the commanded time base each line's fit starts at its own field
  * maximum; on deposit times (`depositTimeS`, one array per window) it is an ordinary least squares
  * fit (WHITE_START) from the maximum of its own ring statistic on those times (correctedSeed), at
@@ -1265,13 +1265,15 @@ function screenLines(
     const seed = correctedSeed(detection, [l], depositTimeS, DETECTION_GRID[own].dampingRatio)
     lineFits.set(l, varproFit([basis], [noiseModel(basis, WHITE_START)], [seed.frequencyHz, seed.dampingRatio, Math.log(tau0)], [true, true, false], tauBounds))
   })
+  // Only a line's own frequency screens it. Its own damping ratio is no test of the line: one line
+  // carries little information about the damping, so its fit often runs to the upper bound on a
+  // good trace. That is a limit of what one line can identify, not evidence of a bad line, and the
+  // axis damping is estimated from all lines jointly afterwards.
   lineFits.forEach((fit, l) => {
     const v = verdicts[windowed[l]]
     v.frequencyHz = fit.frequencyHz
     if (fit.frequencyHz <= F_MIN_HZ + BOUND_MARGIN_HZ || fit.frequencyHz >= F_MAX_HZ - BOUND_MARGIN_HZ) {
       v.exclusion = 'out-of-band'
-    } else if (fit.dampingRatio >= ZETA_MAX) {
-      v.exclusion = 'zeta-at-bound'
     }
   })
   // Hampel identifier (median/MAD, 3 robust sigmas, floored at the shaper's agreement band)
