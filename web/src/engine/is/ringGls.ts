@@ -1,7 +1,7 @@
 import { arWhitener, latticeSegments, selectOrderAiccSegments } from '../correlatedNoise'
 import type { ArFit, ArWhitener } from '../correlatedNoise'
 import { arcLengthMm, cornerColumns, driftBasis, periodicColumns } from './ringRegressors'
-import type { CornerModelKind } from './ringRegressors'
+import type { CornerModelKind, VarianceCovariate } from './ringRegressors'
 import type { SampleTimes } from './ringRegressors'
 
 // Generalized least squares machinery of the input shaper ring model, per traced line. The
@@ -82,6 +82,9 @@ export interface LineNoise {
   sigma: number
   /** Slope b of the variance function log sigma_t^2 = a + b g(t); 0 for a constant variance. */
   varianceSlope: number
+  /** The covariate g(t) the slope applies to, the one it was estimated on; null for a constant
+   *  variance. */
+  covariate: VarianceCovariate | null
   /** Relative innovation standard deviation exp(b g(t) / 2) per observed sample, or null when
    *  the variance is constant. */
   scale: Float64Array | null
@@ -272,17 +275,21 @@ export function fitNoise(line: LineBasis, residual: Float64Array): LineNoise {
 
 /**
  * The noise model of a line for a given AR fit and variance function: its whitener and the
- * whitened fixed columns. `deficit` is g(t) at the observed samples; with a zero slope (or no
- * deficit) the innovation variance is constant.
+ * whitened fixed columns. `covariate` is the g(t) the slope was estimated on, given on the line's
+ * observed samples; with a zero slope the innovation variance is constant. A nonzero slope
+ * without its covariate, or a covariate of other samples, is a caller error and throws.
  */
 export function noiseModel(
   line: LineBasis,
   fit: ArFit,
   varianceSlope = 0,
-  deficit: Float64Array | null = null,
+  covariate: VarianceCovariate | null = null,
 ): LineNoise {
+  if (varianceSlope !== 0 && (covariate === null || covariate.values.length !== line.m)) {
+    throw new Error('A variance slope needs the covariate it was estimated on, given on the samples of the same line.')
+  }
   const whitener = arWhitener(fit, line.rec.lattice)
-  const scale = varianceSlope !== 0 && deficit ? Float64Array.from(deficit, (g) => Math.exp((varianceSlope * g) / 2)) : null
+  const scale = varianceSlope !== 0 ? Float64Array.from(covariate!.values, (g) => Math.exp((varianceSlope * g) / 2)) : null
   let logDet = whitener.logDet
   if (scale) for (const v of scale) logDet += 2 * Math.log(v)
   const whiten = (x: ArrayLike<number>): Float64Array => {
@@ -302,6 +309,7 @@ export function noiseModel(
     whitener,
     sigma: Math.sqrt(fit.noiseVariance),
     varianceSlope: scale ? varianceSlope : 0,
+    covariate: scale ? covariate : null,
     scale,
     logDet,
     whiten,

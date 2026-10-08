@@ -198,6 +198,29 @@ export function cornerDeficit(rec: SampleTimes, kind: CornerModelKind, scale: nu
   return arcLengthMm(rec.tS, rec).map((s) => Math.exp(-s / scale))
 }
 
+/**
+ * The covariate g(t) of a multiplicative variance function (A. C. Harvey, Econometrica 44, 1976)
+ * on one line's samples: a corner model's deficit (cornerDeficit) of `kind` at `scale`. A
+ * variance slope is defined only against the covariate it was estimated on, so the covariate
+ * travels with the slope wherever the noise model is rebuilt.
+ */
+export interface VarianceCovariate {
+  kind: CornerModelKind
+  scale: number
+  values: Float64Array
+}
+
+/** The variance-function covariate of `kind` at `scale` on the samples of `rec`. Rebuilding a
+ *  covariate on corrected deposit times of the same samples keeps its kind and scale. */
+export function varianceCovariate(rec: SampleTimes, kind: CornerModelKind, scale: number): VarianceCovariate {
+  return { kind, scale, values: cornerDeficit(rec, kind, scale) }
+}
+
+/** A covariate (or none) rebuilt on `rec`, the same samples on corrected deposit times. */
+export function covariateAt(rec: SampleTimes, covariate: VarianceCovariate | null): VarianceCovariate | null {
+  return covariate ? varianceCovariate(rec, covariate.kind, covariate.scale) : null
+}
+
 /** The commanded speed at time t after the corner on the trapezoid ramp. */
 function commandedSpeedMmS(t: number, motion: CommandedMotion): number {
   return Math.min(motion.speedMmS, motion.cornerSpeedMmS + motion.accelMmS2 * Math.max(0, t))

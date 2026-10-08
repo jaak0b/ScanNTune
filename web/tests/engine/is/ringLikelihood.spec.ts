@@ -8,6 +8,7 @@ import {
 } from '../../../src/engine/is/ringLikelihood'
 import { analyzeTracedLine } from '../../../src/engine/is/ringAnalyzer'
 import { fitNoise, lineBasis, olsNull, projectRing, ringScratch } from '../../../src/engine/is/ringGls'
+import { varianceCovariate } from '../../../src/engine/is/ringRegressors'
 import { defaultIsTestRequest, fitSpecToPrinter } from '../../../src/engine/is/types'
 import type { IsTestSpec } from '../../../src/engine/is/types'
 import { defaultPrinterProfile } from '../../../src/engine/gcode/profileTypes'
@@ -54,6 +55,24 @@ describe('ringLikelihoodRatio', () => {
     const fit = nullFitOf({ noise: { model: 'iid', sigmaPx: 0.1 }, ring: { frequencyHz: 60, dampingRatio: 0.002, ampMm: 0.03 } }, 1, 9)
     expect(heldAt(fit, 60, 0.002)).toBeLessThan(28.7)
     expect(ringLikelihoodRatio(fit.basis, fit.h0, { frequencyHz: 60, dampingRatio: 0.002 }).statistic).toBeGreaterThan(28.7)
+  })
+})
+
+describe('nullHypothesisFit', () => {
+  it('applies the variance slope to the covariate it is given, not to the basis corner model', () => {
+    // A slope estimated against the bead-drag lobe (a joint fit's variance function on a basis
+    // built in the flow-lag model) must stay on that lobe: weighting the samples by the flow-lag
+    // deficit instead is another variance function and another likelihood.
+    const { basis, h0 } = nullFitOf({ noise: { model: 'iid', sigmaPx: 0.1 } }, 3, 9)
+    const lobe = varianceCovariate(basis.rec, 'bead-drag', 0.4)
+    const deficit = varianceCovariate(basis.rec, 'flow-lag', 0.03)
+
+    const onLobe = nullHypothesisFit(basis, h0.noise.fit, 0.03, 3, lobe)
+    const onDeficit = nullHypothesisFit(basis, h0.noise.fit, 0.03, 3, deficit)
+
+    expect(onLobe.noise.covariate).toBe(lobe)
+    expect(onDeficit.noise.covariate).toBe(deficit)
+    expect(onLobe.deviance).not.toBeCloseTo(onDeficit.deviance, 3)
   })
 })
 

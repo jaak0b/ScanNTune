@@ -16,7 +16,8 @@ import {
   ZETA_MAX,
   arcLengthMm,
   cornerColumns,
-  cornerDeficit,
+  covariateAt,
+  varianceCovariate,
   depositTimes,
   ringColumns,
 } from './ringRegressors'
@@ -52,7 +53,7 @@ import type { NullFit, RingPoint, RingRatio } from './ringLikelihood'
 import { gridCandidates, knownCandidates, searchStage } from './artifactSearch'
 import { proportionalityCheck } from './inputProportionality'
 import type { DetectedArtifact } from './artifactSearch'
-import type { CornerModelKind } from './ringRegressors'
+import type { CornerModelKind, VarianceCovariate } from './ringRegressors'
 import { defaultMaxArOrder } from '../correlatedNoise'
 import type { ArFit } from '../correlatedNoise'
 import { MAD_TO_SIGMA, chiSquareSurvival, chiSquareSurvivalEvenDof, mad, median, normalQuantile } from '../math'
@@ -422,17 +423,18 @@ function nullFits(bases: LineBasis[], tauBounds: [number, number], fixedModes: R
     tauBounds[0],
     tauBounds[1],
   )
-  const plain = bases.map((b, l) => nullHypothesisFit(b, initial[l].fit, tau, 0, fixedModes))
+  const plain = bases.map((b, l) => nullHypothesisFit(b, initial[l].fit, tau, 0, null, fixedModes))
   const noises = plain.map((h) => h.noise)
-  if (axisVarianceSlope(bases, noises, plain.map((h) => h.residual), tau) === 0) return plain
+  const covariates = bases.map((b) => varianceCovariate(b.rec, b.cornerModel, tau))
+  if (axisVarianceSlope(noises, plain.map((h) => h.residual), covariates) === 0) return plain
   // A ring the null model leaves in its residual also raises the early variance. The variance
   // function is kept only if its test still rejects once every line's own strongest ring
   // candidate (the maximum of its held-noise field) is removed by GLS, and its slope is then
   // estimated from those residuals: a rougher bead does not go away with a ring.
   const withoutRing = bases.map((b, l) => residualWithoutStrongestRing(b, plain[l]))
-  const slope = axisVarianceSlope(bases, noises, withoutRing, tau)
+  const slope = axisVarianceSlope(noises, withoutRing, covariates)
   if (slope === 0) return plain
-  return bases.map((b, l) => nullHypothesisFit(b, plain[l].noise.fit, tau, slope, fixedModes))
+  return bases.map((b, l) => nullHypothesisFit(b, plain[l].noise.fit, tau, slope, covariates[l], fixedModes))
 }
 
 /** The raw residual of a line's null fit with its strongest held-noise ring candidate added. */
@@ -460,19 +462,13 @@ const VARIANCE_CRITICAL = normalQuantile(1 - DETECTION_ALPHA / 2) ** 2
 
 /**
  * The slope of the axis's innovation variance function (ringGls.pooledVarianceSlope) from the
- * lines' raw residuals under their AR models, or 0 when the likelihood ratio test does not reject
- * a constant variance at DETECTION_ALPHA. The covariate is each line's corner-model deficit at
- * tauS unless `deficits` gives it.
+ * lines' raw residuals under their AR models against each line's `covariates`, or 0 when the
+ * likelihood ratio test does not reject a constant variance at DETECTION_ALPHA. A nonzero slope
+ * is valid only on these covariates, so every noise model built with it carries them.
  */
-function axisVarianceSlope(
-  bases: LineBasis[],
-  noises: LineNoise[],
-  residuals: Float64Array[],
-  tauS: number,
-  deficits: Float64Array[] = bases.map((b) => cornerDeficit(b.rec, b.cornerModel, tauS)),
-): number {
+function axisVarianceSlope(noises: LineNoise[], residuals: Float64Array[], covariates: VarianceCovariate[]): number {
   const innovations = residuals.map((r, l) => noises[l].whitener.whiten(r))
-  const pooled = pooledVarianceSlope(innovations, deficits)
+  const pooled = pooledVarianceSlope(innovations, covariates.map((c) => c.values))
   return pooled.statistic > VARIANCE_CRITICAL ? pooled.slope : 0
 }
 
@@ -964,7 +960,7 @@ function correctedScan(
     const rec = { ...detection.windows[l], depositTimeS: depositTimeS[l] }
     const basis = lineBasis(rec, [], chosen.kind, carried.columns[l])
     const h0 = states[l].h0
-    const noise = noiseModel(basis, h0.noise.fit, h0.noise.varianceSlope, cornerDeficit(rec, chosen.kind, h0.tauS))
+    const noise = noiseModel(basis, h0.noise.fit, h0.noise.varianceSlope, covariateAt(rec, h0.noise.covariate))
     const design = nullDesign(basis, noise, h0.tauS)
     const scratch = ringScratch(basis.m)
     const pr = new Float64Array(design.k)
@@ -1420,7 +1416,7 @@ function jointFit(
   const noiseAtSeed = included.map((l, k) => {
     if (depositTimeS) return noiseModel(inBases[k], WHITE_START)
     const noise = refine(states[l], seedIndex).fit.noise
-    return noiseModel(inBases[k], noise.fit, noise.varianceSlope, states[l].h0.deficit)
+    return noiseModel(inBases[k], noise.fit, noise.varianceSlope, noise.covariate)
   })
   // The time constant starts at its best value at the seed over the joint-fit lines alone (golden
   // section on a log scale), never at the detection's, which a line excluded by the screening
@@ -1444,8 +1440,8 @@ function jointFit(
     return rawFullResidual(b, noiseAtSeed[k], design, first.frequencyHz, first.dampingRatio, ring, ringScratch(b.m))
   })
   const ar1 = inBases.map((b, k) => fitNoise(b, residuals1[k]))
-  const covariates = inBases.map((b) => varianceCovariate(b.rec, chosen, first.tauS))
-  const slope1 = axisVarianceSlope(inBases, ar1, residuals1, first.tauS, covariates)
+  const covariates = inBases.map((b) => jointCovariate(b.rec, chosen, first.tauS))
+  const slope1 = axisVarianceSlope(ar1, residuals1, covariates)
   const noise1 = slope1 === 0 ? ar1 : inBases.map((b, k) => noiseModel(b, ar1[k].fit, slope1, covariates[k]))
   const joint = varproFit(
     inBases,
@@ -1459,15 +1455,15 @@ function jointFit(
 
 /**
  * The joint fit of a detected axis's `included` lines on new deposit times with the noise models
- * of `held` (their AR fits and variance slope, the variance function's covariate taken at the new
- * deposit times), from held's estimate: one generalized least squares fit with the covariance
- * held, the mean model refitted.
+ * of `held` (their AR fits, variance slope and the covariate the slope was estimated on, rebuilt
+ * at the new deposit times), from held's estimate: one generalized least squares fit with the
+ * covariance held, the mean model refitted.
  */
 function jointRefit(detection: AxisDetection, included: number[], depositTimeS: Float64Array[], held: JointFitResult): JointFitResult {
   const inBases = jointBases(detection, included, depositTimeS)
   const tauS = held.joint.tauS
   const noise1 = inBases.map((b, k) =>
-    noiseModel(b, held.noise1[k].fit, held.noise1[k].varianceSlope, varianceCovariate(b.rec, detection.chosen, tauS)),
+    noiseModel(b, held.noise1[k].fit, held.noise1[k].varianceSlope, covariateAt(b.rec, held.noise1[k].covariate)),
   )
   const joint = varproFit(
     inBases,
@@ -1484,8 +1480,8 @@ function jointRefit(detection: AxisDetection, included: number[], depositTimeS: 
  * chose, the flow-lag deficit at the joint time constant or the bead-drag lobe at its null-fit
  * length, so the estimation's variance function is the one the pooled AICc selected.
  */
-function varianceCovariate(rec: LineRecord, chosen: AxisDetection['chosen'], tauS: number): Float64Array {
-  return chosen.kind === 'flow-lag' ? cornerDeficit(rec, 'flow-lag', tauS) : cornerDeficit(rec, 'bead-drag', chosen.beadScale)
+function jointCovariate(rec: LineRecord, chosen: AxisDetection['chosen'], tauS: number): VarianceCovariate {
+  return chosen.kind === 'flow-lag' ? varianceCovariate(rec, 'flow-lag', tauS) : varianceCovariate(rec, 'bead-drag', chosen.beadScale)
 }
 
 /** The sum of squares of a vector. */
@@ -1582,7 +1578,11 @@ function verdict(result: AxisPool): AxisPool {
 function searchSecondMode(fit: JointFitResult): SecondModeSearch {
   const { inBases: bases, noise1: noises, joint, estBounds: tauBounds } = fit
   const mode1 = { frequencyHz: joint.frequencyHz, dampingRatio: joint.dampingRatio }
-  const states = bases.map((b, k) => lineState(b, nullHypothesisFit(b, noises[k].fit, joint.tauS, noises[k].varianceSlope, [mode1])))
+  // Each line's variance slope stays on the covariate it was estimated on (the joint fit's),
+  // never the one the basis's own corner model would give.
+  const states = bases.map((b, k) =>
+    lineState(b, nullHypothesisFit(b, noises[k].fit, joint.tauS, noises[k].varianceSlope, noises[k].covariate, [mode1])),
+  )
   const all = states.map((_, l) => l)
   const top = refittedMaximum(states, all)
   const pBound = bonferroni(DETECTION_GRID.length, top.value, 2 * states.length)

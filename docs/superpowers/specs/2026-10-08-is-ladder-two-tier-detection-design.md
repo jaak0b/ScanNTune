@@ -482,6 +482,14 @@ constant variance at alpha, and still rejects after each line's strongest ring c
 ring left in the null residual also raises the early variance). Doubled early noise: 0 of 60 axes
 accepted (before: 1 false acceptance); quadrupled: 21 of 40 axis detections, 0 acceptances.
 
+A slope is defined only against the covariate it was estimated on, so each line's noise model carries
+that covariate (corner model, scale and values), and every rebuild of the noise model applies the slope
+to it: the second-mode search, and the refits on the along-track lag's deposit times, which rebuild the
+same covariate on the corrected times. Before this, the second-mode search recomputed the covariate
+from the joint-fit basis (the flow-lag deficit at the joint time constant) while the joint fit had
+estimated the slope on the bead-drag lobe; the misplaced weights gave a fake heavily damped mode that
+replaced the ring (S3 seed 5,001,171: 101.69 Hz at damping 0.4 instead of 60.44 Hz).
+
 Changed from the plan: the plan applied the variance function to the observations before whitening
 (feasible weighted least squares) together with a robust detrend; the code applies it to the innovations
 and has no robust step.

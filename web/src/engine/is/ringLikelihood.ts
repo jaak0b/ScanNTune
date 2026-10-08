@@ -3,7 +3,8 @@ import type { ArFit } from '../correlatedNoise'
 import { nullDesign, noiseModel, projectColumns, projectPeriodic, projectRing, ringScratch } from './ringGls'
 import type { LineBasis, LineNoise, NullDesign, RingProjection } from './ringGls'
 import { F_MAX_HZ, F_MIN_HZ } from './types'
-import { FREQUENCY_GRID_HZ, cornerDeficit, depositTimes, ringColumns } from './ringRegressors'
+import { FREQUENCY_GRID_HZ, depositTimes, ringColumns } from './ringRegressors'
+import type { VarianceCovariate } from './ringRegressors'
 
 // The generalized likelihood ratio test (GLRT) of a ring at one point theta = (f, zeta) of one
 // traced line, with the AR noise model refitted under each hypothesis (S. M. Kay, "Fundamentals of
@@ -64,8 +65,6 @@ export interface NullFit extends HypothesisFit {
   order: number
   /** The corner-model scale: the flow-lag time constant (s) or the bead-drag length (mm). */
   tauS: number
-  /** The covariate g(t) of the variance function at tauS (ringRegressors.cornerDeficit). */
-  deficit: Float64Array
   /** The raw ring columns of modes already fitted, part of the null design of both hypotheses. */
   fixedColumns: Float64Array[]
   /** The Bartlett factor (m - k1 - p) / m the line's ratios are scaled by. */
@@ -118,31 +117,32 @@ function unitModel(coefficients: number[]): ArFit {
   return { coefficients, noiseVariance: 1 }
 }
 
-/** A noise model's shape: AR coefficients and variance-function slope. */
+/** A noise model's shape: AR coefficients, variance-function slope and the covariate it applies
+ *  to. */
 interface NoiseShape {
   coefficients: number[]
   varianceSlope: number
+  covariate: VarianceCovariate | null
 }
 
 /** The hypothesis fit of a line under a noise shape, with the ring at `point`. */
 function evaluate(
   basis: LineBasis,
   shape: NoiseShape,
-  deficit: Float64Array,
   tauS: number,
   point: TestedComponent | null,
   fixedColumns: Float64Array[],
 ): HypothesisFit {
-  const noise = noiseModel(basis, unitModel(shape.coefficients), shape.varianceSlope, deficit)
+  const noise = noiseModel(basis, unitModel(shape.coefficients), shape.varianceSlope, shape.covariate)
   const design = nullDesign(basis, noise, tauS, fixedColumns)
   return alternativeWith(basis, noise, design, point)
 }
 
 /** The noise shape refitted to a fit's raw residual: Burg's AR at `order`, the variance slope
- *  kept. */
+ *  and its covariate kept. */
 function refitShape(basis: LineBasis, fit: HypothesisFit, order: number): NoiseShape {
   const ar = burgArSegments(latticeSegments(fit.residual, basis.rec.lattice), order)
-  return { coefficients: ar.coefficients, varianceSlope: fit.noise.varianceSlope }
+  return { coefficients: ar.coefficients, varianceSlope: fit.noise.varianceSlope, covariate: fit.noise.covariate }
 }
 
 /** The fit with the noise model and null design given, the ring at `point` (or none). */
@@ -188,14 +188,13 @@ function iterate(
   basis: LineBasis,
   start: HypothesisFit,
   order: number,
-  deficit: Float64Array,
   tauS: number,
   point: TestedComponent | null,
   fixedColumns: Float64Array[],
 ): HypothesisFit {
   let best = start
   for (let k = 0; k < MAX_REFITS; k++) {
-    const next = evaluate(basis, refitShape(basis, best, order), deficit, tauS, point, fixedColumns)
+    const next = evaluate(basis, refitShape(basis, best, order), tauS, point, fixedColumns)
     const gain = best.deviance - next.deviance
     if (gain > 0) best = next
     if (!(gain > DEVIANCE_TOLERANCE)) break
@@ -204,29 +203,29 @@ function iterate(
 }
 
 /**
- * The null fit of a line at the flow-lag time constant tauS and the axis's variance slope: the AR
+ * The null fit of a line at the corner-model scale tauS and the axis's variance function: the AR
  * order of `initial` (chosen by AICc on the ordinary least squares residual), the AR refitted by
- * iterated Cochrane-Orcutt. `fixedModes` are modes already fitted, whose ring columns join the
- * null design (sequential detection of a further mode).
+ * iterated Cochrane-Orcutt. The variance slope applies to `covariate`, the covariate it was
+ * estimated on (required with a nonzero slope). `fixedModes` are modes already fitted, whose ring
+ * columns join the null design (sequential detection of a further mode).
  */
 export function nullHypothesisFit(
   basis: LineBasis,
   initial: ArFit,
   tauS: number,
   varianceSlope = 0,
+  covariate: VarianceCovariate | null = null,
   fixedModes: RingPoint[] = [],
 ): NullFit {
   const order = initial.coefficients.length
-  const deficit = cornerDeficit(basis.rec, basis.cornerModel, tauS)
   const fixedColumns = fixedModes.flatMap((p) => ringColumns(depositTimes(basis.rec), p.frequencyHz, p.dampingRatio))
-  const start = evaluate(basis, { coefficients: initial.coefficients, varianceSlope }, deficit, tauS, null, fixedColumns)
-  const fit = iterate(basis, start, order, deficit, tauS, null, fixedColumns)
+  const start = evaluate(basis, { coefficients: initial.coefficients, varianceSlope, covariate }, tauS, null, fixedColumns)
+  const fit = iterate(basis, start, order, tauS, null, fixedColumns)
   const m = basis.m
   return {
     ...fit,
     order,
     tauS,
-    deficit,
     fixedColumns,
     bartlett: (m - fit.design.k - 2 - order - (varianceSlope !== 0 ? 1 : 0)) / m,
   }
@@ -246,10 +245,11 @@ export function ringLikelihoodRatio(
   let start = alternativeWith(basis, h0.noise, h0.design, point)
   for (const s of starts) {
     if (s.coefficients.length !== h0.order) continue
-    const candidate = evaluate(basis, { coefficients: s.coefficients, varianceSlope: h0.noise.varianceSlope }, h0.deficit, h0.tauS, point, h0.fixedColumns)
+    const shape = { coefficients: s.coefficients, varianceSlope: h0.noise.varianceSlope, covariate: h0.noise.covariate }
+    const candidate = evaluate(basis, shape, h0.tauS, point, h0.fixedColumns)
     if (candidate.deviance < start.deviance) start = candidate
   }
-  const fit = iterate(basis, start, h0.order, h0.deficit, h0.tauS, point, h0.fixedColumns)
+  const fit = iterate(basis, start, h0.order, h0.tauS, point, h0.fixedColumns)
   return { statistic: h0.bartlett * Math.max(0, h0.deviance - fit.deviance), fit }
 }
 

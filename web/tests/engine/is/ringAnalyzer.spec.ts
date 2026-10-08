@@ -222,6 +222,18 @@ describe('poolAxisFits estimation', () => {
     expect(p.secondMode!.proportionality).toBe('passed')
   })
 
+  it('measures a ring on an axis whose corner model is the bead drag without a spurious second mode', () => {
+    // The default coupon's Y group, 60.4 Hz at damping 0.043 with 0.0258 mm (three times the
+    // detection threshold amplitude), iid scan noise: on this seed the detection chooses the
+    // bead-drag corner model, so the joint fit's variance slope belongs to the bead-drag lobe.
+    // The ring's standard error is about 0.1 Hz; 0.5 Hz is five of them.
+    const p = pool(twoTier, simulate(twoTier, { noise: IID, ring: { frequencyHz: 60.4, dampingRatio: 0.043, ampMm: 0.025823242641004947 } }, 5_001_171))
+    expect(p.cornerModel!.kind).toBe('bead-drag')
+    expect(Math.abs(p.frequencyHz! - 60.4)).toBeLessThan(0.5)
+    expect(p.secondMode).toBeNull()
+    expect(p.accepted).toBe(true)
+  })
+
   it('finds no second mode next to a single mode', () => {
     const p = pool(twoTier, simulate(twoTier, { noise: IID, ring: { frequencyHz: 60, dampingRatio: 0.05, ampMm: 0.03 } }))
     expect(p.secondModePBound!).toBeGreaterThan(0.001)
