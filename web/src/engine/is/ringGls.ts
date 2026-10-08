@@ -63,6 +63,8 @@ export interface LineBasis {
   /** The corner model of the null design; its scale (tauS in the functions taking one) is the
    *  flow-lag time constant in seconds or the bead-drag length in millimetres. */
   cornerModel: CornerModelKind
+  /** The commanded arc length of each sample from the corner, mm. */
+  sMm: Float64Array
 }
 
 /** A line's noise model: its AR fit, the whitening operator, the innovation scale of its
@@ -185,6 +187,7 @@ export function lineBasis(
     dt,
     artifactPeriodsMm,
     cornerModel,
+    sMm: arcLengthMm(rec.tS, rec),
   }
 }
 
@@ -386,12 +389,31 @@ export function whitenedRing(
   dampingRatio: number,
   out: RingScratch,
 ): void {
-  const { rec, m, cruiseFrom, dt } = line
-  const t = rec.tS
-  const lat = rec.lattice
   const omega = 2 * Math.PI * frequencyHz
   const sr = -omega * dampingRatio
   const si = omega * Math.sqrt(Math.max(0, 1 - dampingRatio * dampingRatio))
+  whitenedExponential(line, noise, line.rec.tS, line.dt, sr, si, out)
+}
+
+/**
+ * The raw and whitened columns of the complex exponential e^((sr + i si) x) of a sample
+ * coordinate x that steps uniformly by `step` over the cruise lattice (time with step dt for a
+ * ring, commanded arc length with step v dt for an arc-length sinusoid): the closed-form
+ * whitening of whitenedRing, which holds for any such coordinate.
+ */
+export function whitenedExponential(
+  line: LineBasis,
+  noise: LineNoise,
+  coordinate: Float64Array,
+  step: number,
+  sr: number,
+  si: number,
+  out: RingScratch,
+): void {
+  const { rec, m, cruiseFrom } = line
+  const dt = step
+  const t = coordinate
+  const lat = rec.lattice
   const { zr, zi, wr, wi } = out
   const stepMag = Math.exp(sr * dt)
   const stepR = stepMag * Math.cos(si * dt)
@@ -499,9 +521,26 @@ export function projectRing(
 }
 
 /**
- * Projects a pair of raw columns (any shape, such as an arc-length sinusoid) against a line's
- * null design: projectRing for columns without a closed-form whitening, which are whitened
- * explicitly by the noise model.
+ * Projects the arc-length sinusoid pair cos, sin(2 pi s / P) against a line's null design, its
+ * columns whitened in closed form (whitenedExponential on the commanded arc length).
+ */
+export function projectPeriodic(
+  line: LineBasis,
+  noise: LineNoise,
+  design: NullDesign,
+  periodMm: number,
+  scratch: RingScratch,
+  pr: Float64Array,
+  pi: Float64Array,
+  residualOut?: Float64Array,
+): RingProjection {
+  whitenedExponential(line, noise, line.sMm, line.dt * line.rec.speedMmS, 0, (2 * Math.PI) / periodMm, scratch)
+  return projectWhitened(design, line.m, scratch.wr, scratch.wi, pr, pi, residualOut)
+}
+
+/**
+ * Projects a pair of raw columns (any shape) against a line's null design: projectRing for
+ * columns without a closed-form whitening, which are whitened explicitly by the noise model.
  */
 export function projectColumns(
   line: LineBasis,

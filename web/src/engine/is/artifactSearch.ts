@@ -1,10 +1,10 @@
 import { chiSquareSurvivalEvenDof } from '../math'
 import { F_MAX_HZ, F_MIN_HZ } from './types'
 import { FREQUENCY_GRID_HZ, arcLengthMm, knownArtifactPeriodsMm, periodicColumns } from './ringRegressors'
-import { projectColumns } from './ringGls'
+import { projectColumns, projectPeriodic, ringScratch } from './ringGls'
 import type { LineBasis } from './ringGls'
 import { heldNoiseStatistic, ringLikelihoodRatio } from './ringLikelihood'
-import type { NullFit } from './ringLikelihood'
+import type { NullFit, TestedComponent } from './ringLikelihood'
 import { proportionalityCheck } from './inputProportionality'
 
 // Searches an axis's traced lines for stationary arc-length artifacts: patterns fixed along the
@@ -104,10 +104,22 @@ export function candidateColumns(candidate: ArtifactCandidate, basis: LineBasis,
   return [cos, sin]
 }
 
-/** The held-noise statistic of a candidate's column pair on one line. */
-function heldStatistic(basis: LineBasis, h0: NullFit, columns: Float64Array[]): number {
-  const D = projectColumns(basis, h0.noise, h0.design, columns[0], columns[1]).D
+/** The held-noise statistic of a candidate on one line: an arc-length period by the closed-form
+ *  whitening, pixel locking by its explicit columns. */
+function heldStatistic(basis: LineBasis, h0: NullFit, candidate: ArtifactCandidate): number {
+  const D =
+    candidate.periodMm !== null
+      ? projectPeriodic(basis, h0.noise, h0.design, candidate.periodMm, ringScratch(basis.m), new Float64Array(h0.design.k), new Float64Array(h0.design.k)).D
+      : (() => {
+          const [cos, sin] = candidateColumns(candidate, basis, h0)
+          return projectColumns(basis, h0.noise, h0.design, cos, sin).D
+        })()
   return heldNoiseStatistic(h0, basis.m, D)
+}
+
+/** The component the likelihood ratio of a candidate tests on one line. */
+function testedComponent(candidate: ArtifactCandidate, basis: LineBasis, h0: NullFit): TestedComponent {
+  return candidate.periodMm !== null ? { periodMm: candidate.periodMm } : { columns: candidateColumns(candidate, basis, h0) }
 }
 
 /**
@@ -124,10 +136,9 @@ export function searchStage(
   if (candidates.length === 0) return null
   const tiers = [...new Set(bases.map((b) => b.rec.speedMmS))]
   if (tiers.length < 2) return null
-  const columns = candidates.map((c) => bases.map((b, l) => candidateColumns(c, b, fits[l])))
   // Held-noise statistics everywhere, the refitted ratio at the running maximum until the maximum
   // is a refitted value (each refit only raises a candidate's sum).
-  const values = candidates.map((_, c) => bases.map((b, l) => heldStatistic(b, fits[l], columns[c][l])))
+  const values = candidates.map((c) => bases.map((b, l) => heldStatistic(b, fits[l], c)))
   const refitted = new Map<number, number[]>()
   let best = 0
   for (;;) {
@@ -141,7 +152,7 @@ export function searchStage(
       }
     })
     if (refitted.has(best)) break
-    const ratios = bases.map((b, l) => ringLikelihoodRatio(b, fits[l], { columns: columns[best][l] }))
+    const ratios = bases.map((b, l) => ringLikelihoodRatio(b, fits[l], testedComponent(candidates[best], b, fits[l])))
     refitted.set(best, ratios.map((r) => Math.hypot(r.fit.ring?.a ?? 0, r.fit.ring?.b ?? 0)))
     values[best] = values[best].map((held, l) => Math.max(held, ratios[l].statistic))
   }
@@ -155,5 +166,8 @@ export function searchStage(
     if (!(chiSquareSurvivalEvenDof(tierSum, 2 * members.length) <= alpha)) return null
   }
   if (proportionalityCheck(bases, refitted.get(best)!) !== 'failed') return null
-  return { artifact: { ...candidates[best], detectionPBound: pBound }, columns: columns[best] }
+  return {
+    artifact: { ...candidates[best], detectionPBound: pBound },
+    columns: bases.map((b, l) => candidateColumns(candidates[best], b, fits[l])),
+  }
 }

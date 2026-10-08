@@ -1,9 +1,9 @@
 import { burgArSegments, latticeSegments, spectralDensity } from '../correlatedNoise'
 import type { ArFit } from '../correlatedNoise'
-import { nullDesign, noiseModel, projectColumns, projectRing, ringScratch } from './ringGls'
+import { nullDesign, noiseModel, projectColumns, projectPeriodic, projectRing, ringScratch } from './ringGls'
 import type { LineBasis, LineNoise, NullDesign, RingProjection } from './ringGls'
 import { F_MAX_HZ, F_MIN_HZ } from './types'
-import { FREQUENCY_GRID_HZ, arcLengthMm, cornerDeficit, periodicColumns, ringColumns } from './ringRegressors'
+import { FREQUENCY_GRID_HZ, cornerDeficit, ringColumns } from './ringRegressors'
 
 // The generalized likelihood ratio test (GLRT) of a ring at one point theta = (f, zeta) of one
 // traced line, with the AR noise model refitted under each hypothesis (S. M. Kay, "Fundamentals of
@@ -168,8 +168,7 @@ function alternativeWith(
   if ('columns' in point) {
     ring = projectColumns(basis, noise, design, point.columns[0], point.columns[1], whitened)
   } else if ('periodMm' in point) {
-    const [cos, sin] = periodicColumns(arcLengthMm(basis.rec.tS, basis.rec), [point.periodMm])
-    ring = projectColumns(basis, noise, design, cos, sin, whitened)
+    ring = projectPeriodic(basis, noise, design, point.periodMm, ringScratch(m), new Float64Array(design.k), new Float64Array(design.k), whitened)
   } else {
     ring = projectRing(basis, noise, design, point.frequencyHz, point.dampingRatio, ringScratch(m), new Float64Array(design.k), new Float64Array(design.k), whitened)
   }

@@ -1,6 +1,20 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest'
-import { pooledVarianceSlope } from '../../../src/engine/is/ringGls'
+import {
+  fitNoise,
+  lineBasis,
+  nullDesign,
+  olsNull,
+  pooledVarianceSlope,
+  projectColumns,
+  projectPeriodic,
+  ringScratch,
+} from '../../../src/engine/is/ringGls'
+import { arcLengthMm, periodicColumns } from '../../../src/engine/is/ringRegressors'
+import { analyzeTracedLine } from '../../../src/engine/is/ringAnalyzer'
+import { defaultIsTestRequest, fitSpecToPrinter } from '../../../src/engine/is/types'
+import { defaultPrinterProfile } from '../../../src/engine/gcode/profileTypes'
+import { simulateAxis } from '../../helpers/isTraceSim'
 
 describe('pooledVarianceSlope', () => {
   it('recovers the variance ratio of two groups of innovations as e^b', () => {
@@ -25,5 +39,26 @@ describe('pooledVarianceSlope', () => {
 
   it('reports no slope and no evidence when the deficit vanishes', () => {
     expect(pooledVarianceSlope([[1, -2, 3]], [[0, 0, 0]])).toEqual({ slope: 0, statistic: 0 })
+  })
+})
+
+describe('projectPeriodic', () => {
+  it('whitens an arc-length sinusoid in closed form exactly as the explicit whitening does', () => {
+    // A line under 2 px blur noise (a high AR order) with unread samples: the closed form on the
+    // cruise lattice and the Kalman stretches must give the projection of the explicit columns, to
+    // the rounding of the recurrence (re-anchored every 256 samples, about 1e-10 relative per
+    // column, amplified by the Gram determinant's division): 1e-6 relative.
+    const profile = defaultPrinterProfile()
+    const spec = { ...fitSpecToPrinter(defaultIsTestRequest(profile), profile).spec, axes: ['y' as const] }
+    const [line] = simulateAxis({ seed: 4, spec, noise: { model: 'blur2', sigmaPx: 0.1 }, gaps: { fraction: 0.03, maxRun: 3 }, lineIndices: [5] })
+    const basis = lineBasis(analyzeTracedLine(line.trace).window!)
+    const noise = fitNoise(basis, olsNull(basis, 0.03).residual)
+    const design = nullDesign(basis, noise, 0.03)
+    for (const periodMm of [0.9, 1.7, 4.2]) {
+      const [cos, sin] = periodicColumns(arcLengthMm(basis.rec.tS, basis.rec), [periodMm])
+      const explicit = projectColumns(basis, noise, design, cos, sin).D
+      const closed = projectPeriodic(basis, noise, design, periodMm, ringScratch(basis.m), new Float64Array(design.k), new Float64Array(design.k)).D
+      expect(Math.abs(closed - explicit)).toBeLessThanOrEqual(1e-6 * Math.max(1, explicit))
+    }
   })
 })
