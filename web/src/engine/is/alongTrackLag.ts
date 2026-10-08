@@ -1,16 +1,25 @@
 import { timeAtDistance } from './couponGeometry'
-import type { SampleTimes } from './ringRegressors'
+import type { CommandedMotion, SampleTimes } from './ringRegressors'
 
 // The along-track time warp of the input shaper coupon and its correction.
 //
 // At a line's corner the axis along the measured line takes a velocity step too: it starts from
-// rest and is commanded to the corner speed c. That axis rings like the measured one, so the
-// nozzle runs behind and ahead of its commanded position by the axis's own response to the step,
-// lag(t). The bead at commanded arc position s is therefore deposited at the time t that solves
-// s_cmd(t) - lag(t) = s, not at the commanded time T(s) the tracer assigns to it. Read on the
-// commanded time base, the lateral ring is phase modulated (an index up to about c / v, near 1 rad
-// on the top rung) and its fitted frequency is biased by up to about 1%, by the same fraction on
-// both speed tiers, so the speed check cannot see it.
+// rest and is commanded to the corner speed c, then accelerates at the coupon's acceleration a up
+// to the tier speed v. That axis rings like the measured one, so the nozzle runs behind and ahead
+// of its commanded position by the axis's response to this commanded motion, lag(t). The bead at
+// commanded arc position s is therefore deposited at the time t that solves s_cmd(t) - lag(t) = s,
+// not at the commanded time T(s) the tracer assigns to it. Read on the commanded time base, the
+// lateral ring is phase modulated (an index up to about c / v, near 1 rad on the top rung) and its
+// fitted frequency is biased by up to about 1%, by the same fraction on both speed tiers, so the
+// speed check cannot see it.
+//
+// The lag is the superposition of the axis's unit velocity-step response h over the commanded
+// along-line motion (Duhamel's integral of a linear time-invariant system): the corner's step c
+// at t = 0, and during the ramp a velocity step a dtau at every tau of [0, T], T = (v - c) / a:
+// lag(t) = c h(t) + a (H(t) - H(t - min(t, T))), H the running integral of h. The ramp's term is
+// about as large as the corner's on the lowest rungs (its response is near a / w^2 against the
+// corner's c / w), and left out it leaves a residual the second-mode search reads as a spurious
+// mode near the sum of the two axes' frequencies.
 //
 // The axis along one group's lines is the measured axis of the other group, and the coupon gives
 // it the same input there: the Y group's lines run along +X out of a +Y run-up, the X group's
@@ -82,9 +91,43 @@ export function responseAt(response: CornerResponse, cornerSpeedMmS: number, tS:
   return cornerSpeedMmS * sum
 }
 
-/** A bound of |responseAt| over t >= 0 for corner speed c: every mode's envelope is at most 1. */
-function responseBound(response: CornerResponse, cornerSpeedMmS: number): number {
-  return cornerSpeedMmS * response.modes.reduce((s, m) => s + Math.hypot(m.cosCoefficient, m.sinCoefficient), 0)
+/**
+ * The running integral H(x) of a unit step response mode over [0, x], in closed form: with
+ * s = -zeta w + i w_d and the mode Re[K e^(s t)], K = cos coefficient - i sin coefficient,
+ * H(x) = Re[K (e^(s x) - 1) / s], and |s| = w.
+ */
+function responseIntegral(mode: ResponseMode, x: number): number {
+  const omega = 2 * Math.PI * mode.frequencyHz
+  const decay = mode.dampingRatio * omega
+  const damped = omega * Math.sqrt(Math.max(0, 1 - mode.dampingRatio * mode.dampingRatio))
+  const envelope = Math.exp(-decay * x)
+  const p = envelope * Math.cos(damped * x) - 1
+  const q = envelope * Math.sin(damped * x)
+  // (p + i q) times the conjugate of s, over |s|^2 = w^2.
+  const real = (-decay * p + damped * q) / (omega * omega)
+  const imag = (-damped * p - decay * q) / (omega * omega)
+  return mode.cosCoefficient * real + mode.sinCoefficient * imag
+}
+
+/**
+ * The lag of a line's nozzle behind its commanded position at time t after the corner, mm: the
+ * response to the corner's velocity step c and to the post-corner ramp, the acceleration a over
+ * [0, T], T = (v - c) / a: c h(t) + a (H(t) - H(t - min(t, T))) (see the header).
+ */
+export function lagAt(response: CornerResponse, motion: CommandedMotion, tS: number): number {
+  const c = motion.cornerSpeedMmS
+  const a = motion.accelMmS2
+  const span = Math.min(tS, Math.max(0, (motion.speedMmS - c) / a))
+  let ramp = 0
+  for (const mode of response.modes) ramp += responseIntegral(mode, tS) - responseIntegral(mode, tS - span)
+  return responseAt(response, c, tS) + a * ramp
+}
+
+/** A bound of |lagAt| over t >= 0: the corner term is at most c |K| (every mode's envelope is at
+ *  most 1) and the ramp term at most a T |K| = (v - c) |K|, together v |K|. */
+function lagBound(response: CornerResponse, motion: CommandedMotion): number {
+  const k = response.modes.reduce((s, m) => s + Math.hypot(m.cosCoefficient, m.sinCoefficient), 0)
+  return Math.max(motion.cornerSpeedMmS, motion.speedMmS) * k
 }
 
 /** Commanded arc length from the corner at time t on the trapezoid (the inverse of
@@ -104,20 +147,20 @@ const BISECTION_STEPS = 60
 
 /**
  * The deposit time of every sample of a record whose nozzle lags its commanded position by the
- * along axis's response `lag` at the record's corner speed: per sample, the root of
+ * along axis's response `lag` to the record's commanded motion (lagAt): per sample, the root of
  * s_cmd(t) - lag(t) = s at the sample's commanded arc length s, by bisection on t >= 0. With the
  * lag bounded by L, the root lies between the commanded times of s - L and s + L; the nozzle's
  * position s_cmd - lag rises monotonically while the lag changes more slowly than the commanded
- * speed, which a response no larger than the free response of the step guarantees. A sample the
+ * speed, which a response no larger than the free response of the motion guarantees. A sample the
  * nozzle had already passed at the corner keeps the corner time.
  */
 export function depositTimesUnder(rec: SampleTimes, lag: CornerResponse): Float64Array {
   const c = rec.cornerSpeedMmS
-  const bound = responseBound(lag, c)
+  const bound = lagBound(lag, rec)
   const out = new Float64Array(rec.tS.length)
   for (let i = 0; i < rec.tS.length; i++) {
     const s = commandedArcLengthMm(rec.tS[i], rec)
-    const excess = (t: number) => commandedArcLengthMm(t, rec) - responseAt(lag, c, t) - s
+    const excess = (t: number) => commandedArcLengthMm(t, rec) - lagAt(lag, rec, t) - s
     let lo = timeAtDistance(Math.max(0, s - bound), c, rec.speedMmS, rec.accelMmS2)
     let hi = timeAtDistance(s + bound, c, rec.speedMmS, rec.accelMmS2)
     if (excess(lo) >= 0) {

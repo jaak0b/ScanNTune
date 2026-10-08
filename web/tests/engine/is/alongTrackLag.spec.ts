@@ -1,12 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { depositTimesUnder, responseAt, unitResponseMode } from '../../../src/engine/is/alongTrackLag'
+import { depositTimesUnder, lagAt, responseAt, unitResponseMode } from '../../../src/engine/is/alongTrackLag'
 import { isCouponGeometry } from '../../../src/engine/is/couponGeometry'
 import type { IsSegment } from '../../../src/engine/is/couponGeometry'
 import { defaultIsTestRequest, fitSpecToPrinter } from '../../../src/engine/is/types'
 import { defaultPrinterProfile } from '../../../src/engine/gcode/profileTypes'
 
 // The expected values were computed once outside the tests by an independent script: the
-// trapezoid arc length c t + a t^2 / 2 (then cruise), the damped response, and a 200-step
+// trapezoid arc length c t + a t^2 / 2 (then cruise), the damped response, the ramp's term by
+// Simpson's rule over the ramp (20,000 intervals) rather than the closed form, and a 100-step
 // bisection of s_cmd(t) - lag(t) = s.
 
 const MOTION = { cornerSpeedMmS: 100, speedMmS: 150, accelMmS2: 3000 }
@@ -63,16 +64,40 @@ describe('responseAt', () => {
   })
 })
 
+describe('lagAt', () => {
+  const sine = { modes: [{ frequencyHz: 45, dampingRatio: 0.05, cosCoefficient: 0, sinCoefficient: 0.0035 }] }
+
+  it('adds the post-corner ramp to the corner step inside the ramp and after it', () => {
+    // Corner 100 mm/s, tier 150 mm/s, 3000 mm/s^2: the ramp ends at 1/60 s. The corner's step
+    // alone gives 0.0949188 mm at 0.01 s and 0.1867005 mm at 0.03 s.
+    expect(lagAt(sine, MOTION, 0.01)).toBeCloseTo(0.1620936146, 9)
+    expect(lagAt(sine, MOTION, 0.03)).toBeCloseTo(0.1739320287, 9)
+  })
+
+  it('carries the cosine and sine terms of a damped response through the ramp', () => {
+    const mixed = { modes: [{ frequencyHz: 40, dampingRatio: 0.1, cosCoefficient: 0.002, sinCoefficient: -0.001 }] }
+    const motion = { cornerSpeedMmS: 50, speedMmS: 106, accelMmS2: 3000 }
+    expect(lagAt(mixed, motion, 0.01)).toBeCloseTo(-0.0893979976, 9)
+    expect(lagAt(mixed, motion, 0.025)).toBeCloseTo(0.0376337420, 9)
+  })
+
+  it('has no ramp term on a line that runs at its corner speed', () => {
+    const undamped = { modes: [{ frequencyHz: 50, dampingRatio: 0, cosCoefficient: 0, sinCoefficient: 0.001 }] }
+    expect(lagAt(undamped, { cornerSpeedMmS: 100, speedMmS: 100, accelMmS2: 3000 }, 0.005)).toBeCloseTo(0.1, 12)
+  })
+})
+
 describe('depositTimesUnder', () => {
   const lag = { modes: [{ frequencyHz: 45, dampingRatio: 0.05, cosCoefficient: 0, sinCoefficient: 0.0035 }] }
 
   it('finds when the lagging nozzle reaches each commanded position', () => {
-    // At these times the response is negative, the nozzle runs ahead, so it reaches every
-    // position before its commanded time; the middle sample lies past the end of the ramp.
+    // The lag of the corner's step and the ramp: at these samples the nozzle runs ahead, so it
+    // reaches every position before its commanded time; the last two samples lie past the end of
+    // the ramp.
     const times = depositTimesUnder({ ...MOTION, tS: Float64Array.from([0.012, 0.02, 0.035]) }, lag)
-    expect(times[0]).toBeCloseTo(0.011666434026, 11)
-    expect(times[1]).toBeCloseTo(0.018409953079, 11)
-    expect(times[2]).toBeCloseTo(0.034538118188, 11)
+    expect(times[0]).toBeCloseTo(0.011979728341, 11)
+    expect(times[1]).toBeCloseTo(0.018579731776, 11)
+    expect(times[2]).toBeCloseTo(0.034687796883, 11)
   })
 
   it('returns the commanded times when the other axis does not move', () => {

@@ -1,11 +1,13 @@
 import { expect, it } from 'vitest'
 import type { SimRing } from '../helpers/isTraceSim'
+import type { IsTestSpec } from '../../src/engine/is/types'
 import { NOISE, TWO_AXES, analyzeAxisAlone, analyzeCouponCase } from './statsSupport'
 
 /**
- * S10, the along-track lag: a coupon whose two axes ring with about the free response c / w_d of
- * the 100 mm/s top-rung corner, each group's lines deposited by a nozzle lagging by the other
- * group's ring (the simulator's alongTrack), iid scan noise. The X group is traced with its
+ * S10, the along-track lag: a coupon (`spec`, the default two-axis coupon unless given) whose two
+ * axes ring with about the free response c / w_d of the 100 mm/s top-rung corner, each group's
+ * lines deposited by a nozzle lagging by the other group's response to the corner and the ramp
+ * after it (the simulator's alongTrack), iid scan noise. The X group is traced with its
  * lateral coordinate against the run-up on every second seed.
  *
  * Without the correction (the first 10 seeds, each axis analyzed alone) a case with a
@@ -25,7 +27,14 @@ import { NOISE, TWO_AXES, analyzeAxisAlone, analyzeCouponCase } from './statsSup
  * have probability 0.0001). An accepted axis whose partner is refused keeps its uncorrected
  * estimate by design; the corrected count is reported.
  */
-export function alongTrackLagCase(name: string, xRing: SimRing, yRing: SimRing, biasedAxis: 'x' | 'y' | null, seedBase: number): void {
+export function alongTrackLagCase(
+  name: string,
+  xRing: SimRing,
+  yRing: SimRing,
+  biasedAxis: 'x' | 'y' | null,
+  seedBase: number,
+  spec: IsTestSpec = TWO_AXES,
+): void {
   it(`corrects the frequency for the other axis's ring along the lines, ${name}`, () => {
     const truth = { x: xRing.frequencyHz, y: yRing.frequencyHz }
     const options = (seed: number) => ({
@@ -36,7 +45,7 @@ export function alongTrackLagCase(name: string, xRing: SimRing, yRing: SimRing, 
     const uncorrected: number[] = []
     for (let seed = 1; biasedAxis !== null && seed <= 10; seed++) {
       const o = options(seed)
-      const pool = analyzeAxisAlone(TWO_AXES, biasedAxis, o[biasedAxis], seedBase + seed)
+      const pool = analyzeAxisAlone(spec, biasedAxis, o[biasedAxis], seedBase + seed)
       if (pool.frequencyHz !== null) uncorrected.push(pool.frequencyHz - truth[biasedAxis])
     }
 
@@ -48,7 +57,7 @@ export function alongTrackLagCase(name: string, xRing: SimRing, yRing: SimRing, 
     let secondModes = 0
     for (let seed = 1; seed <= 40; seed++) {
       const o = options(seed)
-      const [x, y] = analyzeCouponCase(TWO_AXES, o.x, o.y, seedBase + seed)
+      const [x, y] = analyzeCouponCase(spec, o.x, o.y, seedBase + seed)
       for (const [axis, pool] of [['x', x], ['y', y]] as const) {
         if (pool.accepted) accepted++
         if (pool.accepted && pool.alongTrackLag === 'corrected') corrected++

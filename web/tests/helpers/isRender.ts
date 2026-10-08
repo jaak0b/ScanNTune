@@ -19,12 +19,13 @@ import { timeAtDistance } from '../../src/engine/is/lineTracer'
 //
 // Along-track lag: the axis along a group's lines is the other group's axis, and the corner
 // changes its velocity the same way (the Y group starts it from rest along +X, the X group stops
-// it from a -X run-up), so it answers with the ring the other group's truth gives it. When both
-// axes have a truth, the nozzle of a line lags its commanded position by that ring, taken as the
-// displacement along the other group's run-up, and the line's bead at commanded position s lies
-// where the nozzle passed s: at the time t solving s_cmd(t) - lag(t) = s (bisection), at which
-// the line's own lobe and ring are evaluated. `alongTrackLag: false` renders on the commanded
-// time base instead.
+// it from a -X run-up), so it answers with the ring the other group's truth gives it; the ramp
+// after the corner, a further velocity change up to the tier speed, adds the same ring's response
+// to each of its steps. When both axes have a truth, the nozzle of a line lags its commanded
+// position by that response, taken as the displacement along the other group's run-up, and the
+// line's bead at commanded position s lies where the nozzle passed s: at the time t solving
+// s_cmd(t) - lag(t) = s (bisection), at which the line's own lobe and ring are evaluated.
+// `alongTrackLag: false` renders on the commanded time base instead.
 
 export interface IsAxisTruth {
   frequencyHz: number
@@ -152,24 +153,40 @@ function towardRunUp(line: IsLine): number {
   return along >= 0 ? 1 : -1
 }
 
-/** The along-track lag of a line of the group whose axis is not `ringingAxis`, at corner speed c:
- *  the ringing axis's ring along that axis's own group's run-up; null without both truths. */
+/**
+ * The along-track lag of a line of `lineAxis`'s group with corner speed c, tier speed v and
+ * acceleration a: the other axis's ring taken along that axis's own group's run-up, as its
+ * response to the line's commanded along-line motion, the corner's step c plus the ramp's
+ * velocity steps a dtau over [0, (v - c) / a] (the ring per unit step integrated over the ramp,
+ * by the antiderivative of e^(alpha x) cos(beta x + phi)); null without both truths.
+ */
 function lagFunction(
   g: IsCouponGeometry,
   o: Resolved,
   lineAxis: IsAxis,
-  cornerSpeedMmS: number,
+  c: number,
+  v: number,
+  a: number,
 ): ((t: number) => number) | null {
   if (!o.alongTrackLag || g.groups.length < 2 || !o.truth[lineAxis]) return null
   const other = g.groups.find((group) => group.axis !== lineAxis)!
   const truth = o.truth[other.axis]
   if (!truth) return null
   const sign = towardRunUp(other.lines[0])
-  const B = truth.ringAmpMm * (cornerSpeedMmS / o.spec.cornerSpeedMmS)
+  const perStep = truth.ringAmpMm / o.spec.cornerSpeedMmS
   const omega = 2 * Math.PI * truth.frequencyHz
+  const alpha = -omega * truth.dampingRatio
   const omegaD = omega * Math.sqrt(1 - truth.dampingRatio * truth.dampingRatio)
   const phi = truth.phaseRad ?? 0
-  return (t: number) => sign * B * Math.exp(-omega * truth.dampingRatio * t) * Math.cos(omegaD * t + phi)
+  const step = (t: number) => Math.exp(alpha * t) * Math.cos(omegaD * t + phi)
+  const integral = (t: number) =>
+    (Math.exp(alpha * t) * (alpha * Math.cos(omegaD * t + phi) + omegaD * Math.sin(omegaD * t + phi))) /
+    (alpha * alpha + omegaD * omegaD)
+  const tRamp = (v - c) / a
+  return (t: number) => {
+    const span = Math.min(t, tRamp)
+    return sign * perStep * (c * step(t) + a * (integral(t) - integral(t - span)))
+  }
 }
 
 function buildRingedLines(spec: IsTestSpec, g: IsCouponGeometry, o: Resolved): RingedLine[] {
@@ -204,12 +221,13 @@ function buildRingedLines(spec: IsTestSpec, g: IsCouponGeometry, o: Resolved): R
       const a = spec.accelMmS2
       const atTime = (t: number) =>
         lobeA * Math.exp(-t / lobeTau) + B * Math.exp(-omega * zeta * t) * Math.cos(omegaD * t + phi)
-      const lag = lagFunction(g, o, group.axis, c)
+      const lag = lagFunction(g, o, group.axis, c, v, a)
       let lat = (sMm: number) => atTime(timeAtDistance(sMm, c, v, a))
       if (lag) {
-        // The ring is bounded by its corner amplitude, so the deposit time lies between the
-        // commanded times of s - bound and s + bound.
-        const bound = Math.abs(o.truth[g.groups.find((other) => other.axis !== group.axis)!.axis]!.ringAmpMm) * (c / spec.cornerSpeedMmS)
+        // The lag is at most the ring per unit step times the corner's step plus the ramp's
+        // velocity change, v, so the deposit time lies between the commanded times of
+        // s - bound and s + bound.
+        const bound = Math.abs(o.truth[g.groups.find((other) => other.axis !== group.axis)!.axis]!.ringAmpMm) * (v / spec.cornerSpeedMmS)
         const depositTime = (sMm: number) => {
           let lo = timeAtDistance(Math.max(0, sMm - bound), c, v, a)
           let hi = timeAtDistance(sMm + bound, c, v, a)

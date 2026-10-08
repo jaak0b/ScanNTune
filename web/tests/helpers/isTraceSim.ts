@@ -33,11 +33,15 @@ import type { TracedLine } from '../../src/engine/is/lineTracer'
 //   length at the pedestal's speed; scan noise inflated where the extruded flow lags the
 //   commanded flow (the starved bead after the corner is rougher), by a factor 1 + k D(t) / max D
 //   with D = 1 - q / v the flow deficit of the same first-order lag; isolated impulse outliers (dust, hairs, voids) on a fraction of samples;
-//   the along-track time warp: the corner's velocity step also rings the axis along the line, so
-//   the nozzle lags its commanded arc position by delta(t), by default the free response from
-//   rest (c / w_a) e^(-zeta_a w_a t) sin(w_d t); the bead at arc position s is deposited at the
-//   time t that solves s_cmd(t) - delta(t) = s exactly (bisection on the profile actually run),
-//   and every time-domain mechanism is evaluated at that deposit time.
+//   the along-track time warp: the axis along the line rings after the corner too, driven by the
+//   commanded along-line motion, the corner's velocity step c and then the ramp's constant
+//   acceleration a up to the tier speed. The nozzle lags its commanded arc position by delta(t),
+//   the superposition of the mode's step response over that motion: the corner term (by default
+//   the free response from rest, (c / w_a) e^(-zeta_a w_a t) sin(w_d t)) plus a times the integral
+//   of the unit step response over the ramp, in closed form (the antiderivative of
+//   e^(alpha x) cos(beta x + phi)). The bead at arc position s is deposited at the time t that
+//   solves s_cmd(t) - delta(t) = s exactly (bisection on the trapezoid), and every time-domain
+//   mechanism is evaluated at that deposit time.
 // - Lateral sign: the mechanisms are displacements along the run-up's direction of travel into
 //   the corner; the tracer's lateral coordinate points that way (+1, the default) or against it
 //   (-1), and the noise and the pixel locking act in the tracer's coordinate.
@@ -91,10 +95,11 @@ export interface SimArtifacts {
 export interface SimAlongTrack {
   frequencyHz: number
   dampingRatio: number
-  /** Lag of the nozzle behind its commanded arc position at the corner on the TOP rung, mm,
-   *  lower rungs scaling with their rung, as ampMm e^(-zeta w t) cos(w_d t + phaseRad). Absent
-   *  means the full free response to the velocity step, c_top / w_a, with phase -pi/2. A joint
-   *  X/Y case passes the other group's `ring` here: the same axis answers the same step. */
+  /** The mode's response to the corner's velocity step on the TOP rung, mm, lower rungs scaling
+   *  with their rung, as ampMm e^(-zeta w t) cos(w_d t + phaseRad); the ramp's response follows
+   *  from the same step response. Absent means the full free response to the velocity step,
+   *  c_top / w_a, with phase -pi/2. A joint X/Y case passes the other group's `ring` here: the same
+   *  axis answers the same step. */
   ampMm?: number
   phaseRad?: number
 }
@@ -226,6 +231,21 @@ function laggedFlow(t: number, c: number, v: number, a: number, tau: number): nu
 function modeAt(t: number, frequencyHz: number, dampingRatio: number, ampMm: number, phaseRad: number): number {
   const omega = 2 * Math.PI * frequencyHz
   return ampMm * Math.exp(-dampingRatio * omega * t) * Math.cos(omega * Math.sqrt(1 - dampingRatio * dampingRatio) * t + phaseRad)
+}
+
+/**
+ * The integral of e^(-zeta w x) cos(w_d x + phase) over [x0, x1], by its antiderivative
+ * e^(alpha x) (alpha cos(beta x + phase) + beta sin(beta x + phase)) / (alpha^2 + beta^2) with
+ * alpha = -zeta w and beta = w_d.
+ */
+function dampedCosIntegral(x0: number, x1: number, frequencyHz: number, dampingRatio: number, phaseRad: number): number {
+  const omega = 2 * Math.PI * frequencyHz
+  const alpha = -dampingRatio * omega
+  const beta = omega * Math.sqrt(1 - dampingRatio * dampingRatio)
+  const antiderivative = (x: number) =>
+    (Math.exp(alpha * x) * (alpha * Math.cos(beta * x + phaseRad) + beta * Math.sin(beta * x + phaseRad))) /
+    (alpha * alpha + beta * beta)
+  return antiderivative(x1) - antiderivative(x0)
 }
 
 /** Discrete Gaussian kernel of standard deviation sigma px, unit L2 norm (keeps the variance). */
@@ -375,8 +395,19 @@ export function simulateAxis(options: TraceSimOptions): SimLine[] {
     const along = options.alongTrack
     const alongAmp = along ? (along.ampMm ?? cTop / (2 * Math.PI * along.frequencyHz)) * (c / cTop) : 0
     const sign = options.lateralTowardRunUp ?? 1
-    const lag = (t: number) =>
-      along ? modeAt(t, along.frequencyHz, along.dampingRatio, alongAmp, along.phaseRad ?? -Math.PI / 2) : 0
+    const alongPhase = along?.phaseRad ?? -Math.PI / 2
+    const tRamp = (v - c) / a
+    // The response to the corner's step c, plus the ramp: a velocity step a dtau at every tau of
+    // [0, tRamp] answered by the unit step response (alongAmp / c per mm/s) tau later.
+    const lag = (t: number) => {
+      if (!along) return 0
+      const corner = modeAt(t, along.frequencyHz, along.dampingRatio, alongAmp, alongPhase)
+      const span = Math.min(t, tRamp)
+      const ramp = a * (alongAmp / c) * dampedCosIntegral(t - span, t, along.frequencyHz, along.dampingRatio, alongPhase)
+      return corner + ramp
+    }
+    // |corner| <= |alongAmp| and |ramp| <= a tRamp |alongAmp| / c, the ramp's velocity change v - c.
+    const lagMaxMm = (Math.abs(alongAmp) * v) / c
     const ring = options.ring ?? null
     let f = ring ? (ring.frequencyByTierHz?.[tierIndex] ?? ring.frequencyHz) : 0
     if (ring?.frequencyGradientHzPerMm) f += ring.frequencyGradientHzPerMm * (offsetMm - meanOffset)
@@ -390,9 +421,10 @@ export function simulateAxis(options: TraceSimOptions): SimLine[] {
       const s = TRACE_START_MM + k * stepMm
       tTraced[k] = trapezoidTime(s, c, v, a)
       // The nozzle lags its commanded arc position by the along-track mode's response to the
-      // corner's velocity step, so the bead at s is deposited when the lagging nozzle reaches s.
+      // corner's velocity step and the ramp, so the bead at s is deposited when the lagging
+      // nozzle reaches s.
       const t = along
-        ? depositTime(s, (u) => trapezoidDistance(u, c, v, a), (x) => trapezoidTime(x, c, v, a), lag, Math.abs(alongAmp))
+        ? depositTime(s, (u) => trapezoidDistance(u, c, v, a), (x) => trapezoidTime(x, c, v, a), lag, lagMaxMm)
         : trapezoidTime(s, c, v, a)
       let y = 0
       if (ring) y += modeAt(t, f, ring.dampingRatio, ring.ampMm * (c / cTop), ring.phaseRad ?? 0)
