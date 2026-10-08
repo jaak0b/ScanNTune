@@ -315,6 +315,30 @@ describe('poolAxisFits checks', () => {
     ])
   })
 
+  it('accepts a ring that the slower tier alone does not show, with the speed check not confirmed', () => {
+    // Truth 60 Hz, zeta 0.05, 0.03 mm on the top rung; the 106 mm/s lines (group order 106, 150,
+    // 150, 106, ...) carry eight times the scan noise, so that tier alone detects nothing. The
+    // joint frequency's 95% halfwidth is about 0.28 Hz here, so 0.5 Hz is more than three
+    // standard errors.
+    const noisySlowTier = [8, 1, 1, 8, 8, 1, 1, 8, 8, 1]
+    const p = pool(
+      twoTier,
+      simulate(
+        twoTier,
+        { noise: { ...IID, perLineScale: noisySlowTier }, ring: { frequencyHz: 60, dampingRatio: 0.05, ampMm: 0.03 } },
+        2,
+      ),
+    )
+    expect(p.speedCheck.state).toBe('not-confirmed')
+    expect(p.speedCheck.tiers.map((t) => [t.speedMmS, t.detected])).toEqual([
+      [106, false],
+      [150, true],
+    ])
+    expect(p.refusals).toEqual([])
+    expect(p.accepted).toBe(true)
+    expect(Math.abs(p.frequencyHz! - 60)).toBeLessThan(0.5)
+  })
+
   it('refuses a forced tone because it does not grow with the corner speed', () => {
     // A 100 Hz tone fixed in time, 0.002 mm on every line with a random phase: it keeps its
     // frequency at both speeds, so only input proportionality can tell it from ringing.

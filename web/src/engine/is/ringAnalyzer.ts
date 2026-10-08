@@ -120,7 +120,8 @@ import { tQuantile } from '../studentT'
 //      Marcus, Peritz and Gabriel 1976), then fitted on its own; d = ln(f_slow / f_fast) with the
 //      delta-method standard error. Confirmed when the artifact hypothesis d = -ln rho is
 //      rejected one-sided and d = 0 is not rejected two-sided; changed with speed when d = 0 is
-//      rejected; otherwise not confirmed.
+//      rejected; otherwise not confirmed. Only a change with speed refuses the axis; a check
+//      not confirmed is reported and the other gates decide.
 //    - One tier: the detection is tested again with each single line deleted (a leave-one-out
 //      influence check).
 //    - Replicate check: Cochran's Q homogeneity test (Cochran 1954) on the inverse-variance
@@ -1535,17 +1536,6 @@ function verdict(result: AxisPool): AxisPool {
       result,
       'The frequency changed with the line speed, the way a print or scan pattern does. ' +
         'Ringing of the machine keeps its frequency at every speed, so no shaper is recommended.',
-    )
-  }
-  if (speed.state === 'not-confirmed') {
-    const silent = speed.tiers.find((t) => !t.detected)
-    return refusal(
-      result,
-      silent
-        ? `The ${silent.speedMmS} mm/s lines alone show no ringing, so the frequency cannot be ` +
-            'confirmed at both speeds. Reprint or rescan the coupon.'
-        : 'The two speed tiers measured the frequency too imprecisely to confirm that it is ' +
-            'the same at both speeds. Reprint or rescan the coupon.',
     )
   }
   if (result.influenceCheck === 'failed') {
