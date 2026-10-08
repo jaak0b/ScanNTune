@@ -289,8 +289,9 @@ function selectCandidateByContent(
       'The coupon in the scan does not match the configured test settings. The plate and its ' +
         'fiducial holes were found, but the printed lines are not where the current settings ' +
         'place them, which usually means the coupon was printed with different settings, most ' +
-        'often a different number of lines per speed. Set the same print settings that ' +
-        'generated this coupon, including lines per speed, and analyze again.',
+        'often a different number of lines per speed or speed tiers. Set the same print ' +
+        'settings that generated this coupon, including lines per speed and speed tiers, and ' +
+        'analyze again.',
       4,
       candidates[best],
     )

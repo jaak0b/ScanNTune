@@ -29,6 +29,8 @@ import {
 import { unresolvedVariablesWarning } from '../engine/pa/slicerVariables'
 import { restartNoteText } from '../engine/gcode/couponShell'
 import {
+  bandTopWarning,
+  DEFAULT_CORNER_SPEED_MM_S,
   defaultIsTestRequest,
   fitSpecToPrinter,
   MIN_CORNER_SPEED_MM_S,
@@ -72,7 +74,9 @@ const {
     // that are safe for their machine rather than silently inheriting a computed default.
     lineSpeedMmS: null,
     cornerSpeedMmS: null,
-    linesPerSpeed: specDefaults.value.linesPerSpeed,
+    // Empty means the defaults: two speed tiers and the derived lines per speed.
+    speedTiers: null,
+    linesPerSpeedOverride: null,
     measuredLineMm: specDefaults.value.measuredLineMm,
     linePitchMm: specDefaults.value.linePitchMm,
     scanPlace: 'part' as ScanPlace,
@@ -89,12 +93,24 @@ const {
 const {
   lineSpeedMmS: tierSpeed,
   cornerSpeedMmS: cornerSpeed,
-  linesPerSpeed,
+  speedTiers,
+  linesPerSpeedOverride,
   measuredLineMm: measuredLine,
   linePitchMm: linePitch,
   scanPlace,
   partColors,
 } = settingsForm
+// The stored tier count is null until chosen; null is the default of two tiers.
+const SPEED_TIER_ITEMS = [
+  { title: 'Two', value: 2 },
+  { title: 'One', value: 1 },
+]
+const speedTierChoice = computed({
+  get: () => speedTiers.value ?? 2,
+  set: (v: number) => {
+    speedTiers.value = v
+  },
+})
 const scanPlaceItems = SCAN_PLACE_ITEMS
 const partColorsItems = PART_COLORS_ITEMS
 const scanPlanTexts: ScanPlanTexts = {
@@ -125,9 +141,9 @@ const spec = computed<IsTestRequest | null>(() => {
   if (tierSpeed.value === null || cornerSpeed.value === null) return null
   return {
     ...specDefaults.value,
-    speedsMmS: speedTiersFor(tierSpeed.value),
+    speedsMmS: speedTierChoice.value === 1 ? [tierSpeed.value] : speedTiersFor(tierSpeed.value),
     cornerSpeedMmS: cornerSpeed.value,
-    linesPerSpeed: linesPerSpeed.value,
+    linesPerSpeed: linesPerSpeedOverride.value,
     measuredLineMm: measuredLine.value ?? specDefaults.value.measuredLineMm,
     linePitchMm: linePitch.value ?? specDefaults.value.linePitchMm,
     axes: ['x', 'y'] as IsAxis[],
@@ -156,12 +172,37 @@ const fitNotes = computed(() => (fitted.value && 'notes' in fitted.value ? fitte
 const tiersText = computed(() =>
   fittedSpec.value ? `speeds ${fittedSpec.value.speedsMmS.join(' / ')} mm/s` : '',
 )
+const linesText = computed(() =>
+  fittedSpec.value ? `${fittedSpec.value.linesPerSpeed} lines per speed` : '',
+)
+// The count an empty lines-per-speed field prints with, shown as the field's placeholder.
+const derivedLinesText = computed(() => {
+  const s = spec.value
+  // A request that fails validation or the fit shows that error instead (fitError).
+  if (!s || !fittedSpec.value) return ''
+  try {
+    const derived = fitSpecToPrinter({ ...s, linesPerSpeed: null }, store.selected ?? defaultPrinterProfile())
+    return String(derived.spec.linesPerSpeed)
+  } catch (e) {
+    console.error('Deriving the lines per speed failed for a request that fits', e)
+    return ''
+  }
+})
+// The fastest corner proven clean on a tested printer; above it the page warns.
+const fastCornerWarning = computed(() =>
+  cornerSpeed.value !== null && cornerSpeed.value > DEFAULT_CORNER_SPEED_MM_S,
+)
 const footprintText = computed(() => {
   if (!fittedSpec.value) return ''
   const g = isCouponGeometry(fittedSpec.value)
   return `coupon ${Math.round(g.couponWidthMm)} x ${Math.round(g.couponHeightMm)} mm`
 })
-const rampNotes = computed(() => (fittedSpec.value ? rampWarnings(fittedSpec.value) : []))
+const rampNotes = computed(() => {
+  const s = fittedSpec.value
+  if (!s) return []
+  const bandTop = bandTopWarning(s, store.selected ?? defaultPrinterProfile())
+  return [...rampWarnings(s), ...(bandTop === null ? [] : [bandTop])]
+})
 // The acceleration is not editable here: the test runs at the printer profile's own print
 // acceleration.
 const accelNote = computed(() =>
@@ -457,14 +498,26 @@ async function analyze(): Promise<void> {
             data-testid="is-corner-speed"
           />
         </div>
-        <p class="tip mb-0" data-testid="is-speeds-tip">
-          Enter both speeds before generating the test. The corner speed must be at least
-          {{ MIN_CORNER_SPEED_MM_S }} mm/s, and the line speed must be at least as fast as the
-          corner speed.
+        <p class="tip mb-0" data-testid="is-layer-shift-note">
+          <strong>Lower the corner speed if the print shows a layer shift.</strong>
         </p>
-        <p class="tip mb-0">
-          <strong>Lower the corner speed if the print skips layers.</strong>
+        <p class="tip mb-0" data-testid="is-ladder-tip">
+          Each tier's lines take their corners at speeds rising from
+          {{ MIN_CORNER_SPEED_MM_S }} mm/s to the corner speed, and the fastest corners print
+          last. At each corner of a CoreXY printer, one motor reverses at twice the corner speed.
         </p>
+        <v-alert
+          v-if="fastCornerWarning"
+          type="warning"
+          variant="tonal"
+          density="compact"
+          class="mt-2 soft-alert"
+          data-testid="is-fast-corner-warning"
+        >
+          Watch the last lines of the print for a layer shift, because they carry the fastest
+          corners. Corner speeds above {{ DEFAULT_CORNER_SPEED_MM_S }} mm/s skipped steps on a
+          tested CoreXY printer.
+        </v-alert>
         <v-alert
           v-if="highFlowText"
           type="warning"
@@ -501,7 +554,7 @@ async function analyze(): Promise<void> {
         <v-expansion-panels flat class="advanced-panels mt-1">
           <v-expansion-panel data-testid="is-advanced-panel">
             <v-expansion-panel-title class="adv-title">
-              Advanced: line pitch, read length, lines per speed
+              Advanced: line pitch, read length, lines per speed, speed tiers
             </v-expansion-panel-title>
             <v-expansion-panel-text>
               <div class="fields">
@@ -521,11 +574,23 @@ async function analyze(): Promise<void> {
                   hint="Cover at least five wavelengths of the lowest resonance of interest."
                 />
                 <NumericField
-                  v-model="linesPerSpeed"
+                  v-model="linesPerSpeedOverride"
                   label="Lines per speed"
                   :step="1"
                   :min="3"
-                  hint="More lines tolerate damaged or unreadable lines in the scan."
+                  :placeholder="derivedLinesText"
+                  persistent-placeholder
+                  hint="Leave empty to use the derived count. More lines tolerate damaged or unreadable lines in the scan."
+                  testid="is-lines-per-speed"
+                />
+                <v-select
+                  v-model="speedTierChoice"
+                  :items="SPEED_TIER_ITEMS"
+                  label="Speed tiers"
+                  density="comfortable"
+                  hint="With two tiers, real ringing keeps its frequency at both speeds while print and scan patterns change with the speed. The second speed is derived from the line speed."
+                  persistent-hint
+                  data-testid="is-speed-tiers"
                 />
               </div>
             </v-expansion-panel-text>
@@ -541,6 +606,15 @@ async function analyze(): Promise<void> {
           data-testid="is-tiers"
         >
           {{ tiersText }}
+        </v-chip>
+        <v-chip
+          v-if="linesText"
+          size="small"
+          variant="tonal"
+          prepend-icon="mdi-format-list-numbered"
+          data-testid="is-lines"
+        >
+          {{ linesText }}
         </v-chip>
         <v-chip
           v-if="footprintText"

@@ -30,7 +30,8 @@ const EM: EmSettings = {
 const IS: IsSettings = {
   lineSpeedMmS: 150,
   cornerSpeedMmS: 20,
-  linesPerSpeed: 5,
+  speedTiers: 2,
+  linesPerSpeedOverride: 5,
   measuredLineMm: 30,
   linePitchMm: 2.5,
   scanPlace: 'part',
@@ -179,10 +180,40 @@ describe('per-flow settings stores', () => {
     expect(useIsSettings().settings).toEqual({
       lineSpeedMmS: 150,
       cornerSpeedMmS: 20,
-      linesPerSpeed: 5,
+      speedTiers: null,
+      linesPerSpeedOverride: null,
       measuredLineMm: 30,
       linePitchMm: 2.5,
       scanPlace: 'part',
+      partColors: 'single',
+    })
+  })
+
+  it('loads an entry stored before speed tiers with two tiers and the derived line count', () => {
+    // A one-tier entry stored eight lines per speed; that count belonged to a one-tier
+    // coupon, so it is not carried over: the tiers and the override load empty (the
+    // defaults, two tiers and the derived count).
+    const id = addProfile()
+    const legacy = {
+      lineSpeedMmS: 150,
+      cornerSpeedMmS: 100,
+      linesPerSpeed: 8,
+      measuredLineMm: 30,
+      linePitchMm: 2.5,
+      scanPlace: 'plate',
+      partColors: 'single',
+    }
+    localStorage.setItem('scanntune.settings.is', JSON.stringify({ [id]: legacy }))
+    setActivePinia(createPinia())
+    usePrinterProfiles().select(id)
+    expect(useIsSettings().settings).toEqual({
+      lineSpeedMmS: 150,
+      cornerSpeedMmS: 100,
+      speedTiers: null,
+      linesPerSpeedOverride: null,
+      measuredLineMm: 30,
+      linePitchMm: 2.5,
+      scanPlace: 'plate',
       partColors: 'single',
     })
   })
