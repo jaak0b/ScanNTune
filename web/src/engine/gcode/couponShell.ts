@@ -163,38 +163,24 @@ export type OverriddenSetting =
   | 'motionLimits'
 
 interface OverriddenSettingText {
-  /** The setting's name in the UI note. */
-  label: string
-  /** Whether the name is a plural noun, which makes the note speak of values. */
-  plural: boolean
   /** The end-of-print G-code comment naming how the setting comes back. */
   comment: string
 }
 
 const OVERRIDDEN_SETTING_TEXT: Record<OverriddenSetting, OverriddenSettingText> = {
   inputShaping: {
-    label: 'input shaping',
-    plural: false,
     comment: '; input shaping resumes with the next firmware restart or saved configuration',
   },
   pressureAdvance: {
-    label: 'pressure advance',
-    plural: false,
     comment: '; pressure advance resumes with the next firmware restart or saved configuration',
   },
   flowPercentage: {
-    label: 'flow percentage',
-    plural: false,
     comment: '; the M221 flow percentage resumes with the next firmware restart',
   },
   speedFactor: {
-    label: 'speed factor',
-    plural: false,
     comment: '; the M220 speed factor resumes with the next firmware restart',
   },
   motionLimits: {
-    label: 'motion limits',
-    plural: true,
     comment: '; run FIRMWARE_RESTART to restore your configured motion limits',
   },
 }
@@ -214,30 +200,6 @@ export function couponOverriddenSettings(
 /** End-of-print comments, one per overridden setting, naming how each comes back. */
 export function restartNoteComments(overridden: readonly OverriddenSetting[]): string[] {
   return overridden.map((s) => OVERRIDDEN_SETTING_TEXT[s].comment)
-}
-
-/** "a", "a and b", "a, b, and c". */
-function joinNames(names: string[]): string {
-  if (names.length <= 2) return names.join(' and ')
-  return `${names.slice(0, -1).join(', ')}, and ${names[names.length - 1]}`
-}
-
-/**
- * The UI note shown next to a coupon's Generate button: the same restart instruction on
- * every flow, naming the settings the coupon overrides. It reads the same list the
- * generator's end-of-print comments come from, so the two cannot disagree.
- */
-export function restartNoteText(overridden: readonly OverriddenSetting[]): string {
-  if (overridden.length === 0) {
-    throw new Error('A restart note needs at least one overridden setting')
-  }
-  const texts = overridden.map((s) => OVERRIDDEN_SETTING_TEXT[s])
-  const names = joinNames(texts.map((t) => t.label))
-  const values = texts.length > 1 || texts.some((t) => t.plural) ? 'values' : 'value'
-  return (
-    'Restart the firmware after the print finishes. ' +
-    `The test overrides the printer's ${names}, and the restart restores the configured ${values}.`
-  )
 }
 
 /**

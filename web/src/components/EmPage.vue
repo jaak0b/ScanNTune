@@ -19,8 +19,7 @@ import {
   flowRatioRelativeSe,
   formatSlicerFlow,
 } from '../engine/em/emCorrectionFormatter'
-import { EM_OVERRIDDEN_SETTINGS, generateEmGcodeWithReport } from '../engine/em/gcodeGenerator'
-import { restartNoteText } from '../engine/gcode/couponShell'
+import { generateEmGcodeWithReport } from '../engine/em/gcodeGenerator'
 import { unresolvedVariablesWarning } from '../engine/pa/slicerVariables'
 import {
   accelRampMm,
@@ -143,7 +142,6 @@ const rampWarning = computed(() => {
 const generateError = ref('')
 const unknownVariables = ref<string[]>([])
 const templateWarnings = ref<string[]>([])
-const restartNote = restartNoteText(EM_OVERRIDDEN_SETTINGS)
 const canGenerate = computed(() => store.selected !== null && store.selectedFilament !== null)
 const unknownVariablesWarning = computed(() => unresolvedVariablesWarning(unknownVariables.value))
 
@@ -530,7 +528,6 @@ const scanCards = computed<ScanCard[]>(() => {
         </v-btn>
         <span v-if="filename" class="tip mt-0">{{ filename }}</span>
       </div>
-      <p class="tip mb-0" data-testid="em-restart-note">{{ restartNote }}</p>
       <v-alert
         v-if="generateError"
         type="error"

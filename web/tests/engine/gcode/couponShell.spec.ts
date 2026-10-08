@@ -6,7 +6,6 @@ import {
   couponOverriddenSettings,
   finishCoupon,
   restartNoteComments,
-  restartNoteText,
 } from '../../../src/engine/gcode/couponShell'
 import { newEmitter } from '../../../src/engine/gcode/emitter'
 import { PA_OVERRIDDEN_SETTINGS } from '../../../src/engine/pa/gcodeGenerator'
@@ -46,52 +45,18 @@ describe('restartNoteComments', () => {
   })
 })
 
-describe('restartNoteText', () => {
-  it('names a single setting with a singular value', () => {
-    expect(restartNoteText(['pressureAdvance'])).toBe(
-      'Restart the firmware after the print finishes. The test overrides the printer\'s ' +
-        'pressure advance, and the restart restores the configured value.',
-    )
-    expect(restartNoteText(['flowPercentage'])).toBe(
-      'Restart the firmware after the print finishes. The test overrides the printer\'s ' +
-        'flow percentage, and the restart restores the configured value.',
-    )
-  })
-
-  it('lists several settings and speaks of values', () => {
-    expect(restartNoteText(['inputShaping', 'pressureAdvance', 'motionLimits'])).toBe(
-      'Restart the firmware after the print finishes. The test overrides the printer\'s ' +
-        'input shaping, pressure advance, and motion limits, and the restart restores the ' +
-        'configured values.',
-    )
-    expect(restartNoteText(['motionLimits'])).toContain('configured values.')
-  })
-
-  it('refuses an empty list instead of printing a note about nothing', () => {
-    expect(() => restartNoteText([])).toThrow(/at least one/)
-  })
-})
-
 describe('couponOverriddenSettings', () => {
   it('adds the motion limits every coupon preamble sets after the test\'s own overrides', () => {
     expect(couponOverriddenSettings(['pressureAdvance'])).toEqual(['pressureAdvance', 'motionLimits'])
     expect(couponOverriddenSettings(['flowPercentage'])).toEqual(['flowPercentage', 'motionLimits'])
   })
 
-  it('gives every flow a restart note that names the motion limits', () => {
-    expect(restartNoteText(PA_OVERRIDDEN_SETTINGS)).toBe(
-      'Restart the firmware after the print finishes. The test overrides the printer\'s ' +
-        'pressure advance and motion limits, and the restart restores the configured values.',
-    )
-    expect(restartNoteText(EM_OVERRIDDEN_SETTINGS)).toBe(
-      'Restart the firmware after the print finishes. The test overrides the printer\'s ' +
-        'flow percentage and motion limits, and the restart restores the configured values.',
-    )
-    expect(restartNoteText(IS_OVERRIDDEN_SETTINGS)).toBe(
-      'Restart the firmware after the print finishes. The test overrides the printer\'s ' +
-        'input shaping, pressure advance, speed factor, and motion limits, and the restart ' +
-        'restores the configured values.',
-    )
+  it('ends every flow\'s G-code with the motion limits restart comment', () => {
+    for (const settings of [PA_OVERRIDDEN_SETTINGS, EM_OVERRIDDEN_SETTINGS, IS_OVERRIDDEN_SETTINGS]) {
+      expect(restartNoteComments(settings).at(-1)).toBe(
+        '; run FIRMWARE_RESTART to restore your configured motion limits',
+      )
+    }
   })
 })
 

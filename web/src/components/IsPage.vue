@@ -22,11 +22,9 @@ import { analyzeIsScans } from '../workerClient'
 import type { IsProcessing } from '../workerClient'
 import {
   generateIsGcodeWithReport,
-  IS_OVERRIDDEN_SETTINGS,
   isFlowWarning,
 } from '../engine/is/gcodeGenerator'
 import { unresolvedVariablesWarning } from '../engine/pa/slicerVariables'
-import { restartNoteText } from '../engine/gcode/couponShell'
 import {
   bandTopWarning,
   DEFAULT_CORNER_SPEED_MM_S,
@@ -199,7 +197,6 @@ const highFlowText = computed(() => {
 const generateError = ref('')
 const unknownVariables = ref<string[]>([])
 const templateWarnings = ref<string[]>([])
-const restartNote = restartNoteText(IS_OVERRIDDEN_SETTINGS)
 const canGenerate = computed(
   () => store.selected !== null && store.selectedFilament !== null && fittedSpec.value !== null,
 )
@@ -470,13 +467,6 @@ async function analyze(): Promise<void> {
         <p class="tip mb-0" data-testid="is-layer-shift-note">
           <strong>Lower the corner speed if the print shows a layer shift.</strong>
         </p>
-        <p class="tip mb-0" data-testid="is-ladder-tip">
-          The speed tiers are the line speed and a slower speed derived from it. In each speed
-          tier, the lines take their corners at speeds rising from
-          {{ MIN_CORNER_SPEED_MM_S }} mm/s to the corner speed, and the fastest corners print
-          last. At each corner of a CoreXY printer, the velocity of one motor changes by twice the
-          corner speed.
-        </p>
         <v-alert
           v-if="fastCornerWarning"
           type="warning"
@@ -632,7 +622,6 @@ async function analyze(): Promise<void> {
         </v-btn>
         <span v-if="filename" class="tip mt-0">{{ filename }}</span>
       </div>
-      <p class="tip mb-0" data-testid="is-restart-note">{{ restartNote }}</p>
       <v-alert
         v-if="generateError"
         type="error"
@@ -675,10 +664,6 @@ async function analyze(): Promise<void> {
       <div class="diagram-wrap mb-3">
         <IsSecondScanDiagram />
       </div>
-      <p class="tip mb-3">
-        The placements are a suggested starting point, and the order of the two images
-        does not matter.
-      </p>
       <div class="scan-inputs mb-3">
         <label class="dropzone" :class="{ 'dropzone-disabled': !isCalibrated || analysisStarted }">
           <input
@@ -719,9 +704,6 @@ async function analyze(): Promise<void> {
             />
           </div>
         </div>
-        <p v-if="scanFiles.length < 2" class="tip mt-0 mb-0" data-testid="is-scan-count-hint">
-          Two scan images are needed: the upright scan and the quarter-turned scan.
-        </p>
         <p v-if="scanPickHint" class="tip mt-0 mb-0" data-testid="is-scan-pick-hint">
           {{ scanPickHint }}
         </p>
@@ -831,12 +813,6 @@ async function analyze(): Promise<void> {
       </div>
       <IsResultsCard :result="result" />
     </section>
-
-    <p class="tip">
-      <v-icon size="14" class="mr-1">mdi-information-outline</v-icon>
-      Print the coupon with the downloaded file and keep the finished part flat until it is
-      scanned.
-    </p>
   </v-container>
 </template>
 

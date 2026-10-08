@@ -8,8 +8,7 @@ import { readBytes } from '../util/preview'
 import { hasMeasuredResolution } from '../util/scanResolution'
 import { analyzePaScan } from '../workerClient'
 import type { PaProcessing } from '../workerClient'
-import { generatePaGcodeWithReport, PA_OVERRIDDEN_SETTINGS } from '../engine/pa/gcodeGenerator'
-import { restartNoteText } from '../engine/gcode/couponShell'
+import { generatePaGcodeWithReport } from '../engine/pa/gcodeGenerator'
 import { unresolvedVariablesWarning } from '../engine/pa/slicerVariables'
 import { paCorrection, sweepCorrection } from '../engine/pa/paCorrectionFormatter'
 import {
@@ -91,7 +90,6 @@ const highFlowText = computed(() => flowWarningFor(spec.value))
 const generateError = ref('')
 const unknownVariables = ref<string[]>([])
 const templateWarnings = ref<string[]>([])
-const restartNote = restartNoteText(PA_OVERRIDDEN_SETTINGS)
 const canGenerate = computed(() => store.selected !== null && store.selectedFilament !== null)
 const unknownVariablesWarning = computed(() => unresolvedVariablesWarning(unknownVariables.value))
 
@@ -400,7 +398,6 @@ const stCorrection = computed(() => {
           Generate G-code
         </v-btn>
       </div>
-      <p class="tip mb-0" data-testid="pa-restart-note">{{ restartNote }}</p>
       <v-dialog v-model="showPaInfo" max-width="560">
         <v-card title="What affects pressure advance">
           <v-card-text>
