@@ -11,8 +11,6 @@ const props = defineProps<{
   min?: number
   precision?: number
   placeholder?: string
-  /** Shows the placeholder while the field is empty, not only while it has focus. */
-  persistentPlaceholder?: boolean
   hint?: string
   /** Shows a small muted info icon next to the field; the text opens in a tooltip on hover or click/tap. */
   tooltip?: string
@@ -42,7 +40,6 @@ onMounted(() => {
     :min="min"
     :precision="precision"
     :placeholder="placeholder"
-    :persistent-placeholder="persistentPlaceholder"
     :hint="hint"
     :disabled="disabled"
     :persistent-hint="!!hint"

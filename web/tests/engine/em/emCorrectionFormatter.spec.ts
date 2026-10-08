@@ -68,16 +68,6 @@ describe('emCorrection', () => {
   it('emits the M221 command for the measured flow', () => {
     expect(emCorrection(0.42, 0.2, 0.437, 1).command).toBe('M221 S95.7')
   })
-
-  it('advises setting the slicer flow instead of M221', () => {
-    const result = emCorrection(0.42, 0.2, 0.437, 1)
-    expect(result.summary.toLowerCase()).toContain('slicer flow')
-  })
-
-  it('mentions the slicer flow value in the summary', () => {
-    const result = emCorrection(0.42, 0.2, 0.437, 0.925)
-    expect(result.summary).toContain('95.7')
-  })
 })
 
 describe('flowRatioRelativeSe', () => {

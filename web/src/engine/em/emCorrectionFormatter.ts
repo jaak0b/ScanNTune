@@ -5,8 +5,6 @@ export interface EmCorrection {
   newFlowPercent: number
   /** The runtime flow override command Klipper accepts, e.g. 'M221 S97'. */
   command: string
-  /** One-line explanation for the UI. */
-  summary: string
 }
 
 /**
@@ -75,8 +73,7 @@ export function emCorrection(
   const newFlowPercent = roundPercent(100 * ratio)
   const m221Percent = roundPercent((100 * ratio) / enteredFlowFactor(enteredCurrentFlow))
   const command = `M221 S${m221Percent}`
-  const summary = `Set the slicer flow to ${newFlowPercent}% for a permanent fix; the M221 command above only changes the current session.`
-  return { newFlowPercent, command, summary }
+  return { newFlowPercent, command }
 }
 
 /**
