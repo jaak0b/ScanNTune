@@ -101,6 +101,7 @@ function fakeAxisResult(alignment: IsAlignment): IsAxisResult {
     artifacts: [],
     cornerModel: null,
     alongTrackLag: null,
+    outlierSamples: null,
     linesUsed: lines.filter((l) => l.accepted).length,
     linesTraced: lines.filter((l) => l.traced).length,
     scanIndex: 0,

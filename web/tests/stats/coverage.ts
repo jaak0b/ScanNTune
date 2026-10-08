@@ -2,6 +2,7 @@ import { expect, it } from 'vitest'
 import type { SimNoise } from '../helpers/isTraceSim'
 import { thresholdAmplitudeMm } from './powerSupport'
 import { TWO_TIER, analyzeCase } from './statsSupport'
+import type { CaseOptions } from './statsSupport'
 
 /** The S3 truth, off the detection grid's nodes. */
 const TRUTH_HZ = 60.4
@@ -13,9 +14,15 @@ const TRUTH_ZETA = 0.043
  * that stalls at its grid seed cannot cover it by accident. Of 200 fixed seeds, at least 180
  * intervals f +/- 1.96 SE must cover 60.4 Hz (a 0.0012 tail for
  * exact 95% coverage), and the spread of the estimates must match the reported standard error:
- * SD over mean SE within [0.85, 1.15] (three standard errors of an SD ratio at n = 200).
+ * SD over mean SE within [0.85, 1.15] (three standard errors of an SD ratio at n = 200). `extra`
+ * adds mechanisms beyond the scan noise; the amplitude stays three times the scan noise's threshold.
  */
-export function coverageCase(name: string, noise: SimNoise, seedBase: number): void {
+export function coverageCase(
+  name: string,
+  noise: SimNoise,
+  seedBase: number,
+  extra: Omit<CaseOptions, 'noise' | 'ring'> = {},
+): void {
   it(`covers the true frequency with the reported interval under ${name}`, () => {
     const amp = 3 * thresholdAmplitudeMm(TWO_TIER, noise, TRUTH_HZ, TRUTH_ZETA, seedBase)
     let cover = 0
@@ -23,7 +30,7 @@ export function coverageCase(name: string, noise: SimNoise, seedBase: number): v
     const errors: number[] = []
     for (let seed = 1; seed <= 200; seed++) {
       const ring = { frequencyHz: TRUTH_HZ, dampingRatio: TRUTH_ZETA, ampMm: amp }
-      const pool = analyzeCase(TWO_TIER, { noise, ring }, seedBase + 1000 + seed)
+      const pool = analyzeCase(TWO_TIER, { noise, ring, ...extra }, seedBase + 1000 + seed)
       if (pool.frequencyHz === null || pool.frequencySeHz === null) continue
       estimates.push(pool.frequencyHz)
       errors.push(pool.frequencySeHz)

@@ -8,6 +8,8 @@
  * residuals of a fit that already carries a constant term.
  */
 
+import { normalQuantile } from './math'
+
 /** A fitted AR(p) model: `coefficients` are phi_1..phi_p (empty for white noise). */
 export interface ArFit {
   coefficients: number[]
@@ -492,6 +494,109 @@ export function arWhitener(fit: ArFit, lattice: ArrayLike<number>): ArWhitener {
   }
 
   return { fit, length: m, regular, logDet, whiten, whitenIrregular, unwhiten }
+}
+
+/**
+ * The additive-outlier statistic of every observed sample of a series with AR noise (W. Chang,
+ * G. C. Tiao and C. Chen, "Estimation of time series parameters in the presence of outliers",
+ * Technometrics 30(2), 1988, 193-204; C. Chen and L.-M. Liu, "Joint estimation of model parameters
+ * and outlier effects in time series", Journal of the American Statistical Association 88(421),
+ * 1993, 284-297). An additive outlier of size w at sample i (a speck of dust or a hair on the scan,
+ * displacing that one reading) adds w e_i to the series and so w c_i to its whitened values, where
+ * c_i is the whitened unit impulse: column i of the whitening operator, here the AR operator of
+ * `whitener` followed by division by the per-sample innovation scale `scale` (null for a constant
+ * scale). From the model's whitened residual r, the least squares estimate of w is
+ * c_i' r / c_i' c_i, and the standardized statistic
+ *
+ *     lambda_i = c_i' r / (sigma ||c_i||)
+ *
+ * is N(0, 1) at every sample when the series has no outlier (ibid.). Where the samples i to i + p
+ * are all regular, c_i is the impulse response of the AR filter, pi_0 = 1 and pi_j = -phi_j over
+ * those samples, and lambda_i = sum_j pi_j r_(i+j) / (sigma sqrt(sum_j pi_j^2)), Chang, Tiao and
+ * Chen's form; at the record's start and end and next to unread samples, c_i is taken from the
+ * exact operator, which runs the Kalman filter there (Jones 1980), so the statistic stays exact.
+ * sigma is the model's own innovation scale, its maximum likelihood estimate from r,
+ * sqrt(r' r / m); the caller re-estimates it after setting outliers aside, which uncovers outliers
+ * the larger ones masked (Chang, Tiao and Chen 1988).
+ */
+export function additiveOutlierStatistics(
+  whitener: ArWhitener,
+  residual: ArrayLike<number>,
+  scale: ArrayLike<number> | null = null,
+): Float64Array {
+  const m = whitener.length
+  if (residual.length !== m) throw new Error(`Expected ${m} whitened residuals, got ${residual.length}`)
+  const phi = whitener.fit.coefficients
+  const p = phi.length
+  const sigma = Math.sqrt(whitener.fit.noiseVariance)
+  const regular = whitener.regular
+  const scaleAt = (k: number) => sigma * (scale ? scale[k] : 1)
+  const statistic = new Float64Array(m)
+  const unit = new Float64Array(m)
+  // A sample's column is the plain AR impulse response when every row it reaches is regular.
+  let irregularAhead = m
+  for (let i = m - 1; i >= 0; i--) {
+    if (!regular[i]) irregularAhead = i
+    let num = 0
+    let den = 0
+    if (irregularAhead > Math.min(i + p, m - 1)) {
+      for (let j = 0; j <= p && i + j < m; j++) {
+        const c = (j === 0 ? 1 : -phi[j - 1]) / scaleAt(i + j)
+        num += c * residual[i + j]
+        den += c * c
+      }
+    } else {
+      unit[i] = 1
+      const c = whitener.whiten(unit)
+      unit[i] = 0
+      for (let k = i; k < m; k++) {
+        const ck = scale ? c[k] / scale[k] : c[k]
+        num += ck * residual[k]
+        den += ck * ck
+      }
+    }
+    statistic[i] = num / Math.sqrt(den)
+  }
+  let ss = 0
+  for (let i = 0; i < m; i++) ss += residual[i] * residual[i]
+  const sd = Math.sqrt(ss / m)
+  if (!(sd > 0)) throw new Error('The whitened residual has no spread, so no sample can be judged an outlier')
+  for (let i = 0; i < m; i++) statistic[i] /= sd
+  return statistic
+}
+
+/**
+ * The samples one pass of additive-outlier detection flags (Chen and Liu 1993, s3): those whose
+ * statistic (additiveOutlierStatistics) exceeds the Bonferroni critical value of a two-sided test at
+ * level `alpha` over the m samples, z_(1 - alpha / (2 m)) (O. J. Dunn, "Multiple comparisons among
+ * means", JASA 56, 1961), so a series without outliers has a sample flagged with probability at
+ * most alpha. An outlier also raises the statistics of the samples within the AR order `order` on
+ * either side, whose columns overlap its own, so only the largest exceedance within that many
+ * lattice positions is flagged in one pass; the caller sets the flagged samples aside, refits and
+ * repeats until a pass flags nothing.
+ */
+export function additiveOutliers(
+  statistic: ArrayLike<number>,
+  lattice: ArrayLike<number>,
+  order: number,
+  alpha: number,
+): number[] {
+  const m = statistic.length
+  const critical = normalQuantile(1 - alpha / (2 * m))
+  const flagged: number[] = []
+  for (let i = 0; i < m; i++) {
+    const size = Math.abs(statistic[i])
+    if (!(size > critical)) continue
+    let largest = true
+    for (let k = i - 1; largest && k >= 0 && lattice[i] - lattice[k] <= order; k--) {
+      if (Math.abs(statistic[k]) >= size) largest = false
+    }
+    for (let k = i + 1; largest && k < m && lattice[k] - lattice[i] <= order; k++) {
+      if (Math.abs(statistic[k]) > size) largest = false
+    }
+    if (largest) flagged.push(i)
+  }
+  return flagged
 }
 
 /** a <- T a for the AR companion matrix T (new first entry phi' a, the rest shifted down). */

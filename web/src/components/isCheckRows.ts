@@ -83,6 +83,9 @@ export function isCheckRows(a: IsAxisResult): CheckRow[] {
     if (reason !== null) rows.push({ label: 'Reason not corrected', value: reason })
   }
   rows.push({ label: 'Layer shift detected', value: yesNo(a.layerShiftDetected) })
+  if (a.outlierSamples !== null) {
+    rows.push({ label: 'Trace samples set aside as outliers', value: `${a.outlierSamples}` })
+  }
   if (a.secondModePBound !== null) {
     rows.push({ label: 'Second mode p-value bound', value: pBoundText(a.secondModePBound) })
   }

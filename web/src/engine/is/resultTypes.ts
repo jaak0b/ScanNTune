@@ -155,6 +155,9 @@ export interface IsAxisResult {
   /** The along-track lag correction of the estimate; null when this axis was refused before its
    *  ring was fitted. */
   alongTrackLag: AlongTrackLagState | null
+  /** Trace samples the analysis set aside as outliers (dust, hairs) over the axis's lines; null
+   *  when the axis had too few lines to analyze. */
+  outlierSamples: number | null
   linesUsed: number
   linesTraced: number
   /** Index of the scan (0 or 1) the axis was measured from; null when neither qualified. */
