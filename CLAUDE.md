@@ -384,7 +384,10 @@ which is test-driven: write the failing test first, run it to see it fail, fix t
 pass. A single statistics file (`tests/stats`) may be run locally only when the change adds or edits that
 exact file (`npx vitest run --config vitest.stats.config.ts tests/stats/NAME.stats.spec.ts`); otherwise
 statistics results come from CI. The full gate still defines "verified", but CI runs it, not the local
-machine.
+machine. Work fast: tests may break while a feature is in progress. Do not trigger CI, or re-run another
+agent's tests, after every change; batch the work and run CI once at the end of a batch. Before a feature is
+handed to the owner to test, the CI gate must be green apart from failures that already existed before the
+work started, so fix the remaining reds in one round before the handover.
 
 **Subagent routing.** When delegating to a subagent, prefer the `cavecrew-*` types wherever the task fits,
 because their output is caveman-compressed and keeps the parent context small: use `cavecrew-investigator`
