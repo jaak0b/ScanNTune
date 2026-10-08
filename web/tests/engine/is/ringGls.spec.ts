@@ -46,14 +46,23 @@ describe('pooledVarianceSlope', () => {
 })
 
 describe('orthonormalBasis', () => {
-  it('drops a column that is zero to the rounding of the design it joins', () => {
-    // A constant column of norm 10 and a column of 1e-18 per sample: the second is far below the
-    // numerical rank tolerance max(m, n) eps ||A|| = 100 * 2.2e-16 * 10 of the design, so it adds
-    // no direction, however clean its own shape.
+  it("decides a column's dependence by its direction, whatever its scale", () => {
+    // A constant column of norm 10 and a linear column scaled by 1e-18: the linear shape is
+    // independent of the constant whatever its scale, so it adds a direction, and the same one as
+    // its unscaled copy. A least squares fit absorbs any column scale in its coefficient.
     const ones = new Float64Array(100).fill(1)
-    const tiny = Float64Array.from({ length: 100 }, (_, i) => 1e-18 * (i - 49.5))
-    expect(orthonormalBasis([ones, tiny])).toHaveLength(1)
-    expect(orthonormalBasis([tiny])).toHaveLength(1)
+    const linear = Float64Array.from({ length: 100 }, (_, i) => i - 49.5)
+    const tiny = linear.map((v) => 1e-18 * v)
+    const scaled = orthonormalBasis([ones, tiny])
+    const plain = orthonormalBasis([ones, linear])
+    expect(scaled).toHaveLength(2)
+    for (let i = 0; i < 100; i++) expect(scaled[1][i]).toBeCloseTo(plain[1][i], 14)
+  })
+
+  it("drops a column that repeats an earlier one's direction", () => {
+    const ones = new Float64Array(100).fill(1)
+    expect(orthonormalBasis([ones, ones.map(() => 1e-18)])).toHaveLength(1)
+    expect(orthonormalBasis([ones, new Float64Array(100)])).toHaveLength(1)
   })
 })
 
@@ -87,6 +96,38 @@ describe('nullDesign', () => {
       const moved = at(d)
       expect(moved.k).toBe(base.k)
       expect(Math.abs(moved.ssr - base.ssr)).toBeLessThan(1e-9 * base.ssr)
+    }
+  })
+  it('keeps its flow-lag direction and a continuous residual while the lag decays before the window', () => {
+    // Corner 20 mm/s, tier 106 mm/s, 3000 mm/s^2: the ramp ends at 28.67 ms and the window starts
+    // at 49 ms, so at a time constant near 1 ms the flow-lag column has decayed by e^-20 or more
+    // before its first sample and is a spike on the window's first samples. Its direction is
+    // still a direction of the design at every tau, so the null fit must keep one flow-lag column
+    // over the whole sweep, and its residual must move continuously with tau: a relative change of
+    // 1e-6 in tau moves the residual sum of squares by far less than 1e-6 of itself.
+    const m = 576
+    const dt = 25.4 / 600 / 106
+    const rec: LineRecord = {
+      tS: Float64Array.from({ length: m }, (_, i) => 0.049 + i * dt),
+      lattice: Int32Array.from({ length: m }, (_, i) => i),
+      y: Float64Array.from({ length: m }, (_, i) => 0.004 * Math.sin(1.7 * i) + 0.002 * Math.cos(0.3 * i * i)),
+      speedMmS: 106,
+      cornerSpeedMmS: 20,
+      accelMmS2: 3000,
+      alongPxPerMm: 600 / 25.4,
+      acrossImagePx: new Float64Array(m),
+      acrossAxisPxPerMm: 600 / 25.4,
+      lateralTowardRunUp: 1,
+    }
+    const basis = lineBasis(rec)
+    const noise = noiseModel(basis, { coefficients: [], noiseVariance: 1.6e-5 })
+    for (let i = 0; i <= 200; i++) {
+      const tau = 0.0006 * Math.exp((i / 200) * Math.log(1.4 / 0.6))
+      const here = nullDesign(basis, noise, tau)
+      const moved = nullDesign(basis, noise, tau * (1 + 1e-6))
+      expect(here.k).toBe(basis.fixedColumns.length + 1)
+      expect(moved.k).toBe(here.k)
+      expect(Math.abs(moved.ssr - here.ssr)).toBeLessThan(1e-7 * here.ssr)
     }
   })
 })

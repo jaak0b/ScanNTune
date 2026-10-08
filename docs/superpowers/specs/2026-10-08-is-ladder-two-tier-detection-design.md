@@ -500,7 +500,12 @@ The seed is the refitted maximum of Q over the lines entering the joint fit. The
 projection (Golub and Pereyra 1973) over (f, zeta, log tau) with each line's noise model refitted under
 the alternative at the seed, polished by Levenberg-Marquardt (Levenberg 1944; Marquardt 1963); then the
 second feasible GLS step refits each line's AR (order chosen again) to the full-fit residuals, re-tests
-the variance slope and fits again. zeta is bounded to [0, 0.4].
+the variance slope and fits again. zeta is bounded to [0, 0.4]. Variable projection assumes the linear
+design keeps a constant rank near the solution, so a column's dependence on the earlier columns is decided
+on its direction alone: each column is scaled to unit size before the decision (column equilibration,
+van der Sluis 1969). A tolerance against the design's largest column instead dropped the flow-lag column
+of a line whose lag decays before its window starts once tau fell below a scale-dependent edge, a jump in
+the cost that Levenberg-Marquardt could not cross, so the fit stalled at its start.
 
 The frequency interval is the 95% profile-likelihood interval (Bates and Watts, "Nonlinear Regression
 Analysis and Its Applications", 1988, s6.1): the frequencies whose profile t statistic stays within
