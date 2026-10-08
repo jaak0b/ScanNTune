@@ -8,6 +8,7 @@ import {
   withSecondMode,
 } from '../../../src/engine/is/ringAnalyzer'
 import type { AxisPool, LineFit, SecondMode } from '../../../src/engine/is/ringAnalyzer'
+import { ZETA_MAX } from '../../../src/engine/is/ringRegressors'
 import type { TracedLine } from '../../../src/engine/is/lineTracer'
 import { defaultIsTestRequest, fitSpecToPrinter } from '../../../src/engine/is/types'
 import type { IsTestSpec } from '../../../src/engine/is/types'
@@ -262,6 +263,7 @@ describe('poolAxisFits estimation', () => {
     const lines = simulate(twoTier, { noise: IID, ring: { frequencyHz: 45.3, dampingRatio: 0.3, ampMm: 0.15 } }, 8_000_032)
     const p = pool(twoTier, lines)
     expect(p.lines[5].detected).toBe(true)
+    expect(p.lines[5].ownDampingRatio).toBe(ZETA_MAX)
     expect(p.lines[5].exclusion).toBeNull()
     expect(p.lines[5].usedInJointFit).toBe(true)
     expect(p.linesUsed).toBe(10)
@@ -474,6 +476,17 @@ describe('secondModeOutcome', () => {
     const search = secondModeOutcome(3.3e-24, [{ mode: joint, rings: [] }, { mode: found, rings: [] }])
 
     expect(search).toEqual({ pBound: 3.3e-24, modes: null })
+  })
+
+  it('reports no second mode when the joint fit mode sits at the damping bound and the found mode would swap in', () => {
+    // The refitted joint mode is the other mode of a swap; at the 0.4 bound it is no measurement
+    // either, so it must not be reported as a second mode or shape the recommended shaper.
+    const boundJoint: SecondMode = { frequencyHz: 60.46, dampingRatio: 0.4, frequencySeHz: 9.1, amplitudeMm: 0.007, proportionality: 'passed' }
+    const found: SecondMode = { frequencyHz: 45, dampingRatio: 0.05, frequencySeHz: 0.13, amplitudeMm: 0.03, proportionality: 'passed' }
+
+    const search = secondModeOutcome(1e-6, [{ mode: boundJoint, rings: [] }, { mode: found, rings: [] }])
+
+    expect(search).toEqual({ pBound: 1e-6, modes: null })
   })
 
   it('makes a larger found mode below the damping bound the dominant mode', () => {

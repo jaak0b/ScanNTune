@@ -606,10 +606,10 @@ other as its second mode, each with its own proportionality check; the dominant 
 halfwidth then is 1.96 times its linearized standard error from the two-mode fit. When the two-mode fit
 gives the dominant mode no standard error, the joint fit's interval stands in only when the dominant
 mode is the joint fit's own; a dominant mode the search found then has no interval, and the confidence
-gate refuses the axis (59ece65). A found mode whose damping ratio the two-mode fit places at the 0.4
-bound is no measurement (the fit's limit, where frequency and damping are not identified): it never
-replaces the joint fit's mode and is not reported as a second mode, so the axis keeps its single-mode
-fit and the search's p-value bound stays as the diagnostic.
+gate refuses the axis (59ece65). A mode of the two-mode fit, the found mode or the refitted joint
+mode, whose damping ratio sits at the 0.4 bound is no measurement of damping (the fit's limit): the
+two-mode fit is then not used, no second mode is reported and the axis keeps its single-mode fit, with
+the search's p-value bound as the diagnostic.
 
 Shaper choice (`shaperRecommender.ts`): with one mode, every shaper (ZV, MZV, EI, 2HUMP_EI, 3HUMP_EI;
 Singer and Seering 1990; Singhose, Seering and Singer) is tuned to the measured frequency and judged by
@@ -701,8 +701,11 @@ unless stated. The suite now holds two files, both under iid scan noise on the d
   detection grid's nodes, at three times the threshold amplitude; of 200 seeds at least 180 intervals
   cover the truth, and the estimates' SD over the mean reported SE lies in 0.85 to 1.15 (dd18e1e).
 
-Current status: the S3 file is red on CI and under diagnosis (wild frequency estimates on some seeds),
-so no S3 figure below describes the current code.
+Current status: the wild seed (5,001,171, 101.7 Hz) is fixed by 9153a65 and 87c7e3d. On seeds 1 to 200
+the spread to SE ratio was about 1.17 to 1.18 locally against the 1.15 criterion, so S3 is expected to
+stay red until the open investigation of the remaining excess (wrong estimates under heavy damping, the
+flow-lag time constant settling at its lower bound) is done; the CI result is pending. No S3 figure
+below describes the current code.
 
 History: the stage 2 suite also simulated half-pixel bilinear, 1 px and 2 px blur, in-band red AR(2)
 peaking at 60 Hz and per-line noise levels, and the mechanisms flow lag, bead drag, pedestal ring, an
@@ -808,8 +811,10 @@ timeout. The build and unit test job is capped at 15 minutes. The earlier sharde
 
 ## 5. Known limitations and open items
 
-- **S3 coverage under iid noise is red on CI and under diagnosis** (`s3-iid.stats.spec.ts`, wild
-  frequency estimates on some seeds). No current S3 figure is recorded here.
+- **S3 coverage under iid noise is expected to stay red** (`s3-iid.stats.spec.ts`): the wild seed is
+  fixed (9153a65, 87c7e3d), but the spread to SE ratio on seeds 1 to 200 was about 1.17 to 1.18 locally
+  against the 1.15 criterion. The remaining excess (wrong estimates under heavy damping, the flow-lag
+  time constant settling at its lower bound) is under investigation; the CI result is pending.
 - **The speed check's power is about 0.60, not 0.95.** The tier ratio was derived for power 0.95 at the
   weakest accepted measurement, but each tier is fitted from half of the axis's lines, so its standard
   error is about sqrt(2) times that of the axis estimate the confidence gate judges (section 1.2). A
@@ -878,4 +883,9 @@ reverted in 6f603fa), dd18e1e (S3 truth off the grid nodes), c4c19a2 and 3440f51
 files), 954c75e (trace outlier filter, reverted in 084c486), 3f52bcf (restart note removed from the
 coupon pages), 9ace4a0 ("not confirmed" no longer refuses), 055f1b3 (damping bound no longer refuses),
 0fc6cc0 (snippet always writes the design damping ratio), 59ece65 (no interval for a swapped dominant
-mode without a standard error).
+mode without a standard error), e88db4d (a line whose own damping fit reaches the bound stays in the
+joint fit), 9153a65 (the variance slope applies to the covariate it was estimated on in every noise
+model rebuild, including the second-mode search), 998c286 (a second mode at the damping bound never
+replaces the joint fit's mode or stands as a second mode), 9d6f38e (design column dependence decided on
+equilibrated columns), 87c7e3d (variance slope estimated by restricted maximum likelihood), then a
+change that also refuses the two-mode fit when the refitted joint mode sits at the damping bound.

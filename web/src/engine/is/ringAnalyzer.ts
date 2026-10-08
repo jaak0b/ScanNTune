@@ -195,6 +195,10 @@ export interface LineVerdict {
   detectionPBound: number | null
   /** The line's own fitted frequency, Hz; null for a line without a detected ring. */
   frequencyHz: number | null
+  /** The line's own fitted damping ratio, a diagnostic only: one line cannot identify its damping,
+   *  so a value at ZETA_MAX is the fit's limit and does not screen the line. Set for a detected
+   *  line of a screened axis. */
+  ownDampingRatio?: number
   /** Joint-fit ring amplitude at the line's fit-window start, mm; null outside the joint fit. */
   amplitudeMm: number | null
 }
@@ -1281,6 +1285,7 @@ function screenLines(
   lineFits.forEach((fit, l) => {
     const v = verdicts[windowed[l]]
     v.frequencyHz = fit.frequencyHz
+    v.ownDampingRatio = fit.dampingRatio
     if (fit.frequencyHz <= F_MIN_HZ + BOUND_MARGIN_HZ || fit.frequencyHz >= F_MAX_HZ - BOUND_MARGIN_HZ) {
       v.exclusion = 'out-of-band'
     }
@@ -1494,8 +1499,8 @@ function jointRefit(detection: AxisDetection, included: number[], depositTimeS: 
 
 /**
  * The covariate of a joint fit's variance function: the deficit of the corner model the detection
- * chose, the flow-lag deficit at the joint time constant or the bead-drag lobe at its null-fit
- * length, so the estimation's variance function is the one the pooled AICc selected.
+ * chose, the flow-lag deficit at the time constant `tauS` the caller gives (the first step's
+ * `first.tauS`, not the joint fit's refitted one) or the bead-drag lobe at its null-fit length, so the estimation's variance function is the one the pooled AICc selected.
  */
 function jointCovariate(rec: LineRecord, chosen: AxisDetection['chosen'], tauS: number): VarianceCovariate {
   return chosen.kind === 'flow-lag' ? varianceCovariate(rec, 'flow-lag', tauS) : varianceCovariate(rec, 'bead-drag', chosen.beadScale)
@@ -1613,13 +1618,14 @@ function searchSecondMode(fit: JointFitResult): SecondModeSearch {
 /**
  * The outcome of a second-mode search from the two-mode fit's modes, the joint fit's mode first
  * and the mode the search found second: the dominant mode is the one with the larger amplitude.
- * A found mode whose damping ratio sits at the bound of the fit is no measurement (the fit's
- * limit, where frequency and damping are not identified), so it neither replaces the joint fit's
- * mode nor is reported as a second mode; the search's p-value bound stays as its diagnostic.
+ * A mode of the two-mode fit whose damping ratio sits at the bound of the fit is no measurement
+ * of damping (the fit's limit). Whichever of the two it is, the found mode or the refitted joint
+ * mode that a swap would report as the other mode, the fit is not trusted to describe two modes:
+ * the single-mode fit stands and the search's p-value bound stays as its diagnostic.
  */
 export function secondModeOutcome(pBound: number, modes: [FittedMode, FittedMode]): SecondModeSearch {
   const [jointMode, found] = modes
-  if (!dampingMeasured(found.mode.dampingRatio)) return { pBound, modes: null }
+  if (!dampingMeasured(found.mode.dampingRatio) || !dampingMeasured(jointMode.mode.dampingRatio)) return { pBound, modes: null }
   const swapped = jointMode.mode.amplitudeMm < found.mode.amplitudeMm
   const [dominant, other] = swapped ? [found, jointMode] : [jointMode, found]
   return { pBound, modes: { dominant, other, swapped } }
