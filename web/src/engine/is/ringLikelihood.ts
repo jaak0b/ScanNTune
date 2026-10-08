@@ -3,7 +3,7 @@ import type { ArFit } from '../correlatedNoise'
 import { nullDesign, noiseModel, projectRing, ringScratch } from './ringGls'
 import type { LineBasis, LineNoise, NullDesign, RingProjection } from './ringGls'
 import { F_MAX_HZ, F_MIN_HZ } from './types'
-import { FREQUENCY_GRID_HZ } from './ringRegressors'
+import { FREQUENCY_GRID_HZ, flowDeficit } from './ringRegressors'
 
 // The generalized likelihood ratio test (GLRT) of a ring at one point theta = (f, zeta) of one
 // traced line, with the AR noise model refitted under each hypothesis (S. M. Kay, "Fundamentals of
@@ -17,8 +17,9 @@ import { FREQUENCY_GRID_HZ } from './ringRegressors'
 //
 // Each hypothesis is fitted by iterated feasible generalized least squares (the iterated
 // Cochrane-Orcutt procedure, D. Cochrane and G. H. Orcutt 1949): the regression by GLS under the
-// current AR model, the AR model refitted by Burg's method to the raw residual at the order the
-// null model's AICc chose, repeated while the exact Gaussian deviance falls. The deviance is the
+// current noise model, the AR model refitted by Burg's method to the raw residual at the order the
+// null model's AICc chose, repeated while the exact Gaussian deviance falls. The innovation
+// variance function (ringGls.ts, Harvey 1976) is the axis's, held fixed in both hypotheses. The deviance is the
 // exact -2 log-likelihood of the AR model observed on the line's lattice (innovations form with
 // the Kalman filter for unread samples, Jones 1980), profiled over the innovation variance:
 // m ln(SSR / m) + ln det + m, with SSR the whitened residual sum of squares of a unit-variance
@@ -31,8 +32,8 @@ import { FREQUENCY_GRID_HZ } from './ringRegressors'
 // regression model (M. S. Bartlett, "Properties of sufficiency and statistical tests", Proc. R.
 // Soc. A 160, 1937), E[LR] = q m / (m - k), in the AR model's conditional form (Box and Jenkins
 // 1970), where the p AR coefficients are regression coefficients on lagged values next to the k1
-// regression columns of the alternative: the statistic is (m - k1 - p) / m times the deviance
-// difference. Measured on 2,000 simulated noise-only axes per noise model, the unscaled ratio
+// regression columns of the alternative (and the variance-function slope when the axis has one):
+// the statistic is (m - k1 - p) / m times the deviance difference. Measured on 2,000 simulated noise-only axes per noise model, the unscaled ratio
 // exceeds the chi2_20 95% point 144 times under 1 px blur (allowed 68 to 132), the scaled one 118
 // times; the scaled maximum over the grid under 2 px blur reaches pBound 0.05 in 22 of 400 axes
 // (unscaled 42).
@@ -62,6 +63,8 @@ export interface HypothesisFit {
 export interface NullFit extends HypothesisFit {
   order: number
   tauS: number
+  /** The flow-lag deficit g(t) of the variance function at tauS, per observed sample. */
+  deficit: Float64Array
   /** The Bartlett factor (m - k1 - p) / m the line's ratios are scaled by. */
   bartlett: number
 }
@@ -99,11 +102,30 @@ function unitModel(coefficients: number[]): ArFit {
   return { coefficients, noiseVariance: 1 }
 }
 
-/** The hypothesis fit of a line under the AR shape `coefficients`, with the ring at `point`. */
-function evaluate(basis: LineBasis, coefficients: number[], tauS: number, point: RingPoint | null): HypothesisFit {
-  const noise = noiseModel(basis, unitModel(coefficients))
+/** A noise model's shape: AR coefficients and variance-function slope. */
+interface NoiseShape {
+  coefficients: number[]
+  varianceSlope: number
+}
+
+/** The hypothesis fit of a line under a noise shape, with the ring at `point`. */
+function evaluate(
+  basis: LineBasis,
+  shape: NoiseShape,
+  deficit: Float64Array,
+  tauS: number,
+  point: RingPoint | null,
+): HypothesisFit {
+  const noise = noiseModel(basis, unitModel(shape.coefficients), shape.varianceSlope, deficit)
   const design = nullDesign(basis, noise, tauS)
   return alternativeWith(basis, noise, design, point)
+}
+
+/** The noise shape refitted to a fit's raw residual: Burg's AR at `order`, the variance slope
+ *  kept. */
+function refitShape(basis: LineBasis, fit: HypothesisFit, order: number): NoiseShape {
+  const ar = burgArSegments(latticeSegments(fit.residual, basis.rec.lattice), order)
+  return { coefficients: ar.coefficients, varianceSlope: fit.noise.varianceSlope }
 }
 
 /** The fit with the noise model and null design given, the ring at `point` (or none). */
@@ -120,8 +142,8 @@ function alternativeWith(
       design,
       ring: null,
       ssr: design.ssr,
-      deviance: profiledDeviance(m, design.ssr, noise.whitener.logDet),
-      residual: noise.whitener.unwhiten(design.yr),
+      deviance: profiledDeviance(m, design.ssr, noise.logDet),
+      residual: noise.unwhiten(design.yr),
     }
   }
   const whitened = new Float64Array(m)
@@ -142,17 +164,23 @@ function alternativeWith(
     design,
     ring,
     ssr,
-    deviance: profiledDeviance(m, ssr, noise.whitener.logDet),
-    residual: noise.whitener.unwhiten(whitened),
+    deviance: profiledDeviance(m, ssr, noise.logDet),
+    residual: noise.unwhiten(whitened),
   }
 }
 
 /** Iterated Cochrane-Orcutt from `start` at a fixed AR order: the lowest-deviance fit reached. */
-function iterate(basis: LineBasis, start: HypothesisFit, order: number, tauS: number, point: RingPoint | null): HypothesisFit {
+function iterate(
+  basis: LineBasis,
+  start: HypothesisFit,
+  order: number,
+  deficit: Float64Array,
+  tauS: number,
+  point: RingPoint | null,
+): HypothesisFit {
   let best = start
   for (let k = 0; k < MAX_REFITS; k++) {
-    const refit = burgArSegments(latticeSegments(best.residual, basis.rec.lattice), order)
-    const next = evaluate(basis, refit.coefficients, tauS, point)
+    const next = evaluate(basis, refitShape(basis, best, order), deficit, tauS, point)
     const gain = best.deviance - next.deviance
     if (gain > 0) best = next
     if (!(gain > DEVIANCE_TOLERANCE)) break
@@ -161,15 +189,17 @@ function iterate(basis: LineBasis, start: HypothesisFit, order: number, tauS: nu
 }
 
 /**
- * The null fit of a line at the flow-lag time constant tauS: the AR order of `initial` (chosen by
- * AICc on the ordinary least squares residual), the AR refitted by iterated Cochrane-Orcutt.
+ * The null fit of a line at the flow-lag time constant tauS and the axis's variance slope: the AR
+ * order of `initial` (chosen by AICc on the ordinary least squares residual), the AR refitted by
+ * iterated Cochrane-Orcutt.
  */
-export function nullHypothesisFit(basis: LineBasis, initial: ArFit, tauS: number): NullFit {
+export function nullHypothesisFit(basis: LineBasis, initial: ArFit, tauS: number, varianceSlope = 0): NullFit {
   const order = initial.coefficients.length
-  const start = evaluate(basis, initial.coefficients, tauS, null)
-  const fit = iterate(basis, start, order, tauS, null)
+  const deficit = flowDeficit(basis.rec.tS, basis.rec, tauS)
+  const start = evaluate(basis, { coefficients: initial.coefficients, varianceSlope }, deficit, tauS, null)
+  const fit = iterate(basis, start, order, deficit, tauS, null)
   const m = basis.m
-  return { ...fit, order, tauS, bartlett: (m - fit.design.k - 2 - order) / m }
+  return { ...fit, order, tauS, deficit, bartlett: (m - fit.design.k - 2 - order - (varianceSlope !== 0 ? 1 : 0)) / m }
 }
 
 /**
@@ -186,10 +216,10 @@ export function ringLikelihoodRatio(
   let start = alternativeWith(basis, h0.noise, h0.design, point)
   for (const s of starts) {
     if (s.coefficients.length !== h0.order) continue
-    const candidate = evaluate(basis, s.coefficients, h0.tauS, point)
+    const candidate = evaluate(basis, { coefficients: s.coefficients, varianceSlope: h0.noise.varianceSlope }, h0.deficit, h0.tauS, point)
     if (candidate.deviance < start.deviance) start = candidate
   }
-  const fit = iterate(basis, start, h0.order, h0.tauS, point)
+  const fit = iterate(basis, start, h0.order, h0.deficit, h0.tauS, point)
   return { statistic: h0.bartlett * Math.max(0, h0.deviance - fit.deviance), fit }
 }
 

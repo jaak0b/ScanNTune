@@ -28,6 +28,15 @@ import type { TracedLine } from '../../src/engine/is/lineTracer'
 //   to the tier speed), entering the lateral trace as amplitude times (lagged flow / commanded
 //   flow - 1); the forced corner overshoot lobe; samples the tracer could not read (gaps), filled
 //   by linear interpolation exactly as the tracer fills them.
+// - Stage 2 mechanisms: further machine modes next to the ring (a second in-band mode, a mode
+//   above the band); the bead dragged at the corner, a lobe decaying in arc length
+//   exp(-s / lambda); the ring of the slower pedestal layer the measured bead follows, fixed in arc
+//   length at the pedestal's speed; scan noise inflated where the extruded flow lags the
+//   commanded flow (the starved bead after the corner is rougher), by a factor 1 + k D(t) / max D
+//   with D = 1 - q / v the flow deficit of the same first-order lag; isolated impulse outliers (dust, hairs, voids) on a fraction of samples;
+//   the along-track time warp: the corner's velocity step also rings the axis along the line, so
+//   the nozzle reaches arc position s late by delta(t) = (c / w_a) e^(-zeta_a w_a t) sin(w_d t)
+//   and every time-domain mechanism is evaluated at the warped time.
 
 export const SIM_PX_PER_MM = 600 / 25.4
 
@@ -74,6 +83,12 @@ export interface SimArtifacts {
   pixelLock?: { tiltDeg: number; ampPx: number }
 }
 
+/** A machine mode along the measured line's own axis (rings along the line after the corner). */
+export interface SimAlongTrack {
+  frequencyHz: number
+  dampingRatio: number
+}
+
 export interface TraceSimOptions {
   seed: number
   /** The fitted spec the coupon was printed with. */
@@ -87,6 +102,20 @@ export interface TraceSimOptions {
   flowLag?: { tauS: number; ampMm: number }
   /** Forced corner overshoot: ampMm on the top rung, scaling with the rung, decaying with tauS. */
   cornerLobe?: { ampMm: number; tauS: number }
+  /** Further machine modes, each ringing like `ring` (another in-band mode, or one above the band). */
+  extraModes?: SimRing[]
+  /** Bead drag at the corner: ampMm on the top rung, scaling with the rung, decaying in arc length. */
+  spatialLobe?: { ampMm: number; lambdaMm: number }
+  /** The pedestal layer's ring, printed at speedMmS and followed by the measured bead: fixed in arc
+   *  length, amplitude ampMm on every line (the pedestal's corners are all at its own speed). */
+  pedestalRing?: { frequencyHz: number; dampingRatio: number; ampMm: number; speedMmS: number }
+  /** Scan noise inflated by the flow deficit of a first-order lag tauS: the per-sample noise
+   *  times 1 + factor D(t) / max D, D = 1 - lagged flow / commanded flow. */
+  earlyNoise?: { factor: number; tauS: number }
+  /** Impulse outliers on this fraction of the samples, each +/- ampMm times a uniform 0.5 to 1.5. */
+  impulseOutliers?: { fraction: number; ampMm: number }
+  /** The along-track mode whose ring warps the time at which the nozzle passes each position. */
+  alongTrack?: SimAlongTrack
   /** Unreadable samples: this fraction of the samples, in runs of 1 to maxRun samples. */
   gaps?: { fraction: number; maxRun: number }
   /** Velocity profile the printer actually ran after the corner. */
@@ -167,6 +196,12 @@ function laggedFlow(t: number, c: number, v: number, a: number, tau: number): nu
   if (t <= tRamp) return c + a * (t - tau) + a * tau * Math.exp(-t / tau)
   const atRampEnd = c + a * (tRamp - tau) + a * tau * Math.exp(-tRamp / tau)
   return v + (atRampEnd - v) * Math.exp(-(t - tRamp) / tau)
+}
+
+/** A damped mode's response at time t: amplitude at the corner, decaying, from the given phase. */
+function modeAt(t: number, frequencyHz: number, dampingRatio: number, ampMm: number, phaseRad: number): number {
+  const omega = 2 * Math.PI * frequencyHz
+  return ampMm * Math.exp(-dampingRatio * omega * t) * Math.cos(omega * Math.sqrt(1 - dampingRatio * dampingRatio) * t + phaseRad)
 }
 
 /** Discrete Gaussian kernel of standard deviation sigma px, unit L2 norm (keeps the variance). */
@@ -320,16 +355,32 @@ export function simulateAxis(options: TraceSimOptions): SimLine[] {
     const beltPhase = 2 * Math.PI * lineRand()
     const pixelPhase = lineRand()
     const lockOffset = lineRand()
+    // Drawn only when used, so the noise streams of every existing seed stay unchanged.
+    const pedestalPhase = options.pedestalRing ? 2 * Math.PI * lineRand() : 0
     for (let k = 0; k < count; k++) {
       const s = TRACE_START_MM + k * stepMm
       tTraced[k] = trapezoidTime(s, c, v, a)
-      const t = timeOf(s, c, v, a)
+      const tCommanded = timeOf(s, c, v, a)
+      let t = tCommanded
+      if (options.alongTrack) {
+        // The nozzle reaches s late by delta / v: the along-line displacement of the corner's
+        // velocity step c on the along-track mode, to first order in delta.
+        const { frequencyHz: fa, dampingRatio: za } = options.alongTrack
+        const wa = 2 * Math.PI * fa
+        const delta = (c / wa) * Math.exp(-za * wa * tCommanded) * Math.sin(wa * Math.sqrt(1 - za * za) * tCommanded)
+        t = tCommanded + delta / trapezoidSpeed(tCommanded, c, v, a)
+      }
       let y = 0
-      if (ring) {
-        const omega = 2 * Math.PI * f
-        const zeta = ring.dampingRatio
-        const amp = ring.ampMm * (c / cTop)
-        y += amp * Math.exp(-zeta * omega * t) * Math.cos(omega * Math.sqrt(1 - zeta * zeta) * t + (ring.phaseRad ?? 0))
+      if (ring) y += modeAt(t, f, ring.dampingRatio, ring.ampMm * (c / cTop), ring.phaseRad ?? 0)
+      for (const mode of options.extraModes ?? []) {
+        y += modeAt(t, mode.frequencyByTierHz?.[tierIndex] ?? mode.frequencyHz, mode.dampingRatio, mode.ampMm * (c / cTop), mode.phaseRad ?? 0)
+      }
+      if (options.spatialLobe) {
+        y += options.spatialLobe.ampMm * (c / cTop) * Math.exp(-s / options.spatialLobe.lambdaMm)
+      }
+      if (options.pedestalRing) {
+        const pr = options.pedestalRing
+        y += modeAt(s / pr.speedMmS, pr.frequencyHz, pr.dampingRatio, pr.ampMm, pedestalPhase)
       }
       if (options.cornerLobe) {
         y += options.cornerLobe.ampMm * (c / cTop) * Math.exp(-t / options.cornerLobe.tauS)
@@ -364,7 +415,27 @@ export function simulateAxis(options: TraceSimOptions): SimLine[] {
     const sigmaPx = options.noise.sigmaPx * (options.noise.perLineScale?.[i] ?? 1)
     const cruiseDtS = stepMm / v
     const noisePx = lineNoisePx(options.noise, sigmaPx, count, pixelPhase, cruiseDtS, lineRand)
-    for (let k = 0; k < count; k++) lateral[k] += noisePx[k] / pxPerMm
+    const deficit = new Float64Array(count)
+    if (options.earlyNoise) {
+      for (let k = 0; k < count; k++) {
+        const t = trapezoidTime(TRACE_START_MM + k * stepMm, c, v, a)
+        deficit[k] = 1 - laggedFlow(t, c, v, a, options.earlyNoise.tauS) / trapezoidSpeed(t, c, v, a)
+      }
+      const peak = Math.max(...deficit)
+      if (peak > 0) for (let k = 0; k < count; k++) deficit[k] /= peak
+    }
+    for (let k = 0; k < count; k++) {
+      const inflation = 1 + (options.earlyNoise ? options.earlyNoise.factor * deficit[k] : 0)
+      lateral[k] += (inflation * noisePx[k]) / pxPerMm
+    }
+    if (options.impulseOutliers) {
+      const outlierRand = prng(options.seed * 6151 + i * 3571 + 29)
+      for (let k = 0; k < count; k++) {
+        if (outlierRand() >= options.impulseOutliers.fraction) continue
+        const sign = outlierRand() < 0.5 ? -1 : 1
+        lateral[k] += sign * options.impulseOutliers.ampMm * (0.5 + outlierRand())
+      }
+    }
 
     const observed = options.gaps
       ? gapMask(count, options.gaps.fraction, options.gaps.maxRun, lineRand)

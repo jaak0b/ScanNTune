@@ -14,17 +14,20 @@ import {
   ZETA_GRID,
   ZETA_MAX,
   driftBasis,
+  flowDeficit,
 } from './ringRegressors'
 import {
   fitNoise,
   glsNullSsr,
   levenbergMarquardt,
   lineBasis,
+  noiseModel,
   minimizeOverLogTau,
   nullDesign,
   olsNull,
   olsNullSsr,
   parameterVariances,
+  pooledVarianceSlope,
   projectRing,
   rawFullResidual,
   ringScratch,
@@ -63,7 +66,10 @@ import { tCdf, tQuantile } from '../studentT'
 //    and Broersen 2000), order by AICc (Hurvich and Tsai 1989) up to floor(10 log10 n), and the
 //    exact innovations whitening of data and every column with missing observations handled by
 //    the Kalman filter of the AR state space (Jones 1980): two-step feasible GLS (Aitken 1935;
-//    Cochrane and Orcutt 1949).
+//    Cochrane and Orcutt 1949). The innovations carry the axis's multiplicative variance
+//    function of the flow-lag deficit (Harvey 1976; ringGls.ts), one slope shared by the lines,
+//    applied only when its likelihood ratio test rejects a constant variance at DETECTION_ALPHA,
+//    both under the null and with each line's strongest ring candidate removed.
 // 4. Detection field: per line the generalized likelihood ratio statistic of the ring at theta
 //    with the AR noise model refitted under each hypothesis (ringLikelihood.ts), chi2_2 under H0
 //    at a fixed theta; their sum Q over the K lines is chi2_2K. A noise model fitted under the
@@ -351,18 +357,59 @@ function tauRange(bases: LineBasis[]): [number, number] {
  * AR refitted to its GLS residual by iterated Cochrane-Orcutt.
  */
 function nullFits(bases: LineBasis[], tauBounds: [number, number]): NullFit[] {
-  const tauOls = minimizeOverLogTau(
-    (tau) => bases.reduce((s, b) => s + olsNullSsr(b, tau), 0),
-    tauBounds[0],
-    tauBounds[1],
-  )
+  const tauOls = olsTau(bases, tauBounds)
   const initial = bases.map((b) => fitNoise(b, olsNull(b, tauOls).residual))
   const tau = minimizeOverLogTau(
     (t) => bases.reduce((s, b, l) => s + glsNullSsr(b, initial[l], t), 0),
     tauBounds[0],
     tauBounds[1],
   )
-  return bases.map((b, l) => nullHypothesisFit(b, initial[l].fit, tau))
+  const plain = bases.map((b, l) => nullHypothesisFit(b, initial[l].fit, tau))
+  const noises = plain.map((h) => h.noise)
+  if (axisVarianceSlope(bases, noises, plain.map((h) => h.residual), tau) === 0) return plain
+  // A ring the null model leaves in its residual also raises the early variance. The variance
+  // function is kept only if its test still rejects once every line's own strongest ring
+  // candidate (the maximum of its held-noise field) is removed by GLS, and its slope is then
+  // estimated from those residuals: a rougher bead does not go away with a ring.
+  const withoutRing = bases.map((b, l) => residualWithoutStrongestRing(b, plain[l]))
+  const slope = axisVarianceSlope(bases, noises, withoutRing, tau)
+  if (slope === 0) return plain
+  return bases.map((b, l) => nullHypothesisFit(b, plain[l].noise.fit, tau, slope))
+}
+
+/** The raw residual of a line's null fit with its strongest held-noise ring candidate added. */
+function residualWithoutStrongestRing(basis: LineBasis, h0: NullFit): Float64Array {
+  const field = heldNoiseField(basis, h0)
+  let best = 0
+  for (let g = 1; g < field.length; g++) if (field[g] > field[best]) best = g
+  const point = DETECTION_GRID[best]
+  const scratch = ringScratch(basis.m)
+  const ring = projectRing(basis, h0.noise, h0.design, point.frequencyHz, point.dampingRatio, scratch, new Float64Array(h0.design.k), new Float64Array(h0.design.k))
+  return rawFullResidual(basis, h0.noise, h0.design, point.frequencyHz, point.dampingRatio, ring, scratch)
+}
+
+/** The flow-lag time constant of the axis's ordinary least squares null fits. */
+function olsTau(bases: LineBasis[], tauBounds: [number, number]): number {
+  return minimizeOverLogTau(
+    (tau) => bases.reduce((s, b) => s + olsNullSsr(b, tau), 0),
+    tauBounds[0],
+    tauBounds[1],
+  )
+}
+
+/** Critical value of the chi2_1 likelihood ratio test of a constant innovation variance. */
+const VARIANCE_CRITICAL = normalQuantile(1 - DETECTION_ALPHA / 2) ** 2
+
+/**
+ * The slope of the axis's innovation variance function (ringGls.pooledVarianceSlope) from the
+ * lines' raw residuals under their AR models, or 0 when the likelihood ratio test does not reject
+ * a constant variance at DETECTION_ALPHA.
+ */
+function axisVarianceSlope(bases: LineBasis[], noises: LineNoise[], residuals: Float64Array[], tauS: number): number {
+  const deficits = bases.map((b) => flowDeficit(b.rec.tS, b.rec, tauS))
+  const innovations = residuals.map((r, l) => noises[l].whitener.whiten(r))
+  const pooled = pooledVarianceSlope(innovations, deficits)
+  return pooled.statistic > VARIANCE_CRITICAL ? pooled.slope : 0
 }
 
 /**
@@ -749,12 +796,17 @@ export function poolAxisFits(fits: LineFit[], speedsMmS: number[]): AxisPool {
     [true, true, true],
     tauBounds,
   )
-  const noise1 = included.map((l, k) => {
-    const s = states[l]
-    const design = nullDesign(s.basis, noiseAtSeed[k], first.tauS)
-    const ring = projectRing(s.basis, noiseAtSeed[k], design, first.frequencyHz, first.dampingRatio, ringScratch(s.basis.m), new Float64Array(design.k), new Float64Array(design.k))
-    return fitNoise(s.basis, rawFullResidual(s.basis, noiseAtSeed[k], design, first.frequencyHz, first.dampingRatio, ring, ringScratch(s.basis.m)))
+  const residuals1 = inBases.map((b, k) => {
+    const design = nullDesign(b, noiseAtSeed[k], first.tauS)
+    const ring = projectRing(b, noiseAtSeed[k], design, first.frequencyHz, first.dampingRatio, ringScratch(b.m), new Float64Array(design.k), new Float64Array(design.k))
+    return rawFullResidual(b, noiseAtSeed[k], design, first.frequencyHz, first.dampingRatio, ring, ringScratch(b.m))
   })
+  const ar1 = inBases.map((b, k) => fitNoise(b, residuals1[k]))
+  const slope1 = axisVarianceSlope(inBases, ar1, residuals1, first.tauS)
+  const noise1 =
+    slope1 === 0
+      ? ar1
+      : inBases.map((b, k) => noiseModel(b, ar1[k].fit, slope1, flowDeficit(b.rec.tS, b.rec, first.tauS)))
   const joint = varproFit(
     inBases,
     noise1,
@@ -784,7 +836,7 @@ export function poolAxisFits(fits: LineFit[], speedsMmS: number[]): AxisPool {
   base.decayStatistic = decayStatistic(inBases, noise1, joint, tauBounds)
   base.decayDemonstrated = base.decayStatistic > DECAY_CRITICAL
   base.proportionality = proportionalityCheck(inBases, rings)
-  base.speedCheck = speedCheck(states, included, noise1, joint, speedsMmS, tauBounds)
+  base.speedCheck = speedCheck(states, included, inBases, noise1, joint, speedsMmS, tauBounds)
   base.influenceCheck = speedsMmS.length === 1 ? influenceCheck(states) : 'not-assessed'
   const detectedK = included.map((l, k) => (verdicts[windowed[l]].detected ? k : -1)).filter((k) => k >= 0)
   const replicate = replicateCheck(
@@ -932,10 +984,12 @@ function localGrid(centers: number[]): number[] {
 
 /** The three-way two-tier speed check (closed testing on local grids, then the d test) on the
  *  joint-fit lines `included`: each tier's detection over its own lines' likelihood ratio fields,
- *  its frequency fitted with the lines' full-fit noise models `noise1` (aligned with included). */
+ *  its frequency fitted on the lines' joint-fit windows `inBases` with their full-fit noise models
+ *  `noise1` (both aligned with included). */
 function speedCheck(
   states: LineState[],
   included: number[],
+  inBases: LineBasis[],
   noise1: LineNoise[],
   joint: JointFit,
   speedsMmS: number[],
@@ -956,7 +1010,7 @@ function speedCheck(
     if (!detected) return { ...blank, detectionPBound: pBound }
     const seed = DETECTION_GRID[local.index]
     const fit = varproFit(
-      members.map((k) => states[included[k]].basis),
+      members.map((k) => inBases[k]),
       members.map((k) => noise1[k]),
       [seed.frequencyHz, seed.dampingRatio, Math.log(joint.tauS)],
       [true, true, false],

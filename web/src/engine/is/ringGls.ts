@@ -9,12 +9,20 @@ import type { CommandedMotion } from './ringRegressors'
 //   y(t) = sum_k d_k cos(pi k (t - t0) / T)            drift (discrete cosine basis)
 //        + g (q_tau(t) / v(t) - 1) + h c e^(-t/tau) / v(t)  flow lag of the commanded flow
 //        + e^(-zeta w t) (a cos(w_d t) + b sin(w_d t))   ring, w = 2 pi f, w_d = w sqrt(1 - zeta^2)
-//        + AR(p) noise on the sample lattice
+//        + AR(p) noise on the sample lattice, its innovation standard deviation scaled by
+//          exp(b g(t) / 2) with g the flow-lag deficit of the commanded flow
 //
 // The drift and flow-lag columns form the NULL design; the two ring columns are added in the
 // full model. Every column and the data are whitened by the same exact AR innovations operator
-// (correlatedNoise.arWhitener), so under the model the whitened residuals are iid N(0, 1)
-// whatever the regressor shapes.
+// (correlatedNoise.arWhitener), then divided by the innovation scale, so under the model the
+// whitened residuals are iid N(0, 1) whatever the regressor shapes.
+//
+// The innovation scale is the multiplicative variance function of A. C. Harvey ("Estimating
+// regression models with multiplicative heteroscedasticity", Econometrica 44(3), 1976, 461-465),
+// log sigma_t^2 = a + b g(t), applied to the AR innovations: the bead right after a corner, where
+// the extruded flow lags the commanded flow, is rougher than the steady bead. Scaling the
+// innovations rather than the observations keeps the whitening one exact lower-triangular
+// operator (the AR filter, then a diagonal), so the ring columns keep their closed-form whitening.
 
 /** One line's fit window: the observed samples of the free ringdown. */
 export interface LineRecord extends CommandedMotion {
@@ -41,11 +49,23 @@ export interface LineBasis {
   dt: number
 }
 
-/** A line's noise model: its AR fit, the whitening operator, and the whitened fixed columns. */
+/** A line's noise model: its AR fit, the whitening operator, the innovation scale of its
+ *  variance function, and the whitened fixed columns. */
 export interface LineNoise {
   fit: ArFit
   whitener: ArWhitener
   sigma: number
+  /** Slope b of the variance function log sigma_t^2 = a + b g(t); 0 for a constant variance. */
+  varianceSlope: number
+  /** Relative innovation standard deviation exp(b g(t) / 2) per observed sample, or null when
+   *  the variance is constant. */
+  scale: Float64Array | null
+  /** Log determinant of the observations' covariance: the AR operator's plus 2 sum ln scale. */
+  logDet: number
+  /** Whitens a raw column given on the observed samples. */
+  whiten(x: ArrayLike<number>): Float64Array
+  /** Maps whitened values back to the raw column they came from. */
+  unwhiten(e: ArrayLike<number>): Float64Array
   wY: Float64Array
   /** Orthonormal basis of the whitened drift columns. */
   wDriftQ: Float64Array[]
@@ -131,7 +151,7 @@ export function olsNullSsr(line: LineBasis, tauS: number): number {
 
 /** Whitened residual sum of squares of the GLS null fit at tau. */
 export function glsNullSsr(line: LineBasis, noise: LineNoise, tauS: number): number {
-  const lag = flowLagColumns(line.rec.tS, line.rec, tauS).map((c) => noise.whitener.whiten(c))
+  const lag = flowLagColumns(line.rec.tS, line.rec, tauS).map((c) => noise.whiten(c))
   return ssrAfterLag(noise.wYDriftFree, orthonormalBasis(lag, noise.wDriftQ))
 }
 
@@ -164,25 +184,121 @@ export function fitNoise(line: LineBasis, residual: Float64Array): LineNoise {
   return noiseModel(line, fit)
 }
 
-/** The noise model of a line for a given AR fit: its whitener and the whitened fixed columns. */
-export function noiseModel(line: LineBasis, fit: ArFit): LineNoise {
+/**
+ * The noise model of a line for a given AR fit and variance function: its whitener and the
+ * whitened fixed columns. `deficit` is g(t) at the observed samples; with a zero slope (or no
+ * deficit) the innovation variance is constant.
+ */
+export function noiseModel(
+  line: LineBasis,
+  fit: ArFit,
+  varianceSlope = 0,
+  deficit: Float64Array | null = null,
+): LineNoise {
   const whitener = arWhitener(fit, line.rec.lattice)
-  const wY = whitener.whiten(line.rec.y)
-  const wDriftQ = orthonormalBasis(line.drift.map((c) => whitener.whiten(c)))
+  const scale = varianceSlope !== 0 && deficit ? Float64Array.from(deficit, (g) => Math.exp((varianceSlope * g) / 2)) : null
+  let logDet = whitener.logDet
+  if (scale) for (const v of scale) logDet += 2 * Math.log(v)
+  const whiten = (x: ArrayLike<number>): Float64Array => {
+    const w = whitener.whiten(x)
+    if (scale) for (let i = 0; i < w.length; i++) w[i] /= scale[i]
+    return w
+  }
+  const unwhiten = (e: ArrayLike<number>): Float64Array => {
+    if (!scale) return whitener.unwhiten(e)
+    return whitener.unwhiten(Float64Array.from(e, (v, i) => v * scale[i]))
+  }
+  const wY = whiten(line.rec.y)
+  const wDriftQ = orthonormalBasis(line.drift.map((c) => whiten(c)))
   return {
     fit,
     whitener,
     sigma: Math.sqrt(fit.noiseVariance),
+    varianceSlope: scale ? varianceSlope : 0,
+    scale,
+    logDet,
+    whiten,
+    unwhiten,
     wY,
     wDriftQ,
     wYDriftFree: residualize(wY, wDriftQ),
   }
 }
 
+/**
+ * The variance-function slope b shared by an axis's lines (Harvey 1976): the maximum likelihood
+ * estimate from each line's unit innovations e_l and flow-lag deficit g_l, every line's level
+ * profiled out, i.e. the minimizer of sum_l [m_l ln(sum_t e^2 e^(-b g) / m_l) + b sum_t g], a
+ * convex function of b, by Newton's method with step halving; and the likelihood ratio statistic
+ * of b = 0, chi2_1 under a constant innovation variance. One slope for the axis, because the
+ * starved bead after a corner is one mechanism of the print on every line; per line the slope is
+ * not identified when the deficit is concentrated on a few samples.
+ */
+export function pooledVarianceSlope(
+  innovations: ArrayLike<number>[],
+  deficits: ArrayLike<number>[],
+): { slope: number; statistic: number } {
+  const objective = (b: number) => {
+    let total = 0
+    innovations.forEach((e, l) => {
+      const g = deficits[l]
+      let s0 = 0
+      let G = 0
+      for (let i = 0; i < e.length; i++) {
+        s0 += e[i] * e[i] * Math.exp(-b * g[i])
+        G += g[i]
+      }
+      total += e.length * Math.log(s0 / e.length) + b * G
+    })
+    return total
+  }
+  const anyDeficit = deficits.some((g) => Array.prototype.some.call(g, (v: number) => v !== 0))
+  if (!anyDeficit) return { slope: 0, statistic: 0 }
+  let b = 0
+  let value = objective(0)
+  const atZero = value
+  for (let iter = 0; iter < 50; iter++) {
+    let gradient = 0
+    let curvature = 0
+    innovations.forEach((e, l) => {
+      const g = deficits[l]
+      let s0 = 0
+      let s1 = 0
+      let s2 = 0
+      let G = 0
+      for (let i = 0; i < e.length; i++) {
+        const w = e[i] * e[i] * Math.exp(-b * g[i])
+        s0 += w
+        s1 += w * g[i]
+        s2 += w * g[i] * g[i]
+        G += g[i]
+      }
+      const m = e.length
+      gradient += G - (m * s1) / s0
+      curvature += (m * (s2 * s0 - s1 * s1)) / (s0 * s0)
+    })
+    if (!(curvature > 0)) break
+    let step = -gradient / curvature
+    let next = b + step
+    let nextValue = objective(next)
+    while (!(nextValue <= value) && Math.abs(step) > 1e-12) {
+      step /= 2
+      next = b + step
+      nextValue = objective(next)
+    }
+    if (!(nextValue <= value)) break
+    const done = Math.abs(next - b) < 1e-10 * Math.max(1, Math.abs(b))
+    b = next
+    value = nextValue
+    if (done) break
+  }
+  return { slope: b, statistic: Math.max(0, atZero - value) }
+}
+
 /** The whitened null design of a line at tau. */
 export function nullDesign(line: LineBasis, noise: LineNoise, tauS: number): NullDesign {
   const lagRaw = flowLagColumns(line.rec.tS, line.rec, tauS)
-  const Q = noise.wDriftQ.concat(orthonormalBasis(lagRaw.map((c) => noise.whitener.whiten(c)), noise.wDriftQ))
+  const Q = noise.wDriftQ.concat(orthonormalBasis(lagRaw.map((c) => noise.whiten(c)), noise.wDriftQ))
   const k = Q.length
   const m = line.m
   const qRows = new Float64Array(m * k)
@@ -291,6 +407,13 @@ export function whitenedRing(
   }
   noise.whitener.whitenIrregular(zr, wr)
   noise.whitener.whitenIrregular(zi, wi)
+  const scale = noise.scale
+  if (scale) {
+    for (let i = 0; i < m; i++) {
+      wr[i] /= scale[i]
+      wi[i] /= scale[i]
+    }
+  }
 }
 
 /** The ring part of one line's GLS fit at one (f, zeta), by Frisch-Waugh-Lovell. */
@@ -406,7 +529,7 @@ export function rawFullResidual(
   const target = new Float64Array(m)
   for (let i = 0; i < m; i++) target[i] = noise.wY[i] - ring.a * scratch.wr[i] - ring.b * scratch.wi[i]
   const rawColumns = [...line.drift, ...design.lagRaw]
-  const beta = generalizedLeastSquares(rawColumns.map((c) => noise.whitener.whiten(c)), target)
+  const beta = generalizedLeastSquares(rawColumns.map((c) => noise.whiten(c)), target)
   const residual = new Float64Array(m)
   for (let i = 0; i < m; i++) {
     let fitted = ring.a * scratch.zr[i] + ring.b * scratch.zi[i]

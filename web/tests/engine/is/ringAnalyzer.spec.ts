@@ -117,6 +117,16 @@ describe('poolAxisFits detection', () => {
     expect(p.detectionPBound!).toBeGreaterThan(0.001)
   })
 
+  it('does not take the rougher bead after the corner for ringing', () => {
+    // Scan noise doubled where the extruded flow lags a 40 ms first-order lag, with that lag's
+    // lobe: the variance function of the noise model carries it.
+    const p = pool(
+      twoTier,
+      simulate(twoTier, { noise: IID, flowLag: { tauS: 0.04, ampMm: 0.03 }, earlyNoise: { factor: 2, tauS: 0.04 } }, 2),
+    )
+    expect(p.detectionPBound!).toBeGreaterThan(0.001)
+  })
+
   it('refuses too few lines with a fit window, pointing at the lamp shadow', () => {
     const none: LineFit = {
       screening: 'no-free-response',

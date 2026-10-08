@@ -84,6 +84,14 @@ export function flowLagColumns(
   return [flowLagRegressor(tS, motion, tauS), homogeneous]
 }
 
+/**
+ * The flow-lag deficit 1 - q_tau(t) / v(t) at each sample time: the relative shortfall of the
+ * extruded flow behind the commanded flow (see flowLagRegressor), zero in steady flow.
+ */
+export function flowDeficit(tS: Float64Array, motion: CommandedMotion, tauS: number): Float64Array {
+  return flowLagRegressor(tS, motion, tauS).map((v) => -v)
+}
+
 /** The commanded speed at time t after the corner on the trapezoid ramp. */
 function commandedSpeedMmS(t: number, motion: CommandedMotion): number {
   return Math.min(motion.speedMmS, motion.cornerSpeedMmS + motion.accelMmS2 * Math.max(0, t))
