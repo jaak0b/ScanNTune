@@ -16,21 +16,25 @@ import {
 } from './ringRegressors'
 import {
   fitNoise,
+  glsNullSsr,
   levenbergMarquardt,
   noiseModel,
   lineBasis,
   minimizeOverLogTau,
   nullDesign,
   olsNull,
+  olsNullSsr,
   parameterVariances,
   projectRing,
   rawFullResidual,
   ringScratch,
+  solveSymmetric,
 } from './ringGls'
 import type { LineBasis, LineNoise, LineRecord, LmResult, NullDesign } from './ringGls'
 import { defaultMaxArOrder } from '../correlatedNoise'
 import type { ArFit } from '../correlatedNoise'
 import { MAD_TO_SIGMA, chiSquareSurvival, chiSquareSurvivalEvenDof, mad, median, normalQuantile } from '../math'
+import { tCdf } from '../studentT'
 
 // Detects and measures the ringing of one machine axis from its traced lines. The resonance is
 // one machine property shared by every line, so the lines share the nonlinear parameters while
@@ -68,9 +72,11 @@ import { MAD_TO_SIGMA, chiSquareSurvival, chiSquareSurvivalEvenDof, mad, median,
 //    Wild 1989); zeta is bounded to [0, ZETA_MAX].
 // 6. Checks, each at DETECTION_ALPHA:
 //    - Input proportionality (output-error model, Ljung 1999): the ring is the linear response
-//      to the corner's velocity step, so each line's complex ring amplitude is its rung's corner
-//      speed times one complex scale per speed tier. Nested likelihood-ratio test against free
-//      per-line amplitudes; a forced tone (rung-independent amplitude, random phase) fails it.
+//      to the corner's velocity step, so each line's ring amplitude is its rung's corner speed
+//      times one scale per speed tier, through zero. The intercept of the least squares
+//      regression of the per-line amplitudes on the corner speeds is t-tested against zero with
+//      the lines' own scatter as the error (Student 1908); a forced tone (rung-independent
+//      amplitude) has a large intercept and fails it.
 //    - Speed check with two tiers: each tier is tested on its own lines only on a local grid
 //      around the axis estimate and its arc-length artifact images f rho^(+/-1) (closed testing,
 //      Marcus, Peritz and Gabriel 1976), then fitted on its own; d = ln(f_slow / f_fast) with the
@@ -167,6 +173,8 @@ export interface AxisPool {
   linesUsed: number
   /** Boundary LRT of zeta = 0 rejected; null when the axis was not fitted. */
   decayDemonstrated: boolean | null
+  /** The boundary LRT statistic of zeta = 0 (0.5 chi2_0 + 0.5 chi2_1 under an undamped ring). */
+  decayStatistic: number | null
   /** Input-proportionality test: passed when the ring grows with the corner speed. */
   proportionality: CheckState
   speedCheck: SpeedCheck
@@ -182,11 +190,12 @@ export interface AxisPool {
  * the residuals of a per-line ordinary least squares full fit at the line's own best grid point
  * (the two-step feasible GLS of the design); 'axis' refits it once after removing the ring of the
  * null field's pooled maximum from every line. Removing any in-band component lowers the AR's
- * estimate of the noise across the whole ring band, which on the tracer's half-pixel lattice lies
- * inside one AR resolution cell, so 'full' and 'axis' inflate the field under H0: the pBound
- * calibration in tests/stats measured them far above alpha on correlated scan noise and 'null'
- * within it, so 'null' is the production choice. The others stay selectable for that
- * calibration.
+ * estimate of the noise across the whole ring band, which on the tracer's one-pixel lattice spans
+ * about one AR resolution cell, so 'full' and 'axis' inflate the field under H0. Measured on 60
+ * simulated noise-only axes per noise model, share of detection bounds at or below 0.05: 'full'
+ * 31 of 60 under 2 px blur and 39 of 60 under red AR(2) noise, 'axis' 31 of 60 under 2 px blur,
+ * 'null' 1 of 300 over five noise models. 'null' is therefore the production choice (its full
+ * calibration is the tests/stats pBound suite); the others stay selectable for that measurement.
  */
 export type DetectionNoise = 'null' | 'full' | 'axis'
 export const DEFAULT_DETECTION_NOISE: DetectionNoise = 'null'
@@ -199,19 +208,42 @@ export interface PoolOptions {
  * Gaussian regression filter trend (ISO 16610-21 style, zeroth order): a Gaussian-weighted
  * moving average with per-sample weight normalization (the regression form, which keeps the
  * trend unbiased at the profile ends). `cutoffS` is the period at which the trend's transmission
- * is 50%; alpha = sqrt(ln 2 / pi) per the standard. Used to locate the free ringdown only.
+ * is 50%; alpha = sqrt(ln 2 / pi) per the standard. The trend is evaluated at the first `count`
+ * samples. On the uniform cruise grid at the end of a trace a weight depends only on the sample
+ * distance, so those weights come from one table instead of one exponential per pair. Used to
+ * locate the free ringdown only.
  */
-export function gaussianTrend(tS: Float64Array, y: Float64Array, cutoffS: number): Float64Array {
+export function gaussianTrend(
+  tS: Float64Array,
+  y: Float64Array,
+  cutoffS: number,
+  count = y.length,
+): Float64Array {
   const n = y.length
   const alpha = Math.sqrt(Math.log(2) / Math.PI)
   const denom = alpha * cutoffS
-  const trend = new Float64Array(n)
-  for (let i = 0; i < n; i++) {
+  const step = n > 1 ? tS[n - 1] - tS[n - 2] : 0
+  let uniformFrom = n - 1
+  while (uniformFrom > 0 && Math.abs(tS[uniformFrom] - tS[uniformFrom - 1] - step) <= 1e-9 * Math.abs(step)) {
+    uniformFrom--
+  }
+  const table = new Float64Array(n)
+  for (let d = 0; d < n; d++) {
+    const u = (d * step) / denom
+    table[d] = Math.exp(-Math.PI * u * u)
+  }
+  const trend = new Float64Array(count)
+  for (let i = 0; i < count; i++) {
     let w = 0
     let s = 0
     for (let j = 0; j < n; j++) {
-      const u = (tS[j] - tS[i]) / denom
-      const wk = Math.exp(-Math.PI * u * u)
+      let wk: number
+      if (i >= uniformFrom && j >= uniformFrom) {
+        wk = table[i > j ? i - j : j - i]
+      } else {
+        const u = (tS[j] - tS[i]) / denom
+        wk = Math.exp(-Math.PI * u * u)
+      }
       w += wk
       s += wk * y[j]
     }
@@ -267,9 +299,11 @@ export function analyzeTracedLine(line: TracedLine): LineFit {
     offsetMm,
   })
 
-  const trend = gaussianTrend(line.tS, line.lateralMm, 1 / DRIFT_CUTOFF_HZ)
+  // The free-ringdown search reads the first half of the trace only.
+  const half = Math.floor(n / 2)
+  const trend = gaussianTrend(line.tS, line.lateralMm, 1 / DRIFT_CUTOFF_HZ, half)
   const detrended = new Float64Array(n)
-  for (let i = 0; i < n; i++) detrended[i] = line.lateralMm[i] - trend[i]
+  for (let i = 0; i < half; i++) detrended[i] = line.lateralMm[i] - trend[i]
   const freeStart = freeResponseStart(detrended)
   const timedStart = line.tS.findIndex((t) => t >= line.fitStartMinS)
   if (freeStart === null || timedStart < 0) return refuse()
@@ -313,6 +347,54 @@ interface LineState {
  *  to ordinary least squares. */
 const WHITE_UNIT: ArFit = { coefficients: [], noiseVariance: 1 }
 
+/** The search range of the flow-lag time constant: one sample interval to the longest window. */
+function tauRange(bases: LineBasis[]): [number, number] {
+  return [
+    Math.min(...bases.map((b) => b.rec.tS[1] - b.rec.tS[0])),
+    Math.max(...bases.map((b) => b.rec.tS[b.m - 1] - b.rec.tS[0])),
+  ]
+}
+
+/** The detection noise models of the lines: tau by ordinary least squares, then the AR fits. */
+function detectionNoises(
+  bases: LineBasis[],
+  tauBounds: [number, number],
+  variant: DetectionNoise,
+): LineNoise[] {
+  const tauOls = minimizeOverLogTau(
+    (tau) => bases.reduce((s, b) => s + olsNullSsr(b, tau), 0),
+    tauBounds[0],
+    tauBounds[1],
+  )
+  return bases.map((b) =>
+    variant === 'full'
+      ? fitNoise(b, olsFullResidualAtArgmax(b, tauOls))
+      : fitNoise(b, olsNull(b, tauOls).residual),
+  )
+}
+
+/**
+ * The axis detection statistic Q(theta) = sum_l D_l(theta) at one point, with the production
+ * noise models and null designs under the null (the 'null' detection noise). Exposed for the
+ * statistical calibration of the detection field (chi2_2K at a fixed theta under H0, and the
+ * noncentrality of the power cases).
+ */
+export function detectionStatisticAt(fits: LineFit[], frequencyHz: number, dampingRatio: number): number {
+  const bases = fits.filter((f) => f.window).map((f) => lineBasis(f.window!))
+  const tauBounds = tauRange(bases)
+  const noises = detectionNoises(bases, tauBounds, 'null')
+  const tau = minimizeOverLogTau(
+    (t) => bases.reduce((s, b, l) => s + glsNullSsr(b, noises[l], t), 0),
+    tauBounds[0],
+    tauBounds[1],
+  )
+  return bases.reduce((sum, b, l) => {
+    const design = nullDesign(b, noises[l], tau)
+    const scratch = ringScratch(b.m)
+    return sum + projectRing(b, noises[l], design, frequencyHz, dampingRatio, scratch, new Float64Array(design.k), new Float64Array(design.k)).D
+  }, 0)
+}
+
 /** The null designs at the GLS-optimal tau and the detection fields of lines with given noise. */
 function detectionStates(
   bases: LineBasis[],
@@ -320,7 +402,7 @@ function detectionStates(
   tauBounds: [number, number],
 ): { states: LineState[]; tau: number } {
   const tau = minimizeOverLogTau(
-    (t) => bases.reduce((s, b, l) => s + nullDesign(b, noises[l], t).ssr, 0),
+    (t) => bases.reduce((s, b, l) => s + glsNullSsr(b, noises[l], t), 0),
     tauBounds[0],
     tauBounds[1],
   )
@@ -497,6 +579,7 @@ export function poolAxisFits(
     linesDetected: 0,
     linesUsed: 0,
     decayDemonstrated: null,
+    decayStatistic: null,
     proportionality: 'not-assessed',
     speedCheck: NOT_ASSESSED_SPEED,
     replicateCheck: 'not-assessed',
@@ -527,23 +610,8 @@ export function poolAxisFits(
 
   // Detection stage: tau and the noise models under the null, then the field.
   const bases = windowed.map((i) => lineBasis(fits[i].window!))
-  const tauMin = Math.min(...bases.map((b) => b.rec.tS[1] - b.rec.tS[0]))
-  const tauMax = Math.max(...bases.map((b) => b.rec.tS[b.m - 1] - b.rec.tS[0]))
-  const tauBounds: [number, number] = [tauMin, tauMax]
-  const tauOls = minimizeOverLogTau(
-    (tau) => bases.reduce((s, b) => s + olsNull(b, tau).ssr, 0),
-    tauMin,
-    tauMax,
-  )
-  let detection = detectionStates(
-    bases,
-    bases.map((b) =>
-      detectionNoise === 'full'
-        ? fitNoise(b, olsFullResidualAtArgmax(b, tauOls))
-        : fitNoise(b, olsNull(b, tauOls).residual),
-    ),
-    tauBounds,
-  )
+  const tauBounds = tauRange(bases)
+  let detection = detectionStates(bases, detectionNoises(bases, tauBounds, detectionNoise), tauBounds)
   const all = bases.map((_, l) => l)
   if (detectionNoise === 'axis') {
     // One Cochrane-Orcutt step at the axis's single best candidate: the ring of the null
@@ -688,8 +756,9 @@ export function poolAxisFits(
   base.linesDetected = verdicts.filter((v) => v.detected).length
 
   // Diagnostics and checks.
-  base.decayDemonstrated = decayTest(inBases, noise1, joint, tauBounds)
-  base.proportionality = proportionalityCheck(inBases, rings, joint)
+  base.decayStatistic = decayStatistic(inBases, noise1, joint, tauBounds)
+  base.decayDemonstrated = base.decayStatistic > DECAY_CRITICAL
+  base.proportionality = proportionalityCheck(inBases, rings)
   base.speedCheck = speedCheck(states1, joint, speedsMmS, tauBounds)
   base.influenceCheck = speedsMmS.length === 1 ? influenceCheck(states) : 'not-assessed'
   const detectedK = included.map((l, k) => (verdicts[windowed[l]].detected ? k : -1)).filter((k) => k >= 0)
@@ -787,9 +856,13 @@ function olsFullResidualAtArgmax(basis: LineBasis, tauS: number): Float64Array {
   return rawFullResidual(basis, identity, design, point.frequencyHz, point.dampingRatio, ring, scratch)
 }
 
-/** Boundary LRT of zeta = 0 (Self and Liang 1987): true when the decay is demonstrated. */
-function decayTest(bases: LineBasis[], noises: LineNoise[], joint: JointFit, tauBounds: [number, number]): boolean {
-  if (!(joint.dampingRatio > 0) || !(joint.sigma2 > 0)) return false
+/**
+ * The boundary likelihood-ratio statistic of zeta = 0 (Self and Liang 1987): the whitened SSR of
+ * the undamped fit (f and tau re-optimized) minus that of the full fit, over sigma^2; zero when
+ * the fit already sits at zeta = 0.
+ */
+function decayStatistic(bases: LineBasis[], noises: LineNoise[], joint: JointFit, tauBounds: [number, number]): number {
+  if (!(joint.dampingRatio > 0) || !(joint.sigma2 > 0)) return 0
   const undamped = varproFit(
     bases,
     noises,
@@ -797,55 +870,45 @@ function decayTest(bases: LineBasis[], noises: LineNoise[], joint: JointFit, tau
     [true, false, true],
     tauBounds,
   )
-  const lambda = (undamped.lm.ssr - joint.lm.ssr) / joint.sigma2
-  return lambda > DECAY_CRITICAL
+  return Math.max(0, (undamped.lm.ssr - joint.lm.ssr) / joint.sigma2)
 }
 
 /**
- * Input proportionality: nested likelihood-ratio test of per-line complex ring amplitudes
- * proportional to the line's corner speed (one complex scale per speed tier) against free
- * per-line amplitudes, at the joint estimate. With each line's residualized whitened ring
- * columns C_l (Gram G_l, data products g_l), the free model removes sum_l g_l' G_l^-1 g_l and the
- * proportional one sum_T s_T' (sum_l c_l^2 G_l)^-1 s_T with s_T = sum_l c_l g_l; the difference
- * over sigma^2 is chi2 with 2 (K - T) degrees of freedom under proportionality.
+ * Input proportionality: the ring is the linear response to the corner's velocity step, so each
+ * line's ring amplitude at the corner is proportional to its corner speed, one scale per speed
+ * tier, and the regression of the amplitudes on the corner speeds passes through zero. The
+ * ordinary least squares fit amplitude = b0 + b_T c (one slope per tier, one shared intercept)
+ * and the two-sided Student t test of b0 = 0 with K - 1 - T degrees of freedom (Seber and Lee,
+ * "Linear Regression Analysis", 2003, s4.4) use the residual scatter of the lines themselves as
+ * the error, so a misfit of the same order on every line widens the test instead of rejecting a
+ * real ring, and the corner-time phase, which a corner position error of hundredths of a
+ * millimetre at a slow corner shifts by tenths of a radian, does not enter. A forced tone keeps
+ * its amplitude on every rung, so its intercept carries the whole amplitude and the test rejects.
  */
-function proportionalityCheck(
-  bases: LineBasis[],
-  rings: ReturnType<typeof projectRing>[],
-  joint: JointFit,
-): CheckState {
-  const tiers = new Map<number, number[]>()
-  bases.forEach((b, k) => {
-    const list = tiers.get(b.rec.speedMmS) ?? []
-    list.push(k)
-    tiers.set(b.rec.speedMmS, list)
-  })
-  const dof = 2 * (bases.length - tiers.size)
-  if (dof <= 0 || !(joint.sigma2 > 0)) return 'not-assessed'
-  let free = 0
-  for (const r of rings) free += r.D
-  let proportional = 0
-  for (const members of tiers.values()) {
-    let a11 = 0
-    let a12 = 0
-    let a22 = 0
-    let s1 = 0
-    let s2 = 0
-    for (const k of members) {
-      const c = bases[k].rec.cornerSpeedMmS
-      const r = rings[k]
-      a11 += c * c * r.G11
-      a12 += c * c * r.G12
-      a22 += c * c * r.G22
-      s1 += c * r.gR
-      s2 += c * r.gI
-    }
-    const det = a11 * a22 - a12 * a12
-    if (!(det > 0)) return 'not-assessed'
-    proportional += (a22 * s1 * s1 - 2 * a12 * s1 * s2 + a11 * s2 * s2) / det
+function proportionalityCheck(bases: LineBasis[], rings: ReturnType<typeof projectRing>[]): CheckState {
+  const tiers = [...new Set(bases.map((b) => b.rec.speedMmS))]
+  const K = bases.length
+  const dof = K - 1 - tiers.length
+  if (dof < 1) return 'not-assessed'
+  // Columns: intercept, then one corner-speed column per tier.
+  const columns = [bases.map(() => 1), ...tiers.map((v) => bases.map((b) => (b.rec.speedMmS === v ? b.rec.cornerSpeedMmS : 0)))]
+  const amplitude = rings.map((r) => Math.hypot(r.a, r.b))
+  const n = columns.length
+  const A = columns.map((ci) => columns.map((cj) => ci.reduce((s, v, k) => s + v * cj[k], 0)))
+  const g = columns.map((ci) => ci.reduce((s, v, k) => s + v * amplitude[k], 0))
+  const beta = solveSymmetric(A, g)
+  const e0 = solveSymmetric(A, columns.map((_, i) => (i === 0 ? 1 : 0)))
+  if (beta === null || e0 === null) return 'not-assessed'
+  let ssr = 0
+  for (let k = 0; k < K; k++) {
+    let fitted = 0
+    for (let j = 0; j < n; j++) fitted += beta[j] * columns[j][k]
+    ssr += (amplitude[k] - fitted) ** 2
   }
-  const lr = Math.max(0, free - proportional) / joint.sigma2
-  return chiSquareSurvival(lr, dof) > DETECTION_ALPHA ? 'passed' : 'failed'
+  const se = Math.sqrt((ssr / dof) * e0[0])
+  if (!(se > 0)) return beta[0] === 0 ? 'passed' : 'failed'
+  const p = 2 * (1 - tCdf(Math.abs(beta[0]) / se, dof))
+  return p > DETECTION_ALPHA ? 'passed' : 'failed'
 }
 
 /** Grid indices whose frequency lies within MAX_CI95_REL of any of the centers. */

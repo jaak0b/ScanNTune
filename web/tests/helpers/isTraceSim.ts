@@ -8,7 +8,7 @@ import type { TracedLine } from '../../src/engine/is/lineTracer'
 // is the fitted coupon's own geometry; everything the analyzer is meant to recover or reject is
 // generated here from literal truth with formulas written independently of the production code:
 //
-// - Time base: samples sit on the tracer's lattice, half a scan pixel apart along the line
+// - Time base: samples sit on the tracer's lattice, one scan pixel apart along the line
 //   (600 dpi by default), from 1 mm past the corner to the end of the clean read. The physical
 //   time of a sample follows the commanded profile after the corner: the trapezoid (constant
 //   acceleration from the corner speed to the tier speed, then cruise) or Marlin's quintic Bezier
@@ -16,10 +16,10 @@ import type { TracedLine } from '../../src/engine/is/lineTracer'
 //   trapezoid, exactly as the tracer computes it.
 // - Ring: the free response to the corner's velocity step, amplitude proportional to the line's
 //   rung (the top rung carries ampMm), one phase for the whole axis (fixed by the corner).
-// - Noise models (per traced sample, in scan pixels): iid; half-pixel bilinear (iid pixel noise
-//   read at the tracer's half-pixel steps); Gaussian blur of 1 or 2 px along the line, then the
-//   half-pixel read; red AR(2) noise with its spectral peak inside the ring band; per-line noise
-//   levels.
+// - Noise models (per traced sample, in scan pixels): iid; bilinear (iid pixel noise read by the
+//   tracer's bilinear interpolation at the line's sub-pixel phase); Gaussian blur of 1 or 2 px
+//   along the line, then the bilinear read; red AR(2) noise with its spectral peak inside the ring
+//   band; per-line noise levels.
 // - Artifacts: a belt-tooth pattern fixed in arc length (GT2, 2 mm pitch) printed on both tiers;
 //   a forced tone fixed in hertz (fan imbalance) with a random phase per line and an amplitude
 //   that does not depend on the rung; a JPEG 8 px block pattern fixed in scan pixels; pixel
@@ -31,12 +31,12 @@ import type { TracedLine } from '../../src/engine/is/lineTracer'
 
 export const SIM_PX_PER_MM = 600 / 25.4
 
-/** One sample step along the line in scan pixels: the tracer's half-pixel step. */
-const ALONG_STEP_PX = 0.5
+/** One sample step along the line in scan pixels: the tracer's step, the native pixel pitch. */
+const ALONG_STEP_PX = 1
 /** First traced sample past the corner, mm (the tracer's trace start). */
 const TRACE_START_MM = 1
 
-export type SimNoiseModel = 'iid' | 'halfPixel' | 'blur1' | 'blur2' | 'redAr2'
+export type SimNoiseModel = 'iid' | 'bilinear' | 'blur1' | 'blur2' | 'redAr2'
 
 export interface SimNoise {
   model: SimNoiseModel
@@ -213,7 +213,7 @@ function lineNoisePx(
     }
     return out
   }
-  // Pixel-level noise read at the tracer's half-pixel steps, optionally blurred first.
+  // Pixel-level noise read at the tracer's steps by bilinear interpolation, optionally blurred first.
   const pixelsNeeded = Math.ceil(phasePx + count * ALONG_STEP_PX) + 2
   const blurSigma = noise.model === 'blur1' ? 1 : noise.model === 'blur2' ? 2 : 0
   const kernel = blurSigma > 0 ? gaussianKernel(blurSigma) : [1]

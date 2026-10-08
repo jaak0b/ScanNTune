@@ -78,8 +78,16 @@ export { timeAtDistance, TRACE_START_MM }
  *  half a bead, and stay under the line pitch minus the same, so a neighbouring trace never
  *  enters the window. */
 export const PROFILE_HALF_WINDOW_MM = 1.0
-/** Step along the line in image px (sub-pixel sampling like the EM profiles). */
-const ALONG_STEP_PX = 0.5
+/**
+ * Step along the line in image px: the scan's native pixel pitch. A sample between two pixel
+ * columns is their bilinear average, and under the scanner's optical blur that average is almost
+ * exactly the mean of the neighbouring samples, so half-pixel steps make the trace's noise
+ * covariance nearly singular and the generalized least squares whitening amplify the ring
+ * columns' sub-sample curvature into false detections (measured on simulated blur-1 px traces:
+ * 12% of noise-only axes). The ring band lies below 0.06 cycles per pixel, so the pixel pitch
+ * resolves it with nothing lost.
+ */
+const ALONG_STEP_PX = 1
 /** Step across the line in image px. */
 const ACROSS_STEP_PX = 0.25
 /** Weights below this fraction of the peak deviation are zeroed (thresholded centroid).

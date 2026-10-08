@@ -33,6 +33,8 @@ export interface LineBasis {
   drift: Float64Array[]
   /** Orthonormal basis of the unweighted drift columns (ordinary least squares stages). */
   driftQ: Float64Array[]
+  /** The data with the drift columns projected out (unweighted). */
+  yDriftFree: Float64Array
   /** First observed sample at or after the end of the acceleration ramp: from here the sample
    *  times lie on a uniform grid of step dt (constant cruise speed, constant lattice step). */
   cruiseFrom: number
@@ -47,6 +49,8 @@ export interface LineNoise {
   wY: Float64Array
   /** Orthonormal basis of the whitened drift columns. */
   wDriftQ: Float64Array[]
+  /** The whitened data with the whitened drift columns projected out. */
+  wYDriftFree: Float64Array
 }
 
 /** The whitened null design of a line at one tau. */
@@ -116,7 +120,29 @@ export function lineBasis(rec: LineRecord): LineBasis {
   if (cruiseFrom < m - 1) {
     dt = (rec.tS[m - 1] - rec.tS[cruiseFrom]) / (rec.lattice[m - 1] - rec.lattice[cruiseFrom])
   }
-  return { rec, m, drift, driftQ: orthonormalBasis(drift), cruiseFrom, dt }
+  const driftQ = orthonormalBasis(drift)
+  return { rec, m, drift, driftQ, yDriftFree: residualize(rec.y, driftQ), cruiseFrom, dt }
+}
+
+/** Residual sum of squares of the ordinary least squares null fit at tau. */
+export function olsNullSsr(line: LineBasis, tauS: number): number {
+  return ssrAfterLag(line.yDriftFree, orthonormalBasis(flowLagColumns(line.rec.tS, line.rec, tauS), line.driftQ))
+}
+
+/** Whitened residual sum of squares of the GLS null fit at tau. */
+export function glsNullSsr(line: LineBasis, noise: LineNoise, tauS: number): number {
+  const lag = flowLagColumns(line.rec.tS, line.rec, tauS).map((c) => noise.whitener.whiten(c))
+  return ssrAfterLag(noise.wYDriftFree, orthonormalBasis(lag, noise.wDriftQ))
+}
+
+/** ||r||^2 minus its projection on orthonormal columns that are orthogonal to the drift. */
+function ssrAfterLag(driftFree: Float64Array, lag: Float64Array[]): number {
+  let ssr = dot(driftFree, driftFree)
+  for (const q of lag) {
+    const c = dot(q, driftFree)
+    ssr -= c * c
+  }
+  return ssr
 }
 
 /** Ordinary least squares fit of the null model at tau: residual sum of squares and residuals. */
@@ -141,12 +167,15 @@ export function fitNoise(line: LineBasis, residual: Float64Array): LineNoise {
 /** The noise model of a line for a given AR fit: its whitener and the whitened fixed columns. */
 export function noiseModel(line: LineBasis, fit: ArFit): LineNoise {
   const whitener = arWhitener(fit, line.rec.lattice)
+  const wY = whitener.whiten(line.rec.y)
+  const wDriftQ = orthonormalBasis(line.drift.map((c) => whitener.whiten(c)))
   return {
     fit,
     whitener,
     sigma: Math.sqrt(fit.noiseVariance),
-    wY: whitener.whiten(line.rec.y),
-    wDriftQ: orthonormalBasis(line.drift.map((c) => whitener.whiten(c))),
+    wY,
+    wDriftQ,
+    wYDriftFree: residualize(wY, wDriftQ),
   }
 }
 

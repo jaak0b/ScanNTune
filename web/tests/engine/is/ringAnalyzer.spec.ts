@@ -14,7 +14,7 @@ import { simulateAxis } from '../../helpers/isTraceSim'
 import type { SimLine, TraceSimOptions } from '../../helpers/isTraceSim'
 
 // Unit-level validation of the ring detection and estimation on simulated traced lines
-// (tests/helpers/isTraceSim.ts: the fitted coupon's own lines on the tracer's 600 dpi half-pixel
+// (tests/helpers/isTraceSim.ts: the fitted coupon's own lines on the tracer's 600 dpi one-pixel
 // lattice, ring and artifacts generated from literal truth). The traces carry iid scan noise of
 // 0.1 px per sample unless a case says otherwise. Image-level recovery lives in
 // isAnalyzer.spec.ts; the statistical calibration of every decision in tests/stats.
@@ -178,7 +178,7 @@ describe('poolAxisFits estimation', () => {
 
   it('excludes a line whose own ring sits at the edge of the search range', () => {
     const lines = simulate(twoTier, { noise: IID, ring: { frequencyHz: 60, dampingRatio: 0.05, ampMm: 0.03 } })
-    addToLine(lines[3], 0.05, 152, 0.05)
+    addToLine(lines[3], 0.1, 152, 0.05)
     const p = pool(twoTier, lines)
     expect(p.lines[3].exclusion).toBe('out-of-band')
     expect(p.lines[3].usedInJointFit).toBe(false)
@@ -189,8 +189,9 @@ describe('poolAxisFits estimation', () => {
 
 describe('poolAxisFits checks', () => {
   it('refuses a belt-tooth pattern because its frequency changes with the line speed', () => {
-    // A 2 mm arc-length pattern reads 53 Hz at 106 mm/s and 75 Hz at 150 mm/s.
-    const p = pool(twoTier, simulate(twoTier, { noise: IID, artifacts: { beltTooth: { periodMm: 2, ampMm: 0.004 } } }))
+    // A 2 mm arc-length pattern, 0.002 mm, reads 53 Hz at 106 mm/s and 75 Hz at 150 mm/s.
+    const belt = { beltTooth: { periodMm: 2, ampMm: 0.002 } }
+    const p = pool(twoTier, simulate(twoTier, { noise: IID, artifacts: belt }, 3))
     expect(p.speedCheck.state).toBe('changed')
     expect(p.refusals).toEqual([
       'The frequency changed with the line speed, the way a print or scan pattern does. Ringing ' +
@@ -225,10 +226,10 @@ describe('poolAxisFits checks', () => {
   })
 
   it('refuses a one-tier detection that rests on a single line', () => {
-    // Scan noise on every line, plus a strong 120 Hz transient on one line only (a defect
-    // or a speck of dust): without that line nothing is detected.
+    // Scan noise on every line, plus a strong 120 Hz transient, 0.3 mm, on one line only (a
+    // defect or a speck of dust): without that line nothing is detected.
     const lines = simulate(oneTier, { noise: IID })
-    addToLine(lines[2], 0.1, 120, 0.15)
+    addToLine(lines[2], 0.3, 120, 0.15)
     const p = pool(oneTier, lines)
     expect(p.detectionPBound!).toBeLessThanOrEqual(0.001)
     expect(p.influenceCheck).toBe('failed')
