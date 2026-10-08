@@ -23,7 +23,7 @@ export const TWO_TIER = fitted({})
 export const SHORT_LINES = { ...TWO_TIER, measuredLineMm: 21 }
 /** A coupon whose every corner is the 20 mm/s bottom rung, the longest post-corner ramp chirp,
  *  with five lines per speed so the axis keeps the default's 10 lines. */
-export const BOTTOM_RUNG = fitted({ cornerSpeedMmS: 20, linesPerSpeed: 5 })
+export const BOTTOM_RUNG: IsTestSpec = { ...fitted({ cornerSpeedMmS: 20 }), linesPerSpeed: 5 }
 
 export type CaseOptions = Omit<TraceSimOptions, 'seed' | 'spec'>
 

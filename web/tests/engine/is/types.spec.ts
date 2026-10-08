@@ -22,7 +22,6 @@ const fitted = (r: IsTestRequest, p: PrinterProfile = profile) => fitSpecToPrint
 describe('defaultIsTestRequest', () => {
   it('uses the documented defaults', () => {
     expect(request.speedsMmS).toEqual([106, 150])
-    expect(request.linesPerSpeed).toBeNull()
     // Five wavelengths of the 25 Hz lowest resonance of interest at the 150 mm/s tier:
     // 5 * 150 / 25 = 30 mm.
     expect(request.measuredLineMm).toBe(30)
@@ -104,12 +103,6 @@ describe('validateIsSpec', () => {
       'The corner speed must be at least 20 mm/s',
     )
   })
-  it('throws on lines per speed outside 3 to 15, and accepts the derived (null) count', () => {
-    expect(() => validateIsSpec({ ...request, linesPerSpeed: 2 })).toThrow(/Lines per speed/)
-    expect(() => validateIsSpec({ ...request, linesPerSpeed: 16 })).toThrow(/Lines per speed/)
-    expect(() => validateIsSpec({ ...request, linesPerSpeed: 15 })).not.toThrow()
-    expect(() => validateIsSpec({ ...request, linesPerSpeed: null })).not.toThrow()
-  })
   it('throws when the clean read length is shorter than the 20 mm floor', () => {
     expect(() => validateIsSpec({ ...request, measuredLineMm: 19 })).toThrow(/at least 20 mm/)
     expect(() => validateIsSpec({ ...request, measuredLineMm: 20 })).not.toThrow()
@@ -163,13 +156,10 @@ describe('derived lines per speed (bead followability on the slower tier)', () =
     const slow = { ...profile, printAccelMmS2: 1000 }
     expect(fitted(defaultIsTestRequest(slow), slow).linesPerSpeed).toBe(7)
   })
-  it('keeps an explicit line count instead of deriving one', () => {
-    expect(fitted({ ...request, linesPerSpeed: 8 }).linesPerSpeed).toBe(8)
-  })
   it('warns when fewer than three rungs of the slower tier stay followable', () => {
     // Four rungs (20, 34.2, 58.5, 100 mm/s) leave only two followable beads on the 106 mm/s
     // lines.
-    const four = fitted({ ...request, linesPerSpeed: 4 })
+    const four = { ...fitted(request), linesPerSpeed: 4 }
     expect(bandTopWarning(four, profile)).toBe(
       'Raise the line speed or the print acceleration to read a resonance near 150 Hz. Only ' +
         '2 of the 106 mm/s lines leave a bead that can follow ringing that fast, and the ' +
@@ -366,17 +356,6 @@ describe('fitSpecToPrinter bed fit', () => {
     const g = isCouponGeometry(spec)
     expect(g.couponWidthMm).toBeLessThanOrEqual(80)
     expect(g.couponHeightMm).toBeLessThanOrEqual(80)
-  })
-  it('keeps an explicit line count through the length step and reports its reduction', () => {
-    const { spec, notes } = fitSpecToPrinter({ ...request, linesPerSpeed: 8 }, bed(120))
-    // Eight lines per tier need 134.806 mm even at 20 mm and seven need 124.806 mm; six lines
-    // (field 27.5 mm, packed ramp 29.306 mm) fit at L = 120 - 94.806 = 25.194, so 25 mm.
-    expect(spec.linesPerSpeed).toBe(6)
-    expect(spec.measuredLineMm).toBe(25)
-    expect(notes).toEqual([
-      'The lines per speed were reduced from 8 to 6 so the coupon fits the configured bed.',
-      'The measured lines were shortened from 30 mm to 25 mm so the coupon fits the configured bed.',
-    ])
   })
   it('throws when the bed is genuinely too small even for one tier of three short lines', () => {
     expect(() => fitSpecToPrinter(request, bed(60))).toThrow(/does not fit/)

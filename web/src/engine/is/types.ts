@@ -89,15 +89,12 @@ export interface IsTestSpec {
 }
 
 /**
- * What the page asks for: a spec whose line count may be left to the derivation. Null lines
- * per speed is resolved by fitSpecToPrinter (ladderLinesPerSpeed) after the firmware fit,
- * so the generator and the analysis both read one fitted IsTestSpec; the ramp timing comes
- * from the firmware. The page always leaves the count to the derivation; a fixed count pins
- * the ladder length for an engine caller that needs one specific coupon.
+ * What the page asks for: a spec without its line count and ramp timing. The lines per speed
+ * are always derived by fitSpecToPrinter (ladderLinesPerSpeed) after the firmware fit, and the
+ * ramp timing comes from the firmware, so the generator and the analysis both read one fitted
+ * IsTestSpec.
  */
-export type IsTestRequest = Omit<IsTestSpec, 'linesPerSpeed' | 'exactRampTiming'> & {
-  linesPerSpeed: number | null
-}
+export type IsTestRequest = Omit<IsTestSpec, 'linesPerSpeed' | 'exactRampTiming'>
 
 /** A request after the firmware fit: its ramp timing is known, its line count not yet. */
 type FirmwareFittedRequest = IsTestRequest & Pick<IsTestSpec, 'exactRampTiming'>
@@ -189,8 +186,6 @@ export function defaultIsTestRequest(profile: PrinterProfile): IsTestRequest {
     // Two tiers: a real resonance keeps its frequency at both speeds, while print and scan
     // patterns change with the speed (see TIER_SPEED_RATIO).
     speedsMmS: speedTiersFor(DEFAULT_LINE_SPEED_MM_S),
-    // Derived from the bead followability of the slower tier (ladderLinesPerSpeed).
-    linesPerSpeed: null,
     // Five wavelengths of the lowest resonance of interest at the tier speed:
     // 5 * tierSpeed / 25 Hz, so 30 mm at the 150 mm/s default tier.
     measuredLineMm: 30,
@@ -218,14 +213,6 @@ export function validateIsSpec(spec: IsTestRequest): void {
     throw new Error(`Between ${MIN_SPEED_TIERS} and ${MAX_SPEED_TIERS} speed tiers are required`)
   }
   if (spec.speedsMmS.some((v) => v <= 0)) throw new Error('Every speed tier must be positive')
-  if (
-    spec.linesPerSpeed !== null &&
-    (spec.linesPerSpeed < MIN_LINES_PER_SPEED || spec.linesPerSpeed > MAX_LINES_PER_SPEED)
-  ) {
-    throw new Error(
-      `Lines per speed must be between ${MIN_LINES_PER_SPEED} and ${MAX_LINES_PER_SPEED}`,
-    )
-  }
   if (spec.measuredLineMm < MIN_MEASURED_LINE_MM) {
     throw new Error(`The measured line length must be at least ${MIN_MEASURED_LINE_MM} mm`)
   }
@@ -500,14 +487,14 @@ function fitSpecToBed(
 ): { spec: IsTestSpec; notes: string[] } {
   const attempt = (speedsMmS: number[]): { spec: IsTestSpec; notes: string[] } | null => {
     const base = { ...request, speedsMmS }
-    const requestedLines = request.linesPerSpeed ?? ladderLinesPerSpeed(base, profile)
-    for (let n = requestedLines; n >= MIN_LINES_PER_SPEED; n--) {
+    const derivedLines = ladderLinesPerSpeed(base, profile)
+    for (let n = derivedLines; n >= MIN_LINES_PER_SPEED; n--) {
       const candidate: IsTestSpec = { ...base, linesPerSpeed: n }
       const read = longestFittingReadMm(candidate, profile)
       if (read === null) continue
       const notes: string[] = []
-      if (n < requestedLines) {
-        notes.push(`The lines per speed were reduced from ${requestedLines} to ${n} ${BED_FIT_REASON}`)
+      if (n < derivedLines) {
+        notes.push(`The lines per speed were reduced from ${derivedLines} to ${n} ${BED_FIT_REASON}`)
       }
       if (read < request.measuredLineMm) {
         notes.push(

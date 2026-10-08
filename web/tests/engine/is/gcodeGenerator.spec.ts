@@ -834,9 +834,6 @@ describe('bed fitting', () => {
 
 describe('validation and reporting', () => {
   it('propagates the spec validation throws', () => {
-    expect(() =>
-      generateIsGcodeWithReport(profile, filament, { ...spec, linesPerSpeed: 1 }),
-    ).toThrow(/lines per speed/i)
     expect(() => generateIsGcodeWithReport(profile, filament, { ...spec, axes: [] })).toThrow(
       /axis/i,
     )
