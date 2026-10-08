@@ -8,6 +8,7 @@ import type {
   IsLineRefusalCategory,
   IsResult,
 } from '../engine/is/resultTypes'
+import { isCheckRows } from './isCheckRows'
 import { F_MIN_HZ, F_MAX_HZ } from '../engine/is/types'
 import {
   formatKlipperShaper,
@@ -59,7 +60,7 @@ const CATEGORY_LABELS: Record<NonNullable<IsLineRefusalCategory>, string> = {
 const EXCLUSION_LABELS: Record<IsLineExclusion, string> = {
   'no-free-response': 'No free ringdown after the corner',
   'out-of-band': `Fitted frequency at the edge of the ${F_MIN_HZ} to ${F_MAX_HZ} Hz search range`,
-  'zeta-at-bound': 'Fitted damping at the edge of the physical range',
+  'zeta-at-bound': 'Fitted damping ratio at the edge of the physical range',
   'frequency-outlier': 'Fitted frequency is an outlier among the lines',
   'not-traced': 'Line not found in the scan',
 }
@@ -169,6 +170,7 @@ const snippet = computed(() => {
               :testid="`is-lines-${axis.axis}`"
             />
           </div>
+          <p class="tip mt-0 mb-2">The interval covers the statistical error of the fit only.</p>
           <v-table density="compact" class="shaper-table" :data-testid="`is-shapers-${axis.axis}`">
             <thead>
               <tr>
@@ -218,12 +220,28 @@ const snippet = computed(() => {
           v-if="axis.scanIndex !== null && axis.lines.length > 0"
           density="compact"
           class="line-table mt-2"
+          :data-testid="`is-checks-${axis.axis}`"
+        >
+          <tbody>
+            <tr v-for="row in isCheckRows(axis)" :key="row.label">
+              <td>{{ row.label }}</td>
+              <td>{{ row.value }}</td>
+            </tr>
+          </tbody>
+        </v-table>
+
+        <v-table
+          v-if="axis.scanIndex !== null && axis.lines.length > 0"
+          density="compact"
+          class="line-table mt-2"
           :data-testid="`is-line-detail-${axis.axis}`"
         >
           <thead>
             <tr>
               <th>Line</th>
+              <th>Line speed</th>
               <th>Corner speed</th>
+              <th>Ringing detected</th>
               <th>In joint fit</th>
               <th>Exclusion</th>
               <th>Frequency</th>
@@ -233,7 +251,9 @@ const snippet = computed(() => {
           <tbody>
             <tr v-for="line in axis.lines" :key="line.lineIndex">
               <td>{{ line.lineIndex + 1 }}</td>
+              <td>{{ line.speedMmS }} mm/s</td>
               <td>{{ Math.round(line.cornerSpeedMmS) }} mm/s</td>
+              <td>{{ line.traced ? (line.detected ? 'yes' : 'no') : '' }}</td>
               <td>{{ line.usedInJointFit ? 'yes' : 'no' }}</td>
               <td>{{ lineExclusionText(line) }}</td>
               <td>{{ lineFrequencyText(line) }}</td>
