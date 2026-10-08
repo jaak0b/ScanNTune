@@ -1,11 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import { defaultPrinterProfile } from '../../../src/engine/gcode/profileTypes'
-import { defaultIsTestSpec, fitSpecToPrinter, type IsTestSpec } from '../../../src/engine/is/types'
+import {
+  defaultIsTestRequest,
+  fitSpecToPrinter,
+  type IsTestSpec,
+} from '../../../src/engine/is/types'
 import {
   accelRampMm,
   ladderCornerSpeeds,
   MIN_CORNER_SPEED_MM_S,
-  BLOCK_GAP_MM,
   FIDUCIAL_INSET_MM,
   FIDUCIAL_SIZE_MM,
   fieldExtentMm,
@@ -22,8 +25,13 @@ import {
   TAIL_MARGIN_MM,
 } from '../../../src/engine/is/couponGeometry'
 
-const spec = defaultIsTestSpec(defaultPrinterProfile())
+const profile = defaultPrinterProfile()
+// The fitted default: tiers 106 / 150 mm/s, five lines per speed, 100 mm/s corner speed,
+// 3000 mm/s^2, 30 mm read, 8 mm run-up, 2.5 mm pitch.
+const spec = fitSpecToPrinter(defaultIsTestRequest(profile), profile).spec
 const g = isCouponGeometry(spec)
+const yGroup = g.groups.find((grp) => grp.axis === 'y')!
+const xGroup = g.groups.find((grp) => grp.axis === 'x')!
 
 const segLen = (s: { x0: number; y0: number; x1: number; y1: number }) =>
   Math.hypot(s.x1 - s.x0, s.y1 - s.y0)
@@ -42,32 +50,42 @@ describe('isCouponGeometry fiducials', () => {
 })
 
 describe('isCouponGeometry groups', () => {
-  it('builds both groups in print order y then x, one for a single axis', () => {
+  it('builds the Y group then the X group, one group for a single axis', () => {
     expect(g.groups.map((grp) => grp.axis)).toEqual(['y', 'x'])
     const single = isCouponGeometry({ ...spec, axes: ['y'] })
     expect(single.groups.map((grp) => grp.axis)).toEqual(['y'])
     const singleX = isCouponGeometry({ ...spec, axes: ['x'] })
     expect(singleX.groups.map((grp) => grp.axis)).toEqual(['x'])
   })
-  it('emits linesPerSpeed lines per tier, tagged with the tier speed', () => {
+  it('interleaves the two tiers rung by rung, alternating which tier leads (ABBA)', () => {
     for (const group of g.groups) {
-      expect(group.lines).toHaveLength(spec.linesPerSpeed * spec.speedsMmS.length)
-      for (let i = 0; i < group.lines.length; i++) {
-        expect(group.lines[i].speedMmS).toBe(
-          spec.speedsMmS[Math.floor(i / spec.linesPerSpeed)],
-        )
-      }
+      expect(group.lines.map((l) => l.speedMmS)).toEqual([
+        106, 150, 150, 106, 106, 150, 150, 106, 106, 150,
+      ])
+      expect(group.lines.map((l) => l.rungIndex)).toEqual([0, 0, 1, 1, 2, 2, 3, 3, 4, 4])
     }
   })
-  it('spaces lines at the pitch inside a tier and adds the gap between tiers', () => {
+  it('spaces every line one pitch from the next, with no gap between the tiers', () => {
     for (const group of g.groups) {
       const pos = perpendicularPositions(group)
       for (let i = 1; i < pos.length; i++) {
-        const crossesBlock = i % spec.linesPerSpeed === 0
-        const expected = crossesBlock ? spec.linePitchMm + BLOCK_GAP_MM : spec.linePitchMm
-        expect(Math.abs(pos[i] - pos[i - 1])).toBeCloseTo(expected, 9)
+        expect(Math.abs(pos[i] - pos[i - 1])).toBeCloseTo(2.5, 9)
       }
     }
+    expect(fieldExtentMm(spec)).toBeCloseTo(22.5, 9)
+  })
+  it('balances the tiers along the ringing axis: equal mean positions up to a pitch over the line count', () => {
+    const meanOffset = (lines: IsLine[], v: number) => {
+      const own = lines.filter((l) => l.speedMmS === v)
+      return own.reduce((s, l) => s + l.measured.y0, 0) / own.length
+    }
+    // Five lines: slow slots 0, 3, 4, 7, 8 and fast slots 1, 2, 5, 6, 9 average 4.4 and 4.6
+    // pitches, half a millimetre apart (the odd total of 45 slot pitches cannot split evenly).
+    expect(meanOffset(yGroup.lines, 150) - meanOffset(yGroup.lines, 106)).toBeCloseTo(0.5, 9)
+    // Four lines: slots 0, 3, 4, 7 and 1, 2, 5, 6 both average 3.5 pitches.
+    const four = isCouponGeometry({ ...spec, linesPerSpeed: 4 })
+    const fourY = four.groups.find((grp) => grp.axis === 'y')!
+    expect(meanOffset(fourY.lines, 150) - meanOffset(fourY.lines, 106)).toBeCloseTo(0, 9)
   })
 })
 
@@ -111,7 +129,7 @@ describe('isCouponGeometry line paths', () => {
         expect(prime.x1).toBeCloseTo(runUp.x0, 9)
         expect(prime.y1).toBeCloseTo(runUp.y0, 9)
         // The run-up ends exactly on the ringing corner: there is no slow approach
-        // stretch, the cruise runs at the square corner velocity straight into the bend.
+        // stretch, the cruise runs at the corner speed straight into the bend.
         expect(runUp.x1).toBeCloseTo(measured.x0, 9)
         expect(runUp.y1).toBeCloseTo(measured.y0, 9)
         expect(measured.x1).toBeCloseTo(tail.x0, 9)
@@ -137,11 +155,9 @@ describe('isCouponGeometry line paths', () => {
     }
   })
   it('welds every measured segment one weld length into the opposite band', () => {
-    const yGroup = g.groups.find((grp) => grp.axis === 'y')!
     for (const { measured } of yGroup.lines) {
       expect(measured.x1).toBeCloseTo(g.windowBox.x1 + spec.weldMm, 9)
     }
-    const xGroup = g.groups.find((grp) => grp.axis === 'x')!
     for (const { measured } of xGroup.lines) {
       expect(measured.y1).toBeCloseTo(g.windowBox.y0 - spec.weldMm, 9)
     }
@@ -166,10 +182,8 @@ describe('isCouponGeometry line paths', () => {
     }
   })
   it('measures y lines along +X and x lines along -Y, legs perpendicular to them', () => {
-    const yGroup = g.groups.find((grp) => grp.axis === 'y')!
     expect(yGroup.lines[0].measured.x1).toBeGreaterThan(yGroup.lines[0].measured.x0)
     expect(yGroup.lines[0].runUp.y1).toBeGreaterThan(yGroup.lines[0].runUp.y0)
-    const xGroup = g.groups.find((grp) => grp.axis === 'x')!
     expect(xGroup.lines[0].measured.y1).toBeLessThan(xGroup.lines[0].measured.y0)
     expect(xGroup.lines[0].runUp.x1).toBeLessThan(xGroup.lines[0].runUp.x0)
   })
@@ -191,10 +205,42 @@ describe('isCouponGeometry line paths', () => {
   })
 })
 
-describe('isCouponGeometry crossings and packing', () => {
-  const yGroup = g.groups.find((grp) => grp.axis === 'y')!
-  const xGroup = g.groups.find((grp) => grp.axis === 'x')!
+describe('isCouponGeometry print order', () => {
+  const lineOf = (r: { groupIndex: number; lineIndex: number }) =>
+    g.groups[r.groupIndex].lines[r.lineIndex]
+  it('prints every line exactly once per layer', () => {
+    expect(g.printOrder).toHaveLength(20)
+    const keys = new Set(g.printOrder.map((r) => `${r.groupIndex}:${r.lineIndex}`))
+    expect(keys.size).toBe(20)
+  })
+  it('prints the corners in non-decreasing corner speed, so the fastest corners come last', () => {
+    const corners = g.printOrder.map((r) => lineOf(r).cornerSpeedMmS)
+    for (let i = 1; i < corners.length; i++) {
+      expect(corners[i]).toBeGreaterThanOrEqual(corners[i - 1])
+    }
+    // The four top-rung (100 mm/s) corners are the last four lines of the layer.
+    expect(corners.slice(-4).every((c) => Math.abs(c - 100) < 1e-9)).toBe(true)
+    expect(corners.slice(0, -4).every((c) => c < 100)).toBe(true)
+  })
+  it('prints equal corners Y slow, Y fast, X slow, X fast', () => {
+    const firstRung = g.printOrder.slice(0, 4).map((r) => {
+      const line = lineOf(r)
+      return `${g.groups[r.groupIndex].axis}${line.speedMmS}@${line.cornerSpeedMmS}`
+    })
+    expect(firstRung).toEqual(['y106@20', 'y150@20', 'x106@20', 'x150@20'])
+  })
+  it('orders by corner speed even when the slower tier tops out below the corner speed', () => {
+    // A 120 mm/s corner speed: the 106 mm/s tier's ladder tops out at 106, the 150 mm/s tier's
+    // at 120, so the rungs of the two tiers differ and the order follows the speeds alone.
+    const fast = isCouponGeometry({ ...spec, cornerSpeedMmS: 120 })
+    const corners = fast.printOrder.map((r) => fast.groups[r.groupIndex].lines[r.lineIndex].cornerSpeedMmS)
+    for (let i = 1; i < corners.length; i++) {
+      expect(corners[i]).toBeGreaterThanOrEqual(corners[i - 1])
+    }
+  })
+})
 
+describe('isCouponGeometry crossings and packing', () => {
   it('records the protected span (per-line ramp plus clean read length) per line', () => {
     for (const group of g.groups) {
       for (const line of group.lines) {
@@ -225,35 +271,35 @@ describe('isCouponGeometry crossings and packing', () => {
       }
     }
   })
-  it('packs per pair: the slowest lines sit nearest the crossing zone in both groups', () => {
-    // A two-tier variant: the single-tier default cannot show the tier ordering.
-    const multi = isCouponGeometry({ ...spec, speedsMmS: [150, 300] })
-    const yG = multi.groups.find((grp) => grp.axis === 'y')!
-    const xG = multi.groups.find((grp) => grp.axis === 'x')!
-    // Y group: the slowest tier's corners take the largest x (crossed earliest).
-    const yFirst = yG.lines[0]
-    const yLast = yG.lines[yG.lines.length - 1]
-    expect(yFirst.speedMmS).toBeLessThan(yLast.speedMmS)
-    expect(yFirst.measured.x0).toBeGreaterThan(yLast.measured.x0)
-    // X group: the fastest tier's corners sit highest (deepest protected span above the
-    // crossing zone), the slowest lowest.
-    const xFirst = xG.lines[0]
-    const xLast = xG.lines[xG.lines.length - 1]
-    expect(xFirst.speedMmS).toBeLessThan(xLast.speedMmS)
-    expect(xFirst.measured.y0).toBeLessThan(xLast.measured.y0)
+  it('places the slowest tier bottom rung at offset zero, nearest the crossing zone in both groups', () => {
+    // Offset zero: the Y line with the largest corner x and the X line with the lowest corner.
+    expect(yGroup.lines[0].speedMmS).toBe(106)
+    expect(yGroup.lines[0].cornerSpeedMmS).toBe(20)
+    expect(Math.max(...yGroup.lines.map((l) => l.measured.x0))).toBe(yGroup.lines[0].measured.x0)
+    expect(xGroup.lines[0].speedMmS).toBe(106)
+    expect(Math.min(...xGroup.lines.map((l) => l.measured.y0))).toBe(xGroup.lines[0].measured.y0)
   })
-  it('lists the crossing distances on the second-printed group only, sorted ascending', () => {
-    for (const yl of yGroup.lines) expect(yl.crossingsMm).toEqual([])
-    for (const xl of xGroup.lines) {
-      expect(xl.crossingsMm).toHaveLength(yGroup.lines.length)
-      const expected = yGroup.lines
-        .map((yl) => xl.measured.y0 - yl.measured.y0)
-        .sort((a, b) => a - b)
-      xl.crossingsMm.forEach((c, i) => expect(c).toBeCloseTo(expected[i], 9))
-      for (const c of xl.crossingsMm) {
-        expect(c).toBeGreaterThanOrEqual(xl.protectedMm + INNER_MARGIN_MM - 1e-9)
+  it('records on each line its crossings with the other group printed earlier, all beyond the protected span', () => {
+    let total = 0
+    const printed: { groupIndex: number; lineIndex: number }[] = []
+    for (const ref of g.printOrder) {
+      const group = g.groups[ref.groupIndex]
+      const line = group.lines[ref.lineIndex]
+      const earlierOther = printed.filter((r) => r.groupIndex !== ref.groupIndex)
+      expect(line.crossingsMm).toHaveLength(earlierOther.length)
+      const sorted = [...line.crossingsMm].sort((a, b) => a - b)
+      expect(line.crossingsMm).toEqual(sorted)
+      for (const c of line.crossingsMm) {
+        expect(c).toBeGreaterThanOrEqual(line.protectedMm + INNER_MARGIN_MM - 1e-9)
       }
+      total += line.crossingsMm.length
+      printed.push(ref)
     }
+    // Every X line crosses every Y line once, recorded on whichever prints later: 10 x 10.
+    expect(total).toBe(100)
+    // Both groups now carry crossings: the rung-major order interleaves them.
+    expect(yGroup.lines.some((l) => l.crossingsMm.length > 0)).toBe(true)
+    expect(xGroup.lines.some((l) => l.crossingsMm.length > 0)).toBe(true)
   })
   it('never crosses a leg with a same-group measured segment', () => {
     for (const group of g.groups) {
@@ -285,16 +331,16 @@ describe('isCouponGeometry footprint', () => {
     const interior = 2 * INNER_MARGIN_MM + packed + F + spec.runUpMm
     expect(g.couponWidthMm).toBeCloseTo(interior + 2 * g.frameBandMm, 9)
     expect(g.couponHeightMm).toBeCloseTo(g.couponWidthMm, 9)
-    // Documented derived size of the expert defaults (single 150 mm/s tier, 8 lines,
-    // 30 mm clean read, 8 mm run-up, the default profile's 3000 mm/s^2, 100 mm/s top
-    // corner speed): a regression inflating the layout is caught here. The field extent
-    // enters the two-axis footprint twice (once per group), so each extra line costs two
-    // pitches (5 mm); the 3.68333 mm fraction is the binding corner-to-tier ramp of the
-    // ladder's 20 mm/s bottom rung, (150^2 - 20^2) / (2 * 3000).
-    expect(g.couponWidthMm).toBeCloseTo(106.683333, 6)
-    // The 15-line maximum adds seven more line pairs on the same formula.
+    // Documented derived size of the defaults (tiers 106 / 150 mm/s, five lines per speed,
+    // 30 mm clean read, 8 mm run-up, 3000 mm/s^2, 100 mm/s corner speed): a regression
+    // inflating the layout is caught here. Field extent 9 pitches = 22.5 mm; the binding
+    // line is the slow tier's 20 mm/s rung at offset zero, 22.5 + (106^2 - 20^2) / 6000 =
+    // 24.306 mm; the interior is 3 + 24.306 + 30 + 3 + 22.5 + 8 = 90.806 mm plus two 12 mm
+    // bands.
+    expect(g.couponWidthMm).toBeCloseTo(114.806, 6)
+    // The 15-line maximum: field 29 pitches = 72.5 mm, binding 72.5 + 1.806 = 74.306 mm.
     const max = isCouponGeometry({ ...spec, linesPerSpeed: 15 })
-    expect(max.couponWidthMm).toBeCloseTo(141.683333, 6)
+    expect(max.couponWidthMm).toBeCloseTo(214.806, 6)
   })
   it('shrinks when any driving parameter shrinks (the formula carries no padding)', () => {
     const size = (s: IsTestSpec) => isCouponGeometry(s).couponWidthMm
@@ -302,7 +348,7 @@ describe('isCouponGeometry footprint', () => {
       size(spec),
     )
     expect(size({ ...spec, linesPerSpeed: spec.linesPerSpeed + 1 })).toBeGreaterThan(size(spec))
-    expect(size({ ...spec, speedsMmS: [150, 200, 300] })).toBeGreaterThan(size(spec))
+    expect(size(spec)).toBeGreaterThan(size({ ...spec, speedsMmS: [150] }))
     expect(size({ ...spec, runUpMm: spec.runUpMm + 4 })).toBeGreaterThan(size(spec))
     expect(size({ ...spec, linePitchMm: spec.linePitchMm + 0.5 })).toBeGreaterThan(size(spec))
   })
@@ -326,8 +372,8 @@ describe('isCouponGeometry footprint', () => {
 })
 
 describe('isCouponGeometry at the maximum line count', () => {
-  // The default spec (8 lines) drives every invariant above; the 15-line maximum widens
-  // the field the most, so the containment and crossing legality are re-proven here.
+  // The default spec drives every invariant above; the 15-line maximum widens the field the
+  // most, so the containment and crossing legality are re-proven here.
   const maxSpec: IsTestSpec = { ...spec, linesPerSpeed: 15 }
   const gm = isCouponGeometry(maxSpec)
 
@@ -348,10 +394,10 @@ describe('isCouponGeometry at the maximum line count', () => {
     }
   })
   it('keeps every X/Y crossing point outside both lines protected spans (per pair)', () => {
-    const xGroup = gm.groups.find((grp) => grp.axis === 'x')!
-    const yGroup = gm.groups.find((grp) => grp.axis === 'y')!
-    for (const xl of xGroup.lines) {
-      for (const yl of yGroup.lines) {
+    const xG = gm.groups.find((grp) => grp.axis === 'x')!
+    const yG = gm.groups.find((grp) => grp.axis === 'y')!
+    for (const xl of xG.lines) {
+      for (const yl of yG.lines) {
         const crossX = xl.measured.x0
         const crossY = yl.measured.y0
         expect(crossY).toBeLessThan(xl.measured.y0)
@@ -386,40 +432,39 @@ describe('isCouponGeometry at the maximum line count', () => {
 
 describe('corner-speed excitation ladder', () => {
   it('spaces the rungs geometrically from the 20 mm/s bottom rung to the top corner speed', () => {
-    // Hand-derived: 20 * 5^(j/7) for j = 0..7 at the 100 mm/s default top rung.
-    const expected = [20, 25.16998, 31.67639, 39.86471, 50.16969, 63.1385, 79.45974, 100]
+    // Hand-derived: 20 * 5^(j/4) for j = 0..4 at the 100 mm/s default top rung.
+    const expected = [20, 29.90698, 44.72136, 66.87403, 100]
     const rungs = ladderCornerSpeeds(spec)
     expect(rungs).toHaveLength(spec.linesPerSpeed)
     rungs.forEach((r, j) => expect(r).toBeCloseTo(expected[j], 4))
     expect(rungs[0]).toBe(MIN_CORNER_SPEED_MM_S)
   })
-  it('tags every line with its rung, repeating the ladder per tier', () => {
-    const multi = isCouponGeometry({ ...spec, speedsMmS: [150, 300] })
-    const rungs = ladderCornerSpeeds({ ...spec, speedsMmS: [150, 300] })
-    for (const group of multi.groups) {
-      group.lines.forEach((line, i) => {
-        expect(line.cornerSpeedMmS).toBeCloseTo(rungs[i % spec.linesPerSpeed], 9)
-      })
-    }
+  it('tops a slower tier ladder out at its own speed when the corner speed is faster', () => {
+    // 120 mm/s corner speed: 106 mm/s tier rungs 20 * 5.3^(j/4), the 150 mm/s tier
+    // 20 * 6^(j/4) (hand-derived).
+    const fast = { ...spec, cornerSpeedMmS: 120 }
+    const slowRungs = ladderCornerSpeeds(fast, 106)
+    const fastRungs = ladderCornerSpeeds(fast, 150)
+    ;[20, 30.34583, 46.04346, 69.86134, 106].forEach((r, j) => expect(slowRungs[j]).toBeCloseTo(r, 4))
+    ;[20, 31.30169, 48.98979, 76.67317, 120].forEach((r, j) => expect(fastRungs[j]).toBeCloseTo(r, 4))
   })
-  it('gives every line its own ramp from its rung, longest on the bottom rung', () => {
+  it('tags every line with its own tier rung', () => {
+    const fast = isCouponGeometry({ ...spec, cornerSpeedMmS: 120 })
+    const yG = fast.groups.find((grp) => grp.axis === 'y')!
+    expect(yG.lines.map((l) => Number(l.cornerSpeedMmS.toFixed(3)))).toEqual([
+      20, 20, 31.302, 30.346, 46.043, 48.99, 76.673, 69.861, 106, 120,
+    ])
+  })
+  it('gives every line its own ramp from its rung', () => {
     for (const group of g.groups) {
       const first = group.lines[0]
       const last = group.lines[group.lines.length - 1]
-      // Bottom rung (20 mm/s): ramp (150^2 - 20^2) / 6000 = 3.683333 mm (hand-derived);
-      // top rung (100 mm/s): (150^2 - 100^2) / 6000 = 2.083333 mm; plus the 30 mm read.
-      expect(first.protectedMm).toBeCloseTo(33.683333, 6)
+      // First line: the 106 mm/s tier's 20 mm/s rung, ramp (106^2 - 20^2) / 6000 = 1.806 mm;
+      // last line: the 150 mm/s tier's 100 mm/s rung, (150^2 - 100^2) / 6000 = 2.083333 mm;
+      // plus the 30 mm read (hand-derived).
+      expect(first.protectedMm).toBeCloseTo(31.806, 6)
       expect(last.protectedMm).toBeCloseTo(32.083333, 6)
     }
-  })
-  it('shrinks a ladder coupon onto a small bed through the measured-line reduction', () => {
-    const profile = { ...defaultPrinterProfile(), bedWidthMm: 100, bedDepthMm: 100 }
-    const { spec: fitted, notes } = fitSpecToPrinter(spec, profile)
-    expect(notes.some((n) => n.includes('shortened'))).toBe(true)
-    expect(fitted.measuredLineMm).toBeLessThan(spec.measuredLineMm)
-    const gf = isCouponGeometry(fitted)
-    expect(gf.couponWidthMm).toBeLessThanOrEqual(100)
-    expect(gf.couponHeightMm).toBeLessThanOrEqual(100)
   })
 })
 
@@ -430,12 +475,8 @@ describe('isCouponGeometry frame band sizing', () => {
   it('widens the band for a fast tier so the full tail plus clearance fits', () => {
     // A 300 mm/s tier at 3000 mm/s^2 needs a 17 mm tail depth (1 mm weld + 15 mm stopping
     // distance + 1 mm margin) plus 1 mm edge clearance.
-    const fast: IsTestSpec = { ...spec, speedsMmS: [150, 200, 300] }
-    expect(isCouponGeometry(fast).frameBandMm).toBeCloseTo(
-      spec.weldMm + accelRampMm(300, spec.accelMmS2) + TAIL_MARGIN_MM + TAIL_EDGE_CLEARANCE_MM,
-      9,
-    )
-    expect(isCouponGeometry(fast).frameBandMm).toBeGreaterThan(MIN_FRAME_BAND_MM)
+    const fast: IsTestSpec = { ...spec, speedsMmS: [150, 300] }
+    expect(isCouponGeometry(fast).frameBandMm).toBeCloseTo(18, 9)
   })
   it('moves the window and fiducials with the band', () => {
     expect(g.windowBox.x0).toBeCloseTo(g.frameBandMm, 9)

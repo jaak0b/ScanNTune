@@ -5,10 +5,9 @@ import { renderIsScan } from '../../helpers/isRender'
 import type { IsRenderOptions } from '../../helpers/isRender'
 import { rgbaToBgrMat } from '../../../src/engine/imageData'
 import { analyzeIsCoupon, ladderAdvice } from '../../../src/engine/is/isAnalyzer'
-import { ladderCornerSpeeds } from '../../../src/engine/is/couponGeometry'
 import type { IsLineOutcome } from '../../../src/engine/is/resultTypes'
 import type { IsResult, IsAxisResult } from '../../../src/engine/is/resultTypes'
-import { defaultIsTestSpec } from '../../../src/engine/is/types'
+import { defaultIsTestRequest, fitSpecToPrinter } from '../../../src/engine/is/types'
 import type { IsTestSpec } from '../../../src/engine/is/types'
 import { defaultPrinterProfile } from '../../../src/engine/gcode/profileTypes'
 import type { ScaleReference } from '../../../src/engine/scannerCalibration'
@@ -21,7 +20,9 @@ import type { ScaleReference } from '../../../src/engine/scannerCalibration'
 // The analyzer refuses scans below the measurement resolution floor, so the synthetic scans are
 // rendered at the 600 dpi class resolution a real scan is expected to have.
 const PX_PER_MM = 24
-const baseSpec = defaultIsTestSpec(defaultPrinterProfile())
+const profile = defaultPrinterProfile()
+// The fitted default coupon: tiers 106 / 150 mm/s interleaved, five lines per speed.
+const baseSpec = fitSpecToPrinter(defaultIsTestRequest(profile), profile).spec
 // A single-axis (Y only) spec keeps the coupon, and thus the render time, small for the
 // refusal-gate tests; the flagship recovery test uses the full two-axis default.
 const ySpec: IsTestSpec = { ...baseSpec, axes: ['y'] }
@@ -148,12 +149,11 @@ describe('analyzeIsCoupon render recovery', () => {
       expect(y.refusals).toEqual([])
       expect(y.accepted).toBe(true)
       expect(Math.abs(y.frequencyHz! - 62)).toBeLessThanOrEqual(1.5)
-      // Per-rung status: every line carries its rung, bottom 20 mm/s to top 100 mm/s,
-      // and the fitted amplitudes grow with the rung (top at least twice the bottom).
-      expect(y.lines[0].cornerSpeedMmS).toBeCloseTo(20, 6)
-      expect(y.lines[y.lines.length - 1].cornerSpeedMmS).toBeCloseTo(100, 6)
-      const rungs = ladderCornerSpeeds(ySpec)
-      y.lines.forEach((l, i) => expect(l.cornerSpeedMmS).toBeCloseTo(rungs[i], 6))
+      // Per-rung status: every line carries its rung, bottom 20 mm/s to top 100 mm/s, the two
+      // tiers interleaved rung by rung (hand-derived rungs 20 * 5^(j/4)), and the fitted
+      // amplitudes grow with the rung (top at least twice the bottom).
+      const rungs = [20, 20, 29.90698, 29.90698, 44.72136, 44.72136, 66.87403, 66.87403, 100, 100]
+      y.lines.forEach((l, i) => expect(l.cornerSpeedMmS).toBeCloseTo(rungs[i], 4))
       const bottom = y.lines[0]
       const top = y.lines[y.lines.length - 1]
       // The faint bottom rung is not discarded: the joint fit reads it alongside the top rung,

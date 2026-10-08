@@ -53,8 +53,8 @@ import type { TracedLine } from './lineTracer'
 // The damped quadrature pair is the free response of the second-order underdamped machine
 // axis; reported amplitude is sqrt(a^2 + b^2) and phase atan2(-b, a).
 
-export { F_MIN_HZ, F_MAX_HZ } from './types'
-import { F_MIN_HZ, F_MAX_HZ } from './types'
+export { F_MIN_HZ, F_MAX_HZ, MIN_ACCEPTED_LINES } from './types'
+import { DETECTION_ALPHA, F_MIN_HZ, F_MAX_HZ, MAX_CI95_REL, MIN_ACCEPTED_LINES } from './types'
 /** Grid step of the periodogram seed search. */
 export const PERIODOGRAM_GRID_HZ = 0.5
 /**
@@ -77,10 +77,8 @@ export const AMPLITUDE_DETECTION_K = 4
 /** Coefficient-of-determination floor below which a per-line fit is labeled 'low-r2'
  *  (a screening label and diagnostic; it does not decide the axis). */
 export const MIN_R2 = 0.5
-/** Minimum lines entering the joint fit before the axis estimate is meaningful. */
-export const MIN_ACCEPTED_LINES = 3
-/** Significance level of the axis-acceptance F-test (conventional 0.1% level). */
-export const F_TEST_ALPHA = 0.001
+/** Significance level of the axis-acceptance F-test: the flow's detection level. */
+export const F_TEST_ALPHA = DETECTION_ALPHA
 /**
  * Conservative resolvability guard on the pooled ring amplitude, in scan pixels. Sub-pixel
  * centroid estimators carry systematic pixel-locking (peak-locking) position errors on the
@@ -99,13 +97,6 @@ export const AMPLITUDE_RESOLUTION_PX = 0.05
  */
 const AGREEMENT_REL = 0.05
 const AGREEMENT_MIN_HZ = 2
-/**
- * Confidence gate: the pooled 95% confidence halfwidth must stay under 10% of the
- * frequency. The EI shaper family suppresses vibration below its 5% tolerance only within
- * roughly +/-10-15% of its target frequency, so a wider interval cannot guarantee the true
- * resonance lies inside the configured shaper's stopband.
- */
-const MAX_CI95_REL = 0.1
 import { MAD_TO_SIGMA, fCriticalValue, mad, median } from '../math'
 
 export interface RingModelParams {

@@ -10,7 +10,7 @@ import { couponCropRect, renderIsOverlayMat } from '../../../src/engine/is/isOve
 import { isCouponGeometry } from '../../../src/engine/is/couponGeometry'
 import { tracedSpanPx } from '../../../src/engine/is/lineTracer'
 import type { IsAxisResult, IsLineOutcome, IsPointPx } from '../../../src/engine/is/resultTypes'
-import { defaultIsTestSpec } from '../../../src/engine/is/types'
+import { defaultIsTestRequest, fitSpecToPrinter } from '../../../src/engine/is/types'
 import type { IsTestSpec } from '../../../src/engine/is/types'
 import { defaultPrinterProfile } from '../../../src/engine/gcode/profileTypes'
 
@@ -19,7 +19,11 @@ import { defaultPrinterProfile } from '../../../src/engine/gcode/profileTypes'
 // and a line that was never traced still gets a red annotation at its EXPECTED position
 // (that is the damaged-line case the overlay exists for).
 
-const spec: IsTestSpec = { ...defaultIsTestSpec(defaultPrinterProfile()), axes: ['y'] }
+const profile = defaultPrinterProfile()
+const spec: IsTestSpec = {
+  ...fitSpecToPrinter(defaultIsTestRequest(profile), profile).spec,
+  axes: ['y'],
+}
 const PX_PER_MM = 12
 
 // BGR pixel predicates on the drawn annotation colors (anti-aliased cores keep the pure hue).

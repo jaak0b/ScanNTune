@@ -4,7 +4,6 @@ export const MIN_FRAME_BAND_MM = 12
 export const FIDUCIAL_INSET_MM = 4
 export const FIDUCIAL_SIZE_MM = 5
 export const INNER_MARGIN_MM = 3
-export const BLOCK_GAP_MM = 2
 /** Length of the moving prime at the start of each run-up leg. */
 export const PRIME_MM = 3
 /** Leg start clearance from the coupon outer edge, so nothing pokes outside the outline. */
@@ -13,10 +12,33 @@ export const LEG_INSET_MM = 3
 export const TAIL_MARGIN_MM = 1
 /** Clearance kept between a tail's stop point and the coupon outer perimeter. */
 export const TAIL_EDGE_CLEARANCE_MM = 1
+/** Distance from the corner where the traced read starts: clears the corner blob and keeps
+ *  the perpendicular profile window off the run-up bead, which is colinear with the window at
+ *  the corner itself. */
+export const TRACE_START_MM = 1
 
 /** Distance to reach `speedMmS` from rest (or stop from it) at `accelMmS2`: v^2 / (2a). */
 export function accelRampMm(speedMmS: number, accelMmS2: number): number {
   return (speedMmS * speedMmS) / (2 * accelMmS2)
+}
+
+/**
+ * Time since the corner at arc distance sMm along the commanded trapezoidal velocity profile
+ * (constant-acceleration kinematics): t(s) = (sqrt(v0^2 + 2 a s) - v0) / a inside the
+ * acceleration ramp from the corner speed to the tier speed, then linear at the cruise speed.
+ */
+export function timeAtDistance(
+  sMm: number,
+  cornerSpeedMmS: number,
+  tierSpeedMmS: number,
+  accelMmS2: number,
+): number {
+  const rampMm = (tierSpeedMmS * tierSpeedMmS - cornerSpeedMmS * cornerSpeedMmS) / (2 * accelMmS2)
+  if (sMm <= rampMm) {
+    return (Math.sqrt(cornerSpeedMmS * cornerSpeedMmS + 2 * accelMmS2 * sMm) - cornerSpeedMmS) / accelMmS2
+  }
+  const tRamp = (tierSpeedMmS - cornerSpeedMmS) / accelMmS2
+  return tRamp + (sMm - rampMm) / tierSpeedMmS
 }
 
 /** Below this corner speed the excitation is too weak to leave a readable trace; it is
@@ -24,25 +46,31 @@ export function accelRampMm(speedMmS: number, accelMmS2: number): number {
 export const MIN_CORNER_SPEED_MM_S = 20
 
 /**
- * The corner-speed excitation ladder: the lines of each tier take their ringing corner
- * at geometrically spaced speeds from MIN_CORNER_SPEED_MM_S up to the spec's corner
- * speed (the top rung), one rung per line, the step-excitation idea of Klipper's ringing
- * tower: the print self-ranges, so the ringing is pronounced on some lines regardless of
- * frame stiffness. One entry per line of a tier, indexed by the line's position within
- * its tier; the lowest rung sits nearest the crossing zone.
+ * The top rung of one tier's corner-speed ladder: the spec's corner speed, or the tier's own
+ * line speed when that is slower. A line's run-up cruises into the corner at its rung, and a
+ * cruise faster than the line it feeds would brake into the corner instead of passing it.
  */
-export function ladderCornerSpeeds(spec: IsTestSpec): number[] {
-  const n = spec.linesPerSpeed
-  if (n === 1) {
-    return Array.from({ length: n }, () => spec.cornerSpeedMmS)
-  }
-  const ratio = Math.pow(spec.cornerSpeedMmS / MIN_CORNER_SPEED_MM_S, 1 / (n - 1))
-  return Array.from({ length: n }, (_, j) => MIN_CORNER_SPEED_MM_S * Math.pow(ratio, j))
+export function tierLadderTopMmS(spec: IsTestSpec, tierSpeedMmS: number): number {
+  return Math.min(spec.cornerSpeedMmS, tierSpeedMmS)
 }
 
-/** The corner speed of the line at overall index i (tier blocks repeat the ladder). */
-function lineCornerSpeed(spec: IsTestSpec, i: number): number {
-  return ladderCornerSpeeds(spec)[i % spec.linesPerSpeed]
+/**
+ * The corner-speed excitation ladder of one tier: its lines take their ringing corner at
+ * geometrically spaced speeds from MIN_CORNER_SPEED_MM_S up to the tier's ladder top, one
+ * rung per line, the step-excitation idea of Klipper's ringing tower: the print self-ranges,
+ * so the ringing is pronounced on some lines regardless of frame stiffness. One entry per
+ * rung, lowest first. `tierSpeedMmS` defaults to the fastest tier, whose ladder top is the
+ * spec's corner speed.
+ */
+export function ladderCornerSpeeds(
+  spec: IsTestSpec,
+  tierSpeedMmS: number = Math.max(...spec.speedsMmS),
+): number[] {
+  const n = spec.linesPerSpeed
+  const top = tierLadderTopMmS(spec, tierSpeedMmS)
+  if (n === 1) return [top]
+  const ratio = Math.pow(top / MIN_CORNER_SPEED_MM_S, 1 / (n - 1))
+  return Array.from({ length: n }, (_, j) => MIN_CORNER_SPEED_MM_S * Math.pow(ratio, j))
 }
 
 /**
@@ -106,17 +134,19 @@ export type IsBox = IsSegment
 
 export interface IsLine {
   speedMmS: number
-  /** Speed the line's run-up cruises into the ringing corner at: this line's rung of the
-   *  corner-speed excitation ladder. */
+  /** Speed the line's run-up cruises into the ringing corner at: this line's rung of its
+   *  tier's corner-speed excitation ladder. */
   cornerSpeedMmS: number
+  /** The line's rung on its tier's ladder, 0 for the lowest (MIN_CORNER_SPEED_MM_S). */
+  rungIndex: number
   /** First stretch of the leg, starting one inset inside the coupon outer edge, entirely
    *  under the frame band, where the un-retract is primed on the move. */
   prime: IsSegment
   /**
    * The straight run-up leg: it starts after the prime, runs through the frame band and
-   * into the open window at the corner speed, and ends on the ringing corner. The square
-   * corner velocity is validated to at least that speed, so the corner is taken with
-   * zero deceleration and the bead is continuous through it.
+   * into the open window at the corner speed, and ends on the ringing corner. The emitted
+   * corner limit equals that speed, so the corner is taken with zero deceleration and the
+   * bead is continuous through it.
    */
   runUp: IsSegment
   /**
@@ -133,16 +163,24 @@ export interface IsLine {
   protectedMm: number
   /**
    * Distances from the corner at which this line crosses lines printed before it this
-   * layer, sorted ascending. Crossings print at full flow (the beads weld into the grid);
-   * the distances document that every crossing lies beyond the protected span.
+   * layer (see IsCouponGeometry.printOrder), sorted ascending. Crossings print at full flow
+   * (the beads weld into the grid); the distances document that every crossing lies beyond
+   * the protected span.
    */
   crossingsMm: number[]
 }
 
 export interface IsLineGroup {
   axis: IsAxis
+  /** The group's lines in field order: offset zero first (see fieldSlots). */
   lines: IsLine[]
   boundingBox: IsBox
+}
+
+/** One line of the coupon, addressed by its group and its index inside the group. */
+export interface IsLineRef {
+  groupIndex: number
+  lineIndex: number
 }
 
 export interface IsCouponGeometry {
@@ -153,53 +191,90 @@ export interface IsCouponGeometry {
   fiducialSizeMm: number
   /** Hole centers; the (min-x, min-y) origin corner deliberately has none (PA convention). */
   fiducials: { xMm: number; yMm: number }[]
-  /** Line groups in print order: the first group is printed first each layer. */
+  /** Line groups: the Y group first when present, then the X group. */
   groups: IsLineGroup[]
+  /**
+   * The order the lines print in on every layer: by corner speed ascending, so the fastest
+   * corners print last; equal corner speeds print Y group before X group and the slower tier
+   * first.
+   */
+  printOrder: IsLineRef[]
   /** The open interior of the frame. */
   windowBox: IsBox
 }
 
+/** The speed tiers in ascending order: the slowest tier is tier 0. */
+function ascendingTiers(spec: IsTestSpec): number[] {
+  return [...spec.speedsMmS].sort((a, b) => a - b)
+}
+
+/** What one perpendicular slot of a group's line field carries. */
+interface FieldSlot {
+  /** Index into the ascending tiers. */
+  tier: number
+  rung: number
+}
+
 /**
- * Perpendicular offsets of every line in a group, ordered by speed tier then line index.
- * Lines within a tier sit one pitch apart; consecutive tiers are separated by an extra gap.
+ * The perpendicular slots of a group's line field, offset zero first, one pitch apart. Rung j
+ * of every tier occupies the block of slots j * T to j * T + T - 1 (T tiers), so the ladder
+ * rises with the offset like the one-tier field does. Inside a block the tiers alternate
+ * direction, slowest first on even rungs and fastest first on odd rungs (ABBA counterbalancing,
+ * Fisher's blocking principle): both tiers then sample the same positions along the ringing
+ * axis, so a position-dependent machine property (belt stiffness changing towards the travel
+ * ends) cannot read as a speed effect. With an even line count the tiers' mean offsets are
+ * equal; with an odd count they differ by one pitch divided by the line count, the least any
+ * assignment to a uniform pitch grid can reach (the offsets then sum to an odd number of
+ * pitches, which cannot split evenly). The slowest tier takes offset zero, where its shorter
+ * ramp keeps the packed corner diagonal smallest.
  */
-function lineOffsets(spec: IsTestSpec): number[] {
-  const blockSpan = (spec.linesPerSpeed - 1) * spec.linePitchMm
-  const blockStep = blockSpan + spec.linePitchMm + BLOCK_GAP_MM
-  const offsets: number[] = []
-  for (let block = 0; block < spec.speedsMmS.length; block++) {
-    for (let j = 0; j < spec.linesPerSpeed; j++) {
-      offsets.push(block * blockStep + j * spec.linePitchMm)
+function fieldSlots(spec: IsTestSpec): FieldSlot[] {
+  const tiers = spec.speedsMmS.length
+  const slots: FieldSlot[] = []
+  for (let rung = 0; rung < spec.linesPerSpeed; rung++) {
+    for (let k = 0; k < tiers; k++) {
+      slots.push({ tier: rung % 2 === 0 ? k : tiers - 1 - k, rung })
     }
   }
-  return offsets
+  return slots
+}
+
+/** A slot resolved to its perpendicular offset, tier speed and corner speed. */
+interface PlacedSlot {
+  offsetMm: number
+  speedMmS: number
+  cornerSpeedMmS: number
+  rung: number
+}
+
+function placedSlots(spec: IsTestSpec): PlacedSlot[] {
+  const tiers = ascendingTiers(spec)
+  const ladders = tiers.map((v) => ladderCornerSpeeds(spec, v))
+  return fieldSlots(spec).map((slot, k) => ({
+    offsetMm: k * spec.linePitchMm,
+    speedMmS: tiers[slot.tier],
+    cornerSpeedMmS: ladders[slot.tier][slot.rung],
+    rung: slot.rung,
+  }))
 }
 
 /** Extent of a group's line field perpendicular to its measured direction. */
 export function fieldExtentMm(spec: IsTestSpec): number {
-  const offsets = lineOffsets(spec)
-  return offsets[offsets.length - 1]
+  return (spec.speedsMmS.length * spec.linesPerSpeed - 1) * spec.linePitchMm
 }
 
-const speedOf = (spec: IsTestSpec, i: number) =>
-  spec.speedsMmS[Math.floor(i / spec.linesPerSpeed)]
-
 /**
- * Per-pair packed depth of a group's corner diagonal, excluding the clean read length.
- * Within each group the SLOWEST tier's lines sit nearest the crossing zone (their small
- * protected span tolerates an early crossing) and the fastest farthest, corners
- * anti-staggered along the field so no leg crosses a same-group measured segment. The
- * binding line maximizes (field extent - its offset) + its tier ramp; adding the clean
- * read length (paid once, by every line alike) gives the exact room the corner diagonal
- * plus every protected span needs. This is tighter than the worst-case form
- * field + max ramp whenever the fastest tier does not sit at offset zero.
+ * Per-pair packed depth of a group's corner diagonal, excluding the clean read length. The
+ * corners are anti-staggered along the field so no leg crosses a same-group measured segment;
+ * the binding line maximizes (field extent - its offset) + its own ramp from its rung to its
+ * tier speed. Adding the clean read length (paid once, by every line alike) gives the exact
+ * room the corner diagonal plus every protected span needs.
  */
 export function maxPackedRampMm(spec: IsTestSpec): number {
-  const offsets = lineOffsets(spec)
-  const F = offsets[offsets.length - 1]
+  const F = fieldExtentMm(spec)
   return Math.max(
-    ...offsets.map(
-      (off, i) => F - off + tierRampMm(spec, speedOf(spec, i), lineCornerSpeed(spec, i)),
+    ...placedSlots(spec).map(
+      (s) => F - s.offsetMm + tierRampMm(spec, s.speedMmS, s.cornerSpeedMmS),
     ),
   )
 }
@@ -212,86 +287,124 @@ function boundingBox(lines: IsLine[]): IsBox {
 }
 
 /**
- * Y-axis group, printed first: each line starts one inset above the coupon's bottom outer
- * edge, runs vertically up through the bottom band (this through-band stretch hosts the
- * travel arrival, the moving prime, and the start blob, all ironed flat by the band pass
- * printed after it), continues into the open window as the run-up, cruises at the corner
- * speed straight into the sharp corner, and the measured segment runs
- * +X into the right band. The corners sit near the window's left side on a descending
- * diagonal: the corner x DECREASES as the line's y increases, so a later line's vertical
- * leg always passes left of every earlier corner and never crosses an earlier measured
- * segment. Tier order runs bottom-up, so the slowest lines (smallest protected span) take
- * the largest corner x, nearest the crossing zone: the per-pair packing.
+ * Y-axis group: each line starts one inset above the coupon's bottom outer edge, runs
+ * vertically up through the bottom band (this through-band stretch hosts the travel arrival,
+ * the moving prime, and the start blob, all ironed flat by the band pass printed after it),
+ * continues into the open window as the run-up, cruises at its corner speed straight into
+ * the sharp corner, and the measured segment runs +X into the right band. The corners sit
+ * near the window's left side on a descending diagonal: the corner x DECREASES as the line's
+ * y increases, so a line's vertical leg always passes left of every corner below it and never
+ * crosses a same-group measured segment, whatever the print order.
  */
 function buildYGroup(spec: IsTestSpec, bandMm: number, couponW: number): IsLineGroup {
-  const offsets = lineOffsets(spec)
   const F = fieldExtentMm(spec)
-  const lines = offsets.map((off, i) => {
-    const speedMmS = speedOf(spec, i)
-    const cornerSpeedMmS = lineCornerSpeed(spec, i)
-    const y = bandMm + spec.runUpMm + off
-    const x = bandMm + INNER_MARGIN_MM + (F - off)
+  const lines = placedSlots(spec).map((s) => {
+    const y = bandMm + spec.runUpMm + s.offsetMm
+    const x = bandMm + INNER_MARGIN_MM + (F - s.offsetMm)
     return {
-      speedMmS,
-      cornerSpeedMmS,
+      speedMmS: s.speedMmS,
+      cornerSpeedMmS: s.cornerSpeedMmS,
+      rungIndex: s.rung,
       prime: { x0: x, y0: LEG_INSET_MM, x1: x, y1: LEG_INSET_MM + PRIME_MM },
       runUp: { x0: x, y0: LEG_INSET_MM + PRIME_MM, x1: x, y1: y },
       measured: { x0: x, y0: y, x1: couponW - bandMm + spec.weldMm, y1: y },
-      tail: { x0: couponW - bandMm + spec.weldMm, y0: y, x1: couponW - bandMm + tailDepthMm(speedMmS, spec), y1: y },
-      protectedMm: protectedSpanMm(spec, speedMmS, cornerSpeedMmS),
-      crossingsMm: [],
+      tail: {
+        x0: couponW - bandMm + spec.weldMm,
+        y0: y,
+        x1: couponW - bandMm + tailDepthMm(s.speedMmS, spec),
+        y1: y,
+      },
+      protectedMm: protectedSpanMm(spec, s.speedMmS, s.cornerSpeedMmS),
+      crossingsMm: [] as number[],
     }
   })
   return { axis: 'y', lines, boundingBox: boundingBox(lines) }
 }
 
 /**
- * X-axis group, printed second: each line starts one inset inside the coupon's right
- * outer edge, runs horizontally through the right band, continues -X into the window as
- * the run-up, corners at the corner speed, and the measured segment runs -Y
- * (downward) into the bottom band. The corners sit near the window's top on a diagonal
- * mirroring the Y group's packing: the FASTEST lines take the highest corners (their long
- * protected span needs the most depth above the crossing zone) and, anti-staggered, the
- * smallest corner x; the corner y then DECREASES as the corner x increases, so no leg
- * crosses a same-group measured segment. When the Y group exists, every X measured line
- * crosses every Y measured line; the crossing distances (from the X line's corner) are
- * recorded to document where the X line passes over the already-printed beads, which the
- * emitter crosses at full flow so the beads weld into a stiff grid. The window sizing
- * guarantees each crossing lies beyond BOTH lines' protected spans plus the inner margin.
+ * X-axis group: each line starts one inset inside the coupon's right outer edge, runs
+ * horizontally through the right band, continues -X into the window as the run-up, corners at
+ * its corner speed, and the measured segment runs -Y (downward) into the bottom band. The
+ * corners sit near the window's top on a diagonal mirroring the Y group's packing (same field
+ * slots): the corner y DECREASES as the corner x increases, so no leg crosses a same-group
+ * measured segment. When the Y group exists, every X measured line crosses every Y measured
+ * line; the window sizing guarantees each crossing lies beyond BOTH lines' protected spans plus
+ * the inner margin, whichever of the two prints first.
  */
 function buildXGroup(
   spec: IsTestSpec,
   bandMm: number,
   couponW: number,
   couponH: number,
-  yGroup: IsLineGroup | null,
+  hasY: boolean,
 ): IsLineGroup {
-  const offsets = lineOffsets(spec)
   const F = fieldExtentMm(spec)
   // With a Y group present the X field starts past the Y group's packed corner diagonal
   // (stagger + protected spans) and one inner margin keeping the crossings' flow ramps
   // clear of the read windows.
-  const firstX = yGroup
+  const firstX = hasY
     ? bandMm + 2 * INNER_MARGIN_MM + maxPackedRampMm(spec) + spec.measuredLineMm
     : bandMm + INNER_MARGIN_MM
-  const yMeasured = yGroup ? yGroup.lines.map((l) => l.measured.y0) : []
-  const lines = offsets.map((off, i) => {
-    const speedMmS = speedOf(spec, i)
-    const cornerSpeedMmS = lineCornerSpeed(spec, i)
-    const x = firstX + (F - off)
-    const y = couponH - bandMm - INNER_MARGIN_MM - (F - off)
+  const lines = placedSlots(spec).map((s) => {
+    const x = firstX + (F - s.offsetMm)
+    const y = couponH - bandMm - INNER_MARGIN_MM - (F - s.offsetMm)
     return {
-      speedMmS,
-      cornerSpeedMmS,
+      speedMmS: s.speedMmS,
+      cornerSpeedMmS: s.cornerSpeedMmS,
+      rungIndex: s.rung,
       prime: { x0: couponW - LEG_INSET_MM, y0: y, x1: couponW - LEG_INSET_MM - PRIME_MM, y1: y },
       runUp: { x0: couponW - LEG_INSET_MM - PRIME_MM, y0: y, x1: x, y1: y },
       measured: { x0: x, y0: y, x1: x, y1: bandMm - spec.weldMm },
-      tail: { x0: x, y0: bandMm - spec.weldMm, x1: x, y1: bandMm - tailDepthMm(speedMmS, spec) },
-      protectedMm: protectedSpanMm(spec, speedMmS, cornerSpeedMmS),
-      crossingsMm: yMeasured.map((yk) => y - yk).sort((a, b) => a - b),
+      tail: { x0: x, y0: bandMm - spec.weldMm, x1: x, y1: bandMm - tailDepthMm(s.speedMmS, spec) },
+      protectedMm: protectedSpanMm(spec, s.speedMmS, s.cornerSpeedMmS),
+      crossingsMm: [] as number[],
     }
   })
   return { axis: 'x', lines, boundingBox: boundingBox(lines) }
+}
+
+/**
+ * Print order: corner speed ascending, so the corners that kick the motors hardest come last
+ * in every layer and a step loss from them cannot shift lines printed after it; equal corner
+ * speeds keep the group order (Y first) and then the slower tier first. Line positions do not
+ * depend on the order.
+ */
+function linePrintOrder(groups: IsLineGroup[]): IsLineRef[] {
+  const refs = groups.flatMap((group, groupIndex) =>
+    group.lines.map((_, lineIndex) => ({ groupIndex, lineIndex })),
+  )
+  const line = (r: IsLineRef) => groups[r.groupIndex].lines[r.lineIndex]
+  return refs.sort(
+    (a, b) =>
+      line(a).cornerSpeedMmS - line(b).cornerSpeedMmS ||
+      a.groupIndex - b.groupIndex ||
+      line(a).speedMmS - line(b).speedMmS ||
+      a.lineIndex - b.lineIndex,
+  )
+}
+
+/**
+ * Records on every line the distances from its corner to the crossings with lines of the
+ * other group printed before it this layer. A Y line runs +X from its corner at height y and
+ * an X line runs -Y from its corner at x, so they cross at (x_X, y_Y): x_X - x_cornerY along
+ * the Y line and y_cornerX - y_Y along the X line.
+ */
+function recordCrossings(groups: IsLineGroup[], order: IsLineRef[]): void {
+  const printed: IsLineRef[] = []
+  for (const ref of order) {
+    const line = groups[ref.groupIndex].lines[ref.lineIndex]
+    const axis = groups[ref.groupIndex].axis
+    const crossings: number[] = []
+    for (const earlier of printed) {
+      if (earlier.groupIndex === ref.groupIndex) continue
+      const other = groups[earlier.groupIndex].lines[earlier.lineIndex]
+      crossings.push(
+        axis === 'y' ? other.measured.x0 - line.measured.x0 : line.measured.y0 - other.measured.y0,
+      )
+    }
+    line.crossingsMm = crossings.sort((a, b) => a - b)
+    printed.push(ref)
+  }
 }
 
 /**
@@ -305,11 +418,11 @@ function buildXGroup(
  *   interior height = runUp + F (Y field) + margin + packed(X) + margin
  *
  * where F is the field extent, packed(g) = maxPackedRampMm + clean read length is group
- * g's per-pair packed corner diagonal (slowest lines nearest the crossing zone), and
- * runUp the in-window leg length before each group's first corner (the through-band leg
- * stretch is extra and comes free from the band width). Both expressions are equal, so
- * the two-axis coupon is square. With a single axis the crossing terms drop: the measured
- * direction needs margin + packed and the perpendicular one margin + F + runUp.
+ * g's per-pair packed corner diagonal, and runUp the in-window leg length before each group's
+ * first corner (the through-band leg stretch is extra and comes free from the band width).
+ * Both expressions are equal, so the two-axis coupon is square. With a single axis the
+ * crossing terms drop: the measured direction needs margin + packed and the perpendicular one
+ * margin + F + runUp.
  */
 export function isCouponGeometry(spec: IsTestSpec): IsCouponGeometry {
   const hasX = spec.axes.includes('x')
@@ -328,12 +441,11 @@ export function isCouponGeometry(spec: IsTestSpec): IsCouponGeometry {
   const couponWidthMm = interiorW + 2 * bandMm
   const couponHeightMm = interiorH + 2 * bandMm
 
-  // Print order: the Y group first (its measured lines cross nothing), then the X group,
-  // whose measured lines cross the Y beads at full flow.
   const groups: IsLineGroup[] = []
-  const yGroup = hasY ? buildYGroup(spec, bandMm, couponWidthMm) : null
-  if (yGroup) groups.push(yGroup)
-  if (hasX) groups.push(buildXGroup(spec, bandMm, couponWidthMm, couponHeightMm, yGroup))
+  if (hasY) groups.push(buildYGroup(spec, bandMm, couponWidthMm))
+  if (hasX) groups.push(buildXGroup(spec, bandMm, couponWidthMm, couponHeightMm, hasY))
+  const printOrder = linePrintOrder(groups)
+  recordCrossings(groups, printOrder)
 
   const inset = FIDUCIAL_INSET_MM
   const size = FIDUCIAL_SIZE_MM
@@ -349,6 +461,7 @@ export function isCouponGeometry(spec: IsTestSpec): IsCouponGeometry {
       { xMm: inset + size / 2, yMm: couponHeightMm - inset - size / 2 },
     ],
     groups,
+    printOrder,
     windowBox: {
       x0: bandMm,
       y0: bandMm,

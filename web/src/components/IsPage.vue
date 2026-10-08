@@ -29,12 +29,14 @@ import {
 import { unresolvedVariablesWarning } from '../engine/pa/slicerVariables'
 import { restartNoteText } from '../engine/gcode/couponShell'
 import {
-  defaultIsTestSpec,
+  defaultIsTestRequest,
   fitSpecToPrinter,
   MIN_CORNER_SPEED_MM_S,
   rampWarnings,
+  speedTiersFor,
   validateIsSpec,
   type IsAxis,
+  type IsTestRequest,
   type IsTestSpec,
 } from '../engine/is/types'
 import { isCouponGeometry } from '../engine/is/couponGeometry'
@@ -56,7 +58,7 @@ const { calibration, isCalibrated, calibrationLine } = useCalibrationGate()
 // Spec defaults follow the selected printer. The fields are persisted per printer profile;
 // with nothing stored for the selected profile they fall back to the spec defaults, and a
 // profile switch re-applies that profile's stored settings or defaults.
-const specDefaults = computed(() => defaultIsTestSpec(store.selected ?? defaultPrinterProfile()))
+const specDefaults = computed(() => defaultIsTestRequest(store.selected ?? defaultPrinterProfile()))
 const isSettings = useIsSettings()
 const {
   form: settingsForm,
@@ -119,13 +121,13 @@ const scanPlanNote = computed(() =>
 // out-of-bounds pair still assembles, and the validator's own message surfaces below.
 const speedsMissing = computed(() => tierSpeed.value === null || cornerSpeed.value === null)
 
-const spec = computed<IsTestSpec | null>(() => {
+const spec = computed<IsTestRequest | null>(() => {
   if (tierSpeed.value === null || cornerSpeed.value === null) return null
   return {
     ...specDefaults.value,
-    speedsMmS: [tierSpeed.value],
+    speedsMmS: speedTiersFor(tierSpeed.value),
     cornerSpeedMmS: cornerSpeed.value,
-    linesPerSpeed: linesPerSpeed.value ?? specDefaults.value.linesPerSpeed,
+    linesPerSpeed: linesPerSpeed.value,
     measuredLineMm: measuredLine.value ?? specDefaults.value.measuredLineMm,
     linePitchMm: linePitch.value ?? specDefaults.value.linePitchMm,
     axes: ['x', 'y'] as IsAxis[],

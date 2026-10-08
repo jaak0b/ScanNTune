@@ -1,7 +1,7 @@
 import type { Mat, OpenCv } from '../opencv'
 import type { IsTestSpec } from './types'
 import type { IsLine, IsLineGroup } from './couponGeometry'
-import { tierRampMm } from './couponGeometry'
+import { tierRampMm, timeAtDistance, TRACE_START_MM } from './couponGeometry'
 import type { IsAlignment } from './isFiducialAligner'
 import { mmToPx } from './isFiducialAligner'
 import { median } from '../math'
@@ -49,10 +49,7 @@ export interface TracedGroup {
   traces: (TracedLine | null)[]
 }
 
-/** Distance from the corner where tracing starts: clears the corner blob and keeps the
- *  perpendicular profile window off the run-up bead, which is colinear with the window at the
- *  corner itself. */
-export const TRACE_START_MM = 1
+export { timeAtDistance, TRACE_START_MM }
 /** Perpendicular half-window of the centroid profile. Must exceed the largest expected ring
  *  amplitude (about 0.64 mm at the default corner speed, see DEFAULT_CORNER_SPEED_MM_S) plus
  *  half a bead, and stay under the line pitch minus the same, so a neighbouring trace never
@@ -77,21 +74,6 @@ const MAX_INVALID_FRACTION = 0.1
  *  there for any resonance and damping in the search range: at the slowest 20 Hz corner ring
  *  with damping 0.02, five read wavelengths in, the envelope is well below its start). */
 const NOISE_WINDOW_FRACTION = 0.25
-
-/** Time since the corner at arc distance sMm, per the commanded trapezoidal velocity profile. */
-export function timeAtDistance(
-  sMm: number,
-  cornerSpeedMmS: number,
-  tierSpeedMmS: number,
-  accelMmS2: number,
-): number {
-  const rampMm = (tierSpeedMmS * tierSpeedMmS - cornerSpeedMmS * cornerSpeedMmS) / (2 * accelMmS2)
-  if (sMm <= rampMm) {
-    return (Math.sqrt(cornerSpeedMmS * cornerSpeedMmS + 2 * accelMmS2 * sMm) - cornerSpeedMmS) / accelMmS2
-  }
-  const tRamp = (tierSpeedMmS - cornerSpeedMmS) / accelMmS2
-  return tRamp + (sMm - rampMm) / tierSpeedMmS
-}
 
 /** The unit coupon-frame direction of a line's measured segment. */
 export function measuredDirection(line: IsLine): { dx: number; dy: number } {

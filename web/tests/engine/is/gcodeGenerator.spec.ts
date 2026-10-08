@@ -10,7 +10,7 @@ import {
 } from '../../../src/engine/gcode/emitter'
 import { isCouponGeometry, type IsLine } from '../../../src/engine/is/couponGeometry'
 
-import { defaultIsTestSpec } from '../../../src/engine/is/types'
+import { defaultIsTestRequest, fitSpecToPrinter } from '../../../src/engine/is/types'
 import {
   generateIsGcodeWithReport,
   IS_MEASURED_LAYERS,
@@ -18,9 +18,11 @@ import {
 
 const profile = defaultPrinterProfile()
 const filament = defaultFilamentProfile()
-const spec = defaultIsTestSpec(profile)
+const spec = defaultIsTestRequest(profile)
+// The fitted default the generator prints: tiers 106 / 150 mm/s, five lines per speed.
+const fitted = fitSpecToPrinter(spec, profile).spec
 const nominal = profile.nozzleDiameterMm * NOMINAL_WIDTH_FACTOR
-const g = isCouponGeometry(spec)
+const g = isCouponGeometry(fitted)
 const ox = (profile.bedWidthMm - g.couponWidthMm) / 2
 const oy = (profile.bedDepthMm - g.couponHeightMm) / 2
 // Each line's run-up cruises at its own rung of the corner-speed ladder.
@@ -151,7 +153,7 @@ describe('generateIsGcodeWithReport (Klipper)', () => {
 
   it('emits a header, start gcode, and relative extrusion setup', () => {
     expect(lines[0]).toBe('; ScanNTune input shaper resonance test')
-    expect(lines[1]).toContain('speed tiers 150 mm/s')
+    expect(lines[1]).toBe('; speed tiers 106, 150 mm/s, acceleration 3000 mm/s^2')
     expect(report.gcode).toContain('M83')
     expect(report.gcode).toContain('G90')
   })
@@ -207,21 +209,36 @@ describe('generateIsGcodeWithReport (Klipper)', () => {
 
   it('names the corner-speed excitation ladder in the header', () => {
     expect(lines[2]).toBe(
-      '; corner-speed excitation ladder 20 to 100 mm/s across the 8 lines of each tier',
+      '; corner-speed excitation ladder 20 to 100 mm/s across the 5 lines of each tier, ' +
+        'fastest corners printed last',
     )
   })
 
   it('cruises each run-up at its own ladder rung (hand-pinned geometric feeds)', () => {
-    // Hand-derived once: rungs 20 * 5^(j/7) mm/s for j = 0..7, times 60, rounded.
-    const expectedFeeds = [1200, 1510, 1901, 2392, 3010, 3788, 4768, 6000]
+    // Hand-derived once: rungs 20 * 5^(j/4) mm/s for j = 0..4, times 60, rounded; both tiers
+    // share the ladder because the 106 mm/s tier is faster than the 100 mm/s corner speed.
+    const expectedFeeds = [1200, 1794, 2683, 4012, 6000]
     const chunk = measuredChunk(lines)
     for (const group of g.groups) {
       group.lines.forEach((line, j) => {
         const idx = chunk.indexOf(cornerMoveStr(line))
         expect(idx, `line ${j}`).toBeGreaterThanOrEqual(0)
-        expect(chunk[idx].endsWith(`F${expectedFeeds[j]}`), `line ${j}`).toBe(true)
+        expect(chunk[idx].endsWith(`F${expectedFeeds[line.rungIndex]}`), `line ${j}`).toBe(true)
       })
     }
+  })
+
+  it('prints the lines rung by rung, so the corner feeds never fall within a layer', () => {
+    // The run-up cruise into each corner is the move ending on the corner; its feed is the
+    // rung. In print order the feeds rise from F1200 to F6000 and never fall.
+    const chunk = measuredChunk(lines)
+    const cornerFeeds = chunk
+      .map((l, i) => ({ l, i }))
+      .filter(({ l }) => allLines.some((line) => l === cornerMoveStr(line)))
+      .map(({ l }) => Number(l.match(/F(\d+)$/)![1]))
+    expect(cornerFeeds).toHaveLength(20)
+    expect(cornerFeeds).toEqual([...cornerFeeds].sort((a, b) => a - b))
+    expect(cornerFeeds.slice(-4)).toEqual([6000, 6000, 6000, 6000])
   })
 
   it('keeps the single motion-limit override at the top rung, above every slower rung', () => {
@@ -232,7 +249,7 @@ describe('generateIsGcodeWithReport (Klipper)', () => {
     expect(limits[0]).toContain('SQUARE_CORNER_VELOCITY=100')
     for (const group of g.groups) {
       for (const line of group.lines) {
-        expect(line.cornerSpeedMmS).toBeLessThanOrEqual(spec.cornerSpeedMmS + 1e-9)
+        expect(line.cornerSpeedMmS).toBeLessThanOrEqual(fitted.cornerSpeedMmS + 1e-9)
       }
     }
   })
@@ -310,10 +327,13 @@ describe('generateIsGcodeWithReport (Klipper)', () => {
         }
       }
     }
-    // The second-printed group actually carries crossings, all past the protected span.
-    expect(g.groups[1].lines.every((l) => l.crossingsMm.length > 0)).toBe(true)
-    for (const line of g.groups[1].lines) {
-      for (const c of line.crossingsMm) expect(c).toBeGreaterThan(line.protectedMm)
+    // Lines of both groups actually carry crossings (the rung-major order interleaves the
+    // groups), all past the protected span.
+    for (const group of g.groups) {
+      expect(group.lines.some((l) => l.crossingsMm.length > 0)).toBe(true)
+      for (const line of group.lines) {
+        for (const c of line.crossingsMm) expect(c).toBeGreaterThan(line.protectedMm)
+      }
     }
   })
 
@@ -414,7 +434,7 @@ describe('generateIsGcodeWithReport (Klipper)', () => {
       const deretracts = chunk.flatMap((l, i) => (/^G1 E[\d.]/.test(l) ? [i] : []))
       const linesStart = chunk.findIndex((l, i) => i > deretracts[0] && /^G1 E-/.test(l))
       const rasterStart = deretracts.find((i) => i > linesStart)!
-      const firstCorner = chunk.indexOf(cornerMoveStr(allLines[0]))
+      const firstCorner = Math.min(...allLines.map((l) => chunk.indexOf(cornerMoveStr(l))))
       expect(on).toBeGreaterThanOrEqual(linesStart)
       expect(on).toBeLessThan(firstCorner)
       expect(off).toBeGreaterThan(on)
@@ -432,7 +452,7 @@ describe('generateIsGcodeWithReport (Klipper)', () => {
       const endCoast = segs[segs.length - 2]
       const tailExtrude = segs[segs.length - 3]
       // Tail length past the weld: the full kinematic stopping distance plus the margin.
-      const tailLen = line.speedMmS ** 2 / (2 * spec.accelMmS2) + 1
+      const tailLen = line.speedMmS ** 2 / (2 * fitted.accelMmS2) + 1
       expect(tailExtrude.e).not.toBeNull()
       expect(tailExtrude.len).toBeCloseTo(tailLen - coastMm, 2)
       expect(endCoast.e).toBeNull()
@@ -521,7 +541,8 @@ describe('generateIsGcodeWithReport (Marlin and RepRapFirmware)', () => {
     expect(j).toBe('M205 J0.300')
     expect(lines).toContain('M205 X46.6 Y46.6')
     expect(lines).toContain(
-      '; corner-speed excitation ladder 20 to 46.6 mm/s across the 8 lines of each tier',
+      '; corner-speed excitation ladder 20 to 46.6 mm/s across the 3 lines of each tier, ' +
+        'fastest corners printed last',
     )
     expect(report.warnings).toContain(
       "The corner speed was limited to 46.6 mm/s because Marlin's junction deviation cannot " +
@@ -529,7 +550,7 @@ describe('generateIsGcodeWithReport (Marlin and RepRapFirmware)', () => {
     )
     // The emitted geometry is the capped coupon: every run-up cruise into its corner, and the
     // top rung at exactly 46.6 mm/s (F2796), matches the geometry built from the capped spec.
-    const capped = { ...spec, cornerSpeedMmS: 46.6 }
+    const capped = { ...fitted, cornerSpeedMmS: 46.6, linesPerSpeed: 3 }
     const gc = isCouponGeometry(capped)
     const oxc = (profile.bedWidthMm - gc.couponWidthMm) / 2
     const oyc = (profile.bedDepthMm - gc.couponHeightMm) / 2
@@ -740,13 +761,13 @@ describe('contrastBase', () => {
 })
 
 describe('bed fitting', () => {
-  it('drops a 300 mm/s tier with a note when the coupon overflows a 160 mm bed', () => {
-    const small: PrinterProfile = { ...profile, bedWidthMm: 160, bedDepthMm: 160 }
-    const three = { ...spec, speedsMmS: [150, 200, 300] }
-    const r = generateIsGcodeWithReport(small, filament, three)
-    expect(r.warnings.some((w) => w.includes('300 mm/s') && w.includes('removed'))).toBe(true)
-    expect(r.gcode).not.toContain('F18000')
-    expect(r.gcode).toContain('F12000')
+  it('drops the derived 106 mm/s tier with a note when the coupon overflows an 80 mm bed', () => {
+    const small: PrinterProfile = { ...profile, bedWidthMm: 80, bedDepthMm: 80 }
+    const r = generateIsGcodeWithReport(small, filament, spec)
+    expect(r.warnings.some((w) => w.includes('106 mm/s') && w.includes('removed'))).toBe(true)
+    // Only the 150 mm/s line feed remains on the measured lines.
+    expect(r.gcode).not.toMatch(/^G1 X.* E[\d.]+ F6360$/m)
+    expect(r.gcode).toMatch(/^G1 X.* E[\d.]+ F9000$/m)
   })
 
   it('throws when even the smallest coupon overflows the bed', () => {
@@ -788,7 +809,7 @@ describe('validation and reporting', () => {
 
   it('uses the profile acceleration without an upper cap', () => {
     const fast: PrinterProfile = { ...profile, printAccelMmS2: 20000 }
-    const spec20k = defaultIsTestSpec(fast)
+    const spec20k = defaultIsTestRequest(fast)
     expect(spec20k.accelMmS2).toBe(20000)
     const gcode = generateIsGcodeWithReport(fast, filament, spec20k).gcode
     expect(gcode).toContain(
@@ -899,9 +920,9 @@ describe('first layer speed', () => {
         .map((l) => Number(l.match(/ F(\d+)$/)![1]))
     const pedestalPrimes = primeFeeds(chunks[0])
     const measuredPrimes = primeFeeds(chunks[chunks.length - 1])
-    // One moving prime per test line on each layer: eight lines per axis, both axes.
-    expect(pedestalPrimes).toEqual(Array(16).fill(1200))
-    expect(measuredPrimes).toEqual(Array(16).fill(1800))
+    // One moving prime per test line on each layer: ten lines per axis, both axes.
+    expect(pedestalPrimes).toEqual(Array(20).fill(1200))
+    expect(measuredPrimes).toEqual(Array(20).fill(1800))
   })
 
   it('caps only the base first layer when a contrast base is printed', () => {

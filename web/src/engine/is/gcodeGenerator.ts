@@ -37,7 +37,14 @@ import {
 import { isCouponGeometry, type IsSegment, MIN_CORNER_SPEED_MM_S } from './couponGeometry'
 import { dipsForMove, extrudeWithDips, type PrintedBead } from './crossings'
 import { disableShapingCommands, isMotionLimitCommands } from './firmwareMotion'
-import { fitSpecToPrinter, type IsTestSpec, rampWarnings, validateIsSpec } from './types'
+import {
+  bandTopWarning,
+  fitSpecToPrinter,
+  type IsTestRequest,
+  type IsTestSpec,
+  rampWarnings,
+  validateIsSpec,
+} from './types'
 
 export { EDGE_MARGIN_MM, HIGH_FLOW_WARNING_THRESHOLD_MM3_S }
 
@@ -68,7 +75,7 @@ export function isFlowWarnings(
 export function generateIsGcode(
   profile: PrinterProfile,
   filament: FilamentProfile,
-  spec: IsTestSpec,
+  spec: IsTestRequest,
 ): string {
   return generateIsGcodeWithReport(profile, filament, spec).gcode
 }
@@ -76,7 +83,7 @@ export function generateIsGcode(
 export function generateIsGcodeWithReport(
   profile: PrinterProfile,
   filament: FilamentProfile,
-  spec: IsTestSpec,
+  spec: IsTestRequest,
 ): { gcode: string; unknownVariables: string[]; warnings: string[] } {
   validateIsSpec(spec)
   const { spec: fitted, notes } = fitSpecToPrinter(spec, profile)
@@ -102,6 +109,8 @@ export function generateIsGcodeWithReport(
   } = prepareProfile(profile, filament, context, { includePause: spec.contrastBase })
   warnings.push(...notes)
   warnings.push(...rampWarnings(fitted))
+  const bandTop = bandTopWarning(fitted, profile)
+  if (bandTop !== null) warnings.push(bandTop)
   warnings.push(...isFlowWarnings(profile, filament, fitted))
 
   return { gcode: emitIsGcode(substituted, substitutedFilament, fitted), unknownVariables, warnings }
@@ -224,7 +233,8 @@ function emitIsGcode(profile: PrinterProfile, filament: FilamentProfile, spec: I
         '; ScanNTune input shaper resonance test',
         `; speed tiers ${spec.speedsMmS.join(', ')} mm/s, acceleration ${spec.accelMmS2} mm/s^2`,
         `; corner-speed excitation ladder ${MIN_CORNER_SPEED_MM_S} to ` +
-          `${spec.cornerSpeedMmS} mm/s across the ${spec.linesPerSpeed} lines of each tier`,
+          `${spec.cornerSpeedMmS} mm/s across the ${spec.linesPerSpeed} lines of each tier, ` +
+          'fastest corners printed last',
       ],
       // The test rings the frame on purpose: the spec's acceleration and corner speed
       // replace the profile's limits for the whole print, and the velocity ceiling is
@@ -297,38 +307,40 @@ function emitIsGcode(profile: PrinterProfile, filament: FilamentProfile, spec: I
     // first-layer practice: on the bed it IS the first layer, and on a contrast base it
     // still bonds best without cooling.
     if (!pedestal) L.push('M106 S255')
-    for (const group of g.groups) {
-      for (const line of group.lines) {
-        // The pedestal layer only needs to stick: its lines are capped to the profile's
-        // first layer speed, because a single first-layer bead at the fast tiers would be
-        // dragged off the bed. On a contrast base the pedestal bonds to plastic instead
-        // of the bed, which is easier, but the cap stays as a conservative choice. The
-        // measured layers run at the full tier speed.
-        const speed = pedestal
-          ? Math.min(line.speedMmS, profile.firstLayerSpeedMmS)
-          : line.speedMmS
-        // Each line cruises its run-up at its own rung of the corner-speed ladder; the
-        // emitted corner limit equals the TOP rung, an upper bound, so every slower rung
-        // passes the corner unbraked on all firmwares.
-        const runUpSpeed = Math.min(line.cornerSpeedMmS, speed)
-        travel(e, profile, ox + line.prime.x0, oy + line.prime.y0)
-        primeOnTheMove(e, profile, filament, width, ox + line.prime.x1, oy + line.prime.y1,
-          primeSpeed)
-        // Full-flow run-up straight into the corner at the corner speed: under
-        // the per-firmware junction limits this test emits (see isMotionLimitCommands for
-        // the Klipper SCV, Marlin classic-jerk plus junction-deviation, and
-        // RepRapFirmware jerk reasoning), a 90 degree corner entered at that velocity is
-        // taken without deceleration, so the corner dumps no pressure and the bead stays
-        // continuous through it.
-        extrude(e, profile, filament, width, ox + line.runUp.x1, oy + line.runUp.y1, runUpSpeed)
-        // Crossings over beads printed earlier this layer are taken at full flow, the way
-        // grid infill crosses itself: the free beads must weld into the stiff grid, and
-        // with pressure advance disabled a zero-E stretch drains nozzle pressure and
-        // breaks the bead instead. The geometry guarantees every crossing lies beyond the
-        // protected span, so the read window never sees the small crossing blob.
-        extrude(e, profile, filament, width, ox + line.measured.x1, oy + line.measured.y1, speed)
-        finishLine(e, profile, filament, width, line.tail, ox, oy, speed)
-      }
+    // Rung-major order (see printOrder): the corners that kick the motors hardest print
+    // last, so a step loss from one of them cannot shift any line printed before it.
+    for (const ref of g.printOrder) {
+      const line = g.groups[ref.groupIndex].lines[ref.lineIndex]
+      // The pedestal layer only needs to stick: its lines are capped to the profile's
+      // first layer speed, because a single first-layer bead at the fast tiers would be
+      // dragged off the bed. On a contrast base the pedestal bonds to plastic instead
+      // of the bed, which is easier, but the cap stays as a conservative choice. The
+      // measured layers run at the full tier speed.
+      const speed = pedestal
+        ? Math.min(line.speedMmS, profile.firstLayerSpeedMmS)
+        : line.speedMmS
+      // Each line cruises its run-up at its own rung of the corner-speed ladder; the
+      // emitted corner limit equals the TOP rung, an upper bound, so every slower rung
+      // passes the corner unbraked on all firmwares. A slower tier's ladder tops out at
+      // its own speed, so the run-up never outruns the line it feeds.
+      const runUpSpeed = Math.min(line.cornerSpeedMmS, speed)
+      travel(e, profile, ox + line.prime.x0, oy + line.prime.y0)
+      primeOnTheMove(e, profile, filament, width, ox + line.prime.x1, oy + line.prime.y1,
+        primeSpeed)
+      // Full-flow run-up straight into the corner at the corner speed: under
+      // the per-firmware junction limits this test emits (see isMotionLimitCommands for
+      // the Klipper SCV, Marlin classic-jerk plus junction-deviation, and
+      // RepRapFirmware jerk reasoning), a 90 degree corner entered at that velocity is
+      // taken without deceleration, so the corner dumps no pressure and the bead stays
+      // continuous through it.
+      extrude(e, profile, filament, width, ox + line.runUp.x1, oy + line.runUp.y1, runUpSpeed)
+      // Crossings over beads printed earlier this layer are taken at full flow, the way
+      // grid infill crosses itself: the free beads must weld into the stiff grid, and
+      // with pressure advance disabled a zero-E stretch drains nozzle pressure and
+      // breaks the bead instead. The geometry guarantees every crossing lies beyond the
+      // protected span, so the read window never sees the small crossing blob.
+      extrude(e, profile, filament, width, ox + line.measured.x1, oy + line.measured.y1, speed)
+      finishLine(e, profile, filament, width, line.tail, ox, oy, speed)
     }
     // M107 forces the fan off for the band; any fan state the user's start G-code set
     // is not restored.

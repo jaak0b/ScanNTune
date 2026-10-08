@@ -3,7 +3,7 @@
 // the pictogram's plate, window, fiducial holes, and test lines match the actual print
 // by construction.
 import { isCouponGeometry } from '../engine/is/couponGeometry'
-import { defaultIsTestSpec } from '../engine/is/types'
+import { defaultIsTestRequest, fitSpecToPrinter } from '../engine/is/types'
 import { defaultPrinterProfile } from '../engine/gcode/profileTypes'
 
 export interface MiniatureRect {
@@ -32,7 +32,8 @@ export interface IsCouponMiniature {
  * holeless origin corner lands at the top left, matching a face-down scan).
  */
 export function isCouponMiniature(cx: number, cy: number, sidePx: number): IsCouponMiniature {
-  const spec = defaultIsTestSpec(defaultPrinterProfile())
+  const profile = defaultPrinterProfile()
+  const spec = fitSpecToPrinter(defaultIsTestRequest(profile), profile).spec
   const g = isCouponGeometry(spec)
   const s = sidePx / Math.max(g.couponWidthMm, g.couponHeightMm)
   const x0 = cx - (g.couponWidthMm * s) / 2

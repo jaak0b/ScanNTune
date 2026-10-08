@@ -314,7 +314,9 @@ export function ladderAdvice(
   const slowestResolvable = Math.min(...resolvable.map((l) => l.cornerSpeedMmS))
   const fastestUnresolvable = Math.max(...unresolvable.map((l) => l.cornerSpeedMmS))
   if (slowestResolvable <= fastestUnresolvable) return null
-  const lineSpeedMmS = Math.min(...spec.speedsMmS)
+  // The line speed is the fastest tier: the one entered on the page, which bounds the corner
+  // speed (validateIsSpec); a slower tier is derived from it.
+  const lineSpeedMmS = Math.max(...spec.speedsMmS)
   const raise =
     spec.cornerSpeedMmS >= lineSpeedMmS
       ? 'Raise the corner speed and the line speed together, then reprint. The line speed ' +
