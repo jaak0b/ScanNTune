@@ -120,8 +120,21 @@ describe('poolAxisFits detection', () => {
     // A lobe decaying over 0.84 mm of arc length (two bead widths), 0.03 mm on the top rung.
     const p = pool(twoTier, simulate(twoTier, { noise: IID, spatialLobe: { ampMm: 0.03, lambdaMm: 0.84 } }, 2))
     expect(p.detectionPBound!).toBeGreaterThan(0.001)
-    expect(['flow-lag', 'bead-drag']).toContain(p.cornerModel!.kind)
+    expect(p.cornerModel!.kind).toBe('bead-drag')
     expect(p.cornerModel!.scale).toBeGreaterThan(0)
+  })
+
+  it('refuses an axis whose traces carry no measurable noise instead of throwing', () => {
+    // Every window's lateral deviation set to exactly zero: the null fit leaves a zero residual,
+    // whose noise model cannot weight the ring model.
+    const fits = simulate(twoTier, { noise: IID }).map((l) => analyzeTracedLine(l.trace))
+    for (const f of fits) f.window!.y.fill(0)
+    const p = poolAxisFits(fits, twoTier.speedsMmS)
+    expect(p.accepted).toBe(false)
+    expect(p.refusals).toEqual([
+      'The traced lines of this axis have no measurable noise, so the ring model cannot be ' +
+        'weighted. Rescan the coupon.',
+    ])
   })
 
   it('refuses too few lines with a fit window, pointing at the lamp shadow', () => {

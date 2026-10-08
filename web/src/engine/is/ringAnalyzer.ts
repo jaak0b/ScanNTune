@@ -23,6 +23,7 @@ import {
 import { depositTimesUnder, unitResponseMode } from './alongTrackLag'
 import type { CornerResponse, FittedLineRing } from './alongTrackLag'
 import {
+  NoMeasurableNoiseError,
   fitNoise,
   fixedNullColumns,
   glsNullSsr,
@@ -122,7 +123,8 @@ import { tQuantile } from '../studentT'
 //      delta-method standard error. Confirmed when the artifact hypothesis d = -ln rho is
 //      rejected one-sided and d = 0 is not rejected two-sided; changed with speed when d = 0 is
 //      rejected; otherwise not confirmed.
-//    - One tier: leave-one-line-out influence check of the detection (Cook 1977).
+//    - One tier: the detection is tested again with each single line deleted (a leave-one-out
+//      influence check).
 //    - Replicate check: Cochran's Q homogeneity test (Cochran 1954) on the inverse-variance
 //      weighted per-line frequencies of the detected lines.
 //    - Damping diagnostic: boundary likelihood-ratio test of zeta = 0 (Self and Liang 1987),
@@ -1031,8 +1033,37 @@ interface AxisAnalysis {
 }
 
 /** The analysis of an axis with the patterns to carry given (`preset`, no search) or searched
- *  (null); repeated with more patterns when the search with the fitted ring finds more. */
+ *  (null); repeated with more patterns when the search with the fitted ring finds more. A trace
+ *  without measurable noise ends it in a refusal (noiseRefusal). */
 function analyzeAxis(fits: LineFit[], speedsMmS: number[], preset: CarriedArtifacts | null = null): AxisAnalysis {
+  try {
+    const analysis = analyzeAxisUnguarded(fits, speedsMmS, preset)
+    return { ...analysis, pool: () => noiseRefusal(fits, analysis.pool) }
+  } catch (error) {
+    if (!(error instanceof NoMeasurableNoiseError)) throw error
+    return { pool: () => noiseRefusal(fits, () => { throw error }), detection: null, fit: null, secondMode: null }
+  }
+}
+
+/** The pool `pool` computes, or the refusal of an axis whose traces carry no measurable noise. */
+function noiseRefusal(fits: LineFit[], pool: () => AxisPool): AxisPool {
+  try {
+    return pool()
+  } catch (error) {
+    if (!(error instanceof NoMeasurableNoiseError)) throw error
+    const verdicts: LineVerdict[] = fits.map((f) => ({
+      usedInJointFit: false,
+      exclusion: f.window ? null : 'no-free-response',
+      detected: false,
+      detectionPBound: null,
+      frequencyHz: null,
+      amplitudeMm: null,
+    }))
+    return refusal(emptyPool(verdicts), `${error.message} Rescan the coupon.`)
+  }
+}
+
+function analyzeAxisUnguarded(fits: LineFit[], speedsMmS: number[], preset: CarriedArtifacts | null): AxisAnalysis {
   const detected = detectAxis(fits, speedsMmS, preset)
   if ('refusal' in detected) return { pool: () => detected.refusal, detection: null, fit: null, secondMode: null }
   const detection = detected.detection
@@ -1045,7 +1076,7 @@ function analyzeAxis(fits: LineFit[], speedsMmS: number[], preset: CarriedArtifa
   if (!detection.preset && speedsMmS.length >= 2) {
     const ring = [{ frequencyHz: fit.joint.frequencyHz, dampingRatio: fit.joint.dampingRatio }]
     const again = withArtifacts(detection.windows, speedsMmS, detection.carried, ring, true, detection.chosen.kind)
-    if (again.carried.artifacts.length > detection.carried.artifacts.length) return analyzeAxis(fits, speedsMmS, again.carried)
+    if (again.carried.artifacts.length > detection.carried.artifacts.length) return analyzeAxisUnguarded(fits, speedsMmS, again.carried)
   }
   let search: SecondModeSearch | null = null
   const secondMode = () => (search ??= searchSecondMode(fit))
@@ -1308,18 +1339,22 @@ function completeAxis(
   base.decayStatistic = decayStatistic(inBases, noise1, joint, estBounds)
   base.decayDemonstrated = base.decayStatistic > DECAY_CRITICAL
   base.proportionality = proportionalityCheck(inBases, rings.map((r) => Math.hypot(r.a, r.b)))
+  // The speed and replicate checks judge the mode the axis reports: the two-mode fit's dominant
+  // mode when the second-mode search found one that outgrows the joint fit's mode.
+  const dominant = secondMode.modes?.swapped ? secondMode.modes.dominant.mode : null
+  const checked: JointFit = dominant ? { ...joint, frequencyHz: dominant.frequencyHz, dampingRatio: dominant.dampingRatio } : joint
   // On deposit times each tier's fit starts from its own maximum on those times: on the commanded
   // time base a strongly modulated ring's local maximum can be its sideband.
   const tierSeed = depositTimeS
-    ? (lines: number[], points: number[]) => correctedSeed(detection, lines, depositTimeS, joint.dampingRatio, points)
+    ? (lines: number[], points: number[]) => correctedSeed(detection, lines, depositTimeS, checked.dampingRatio, points)
     : null
-  base.speedCheck = speedCheck(states, included, inBases, noise1, joint, speedsMmS, estBounds, tierSeed)
+  base.speedCheck = speedCheck(states, included, inBases, noise1, checked, speedsMmS, estBounds, tierSeed)
   base.influenceCheck = speedsMmS.length === 1 ? influenceCheck(states) : 'not-assessed'
   const detectedK = included.map((l, k) => (verdicts[windowed[l]].detected ? k : -1)).filter((k) => k >= 0)
   const replicate = replicateCheck(
     detectedK.map((k) => inBases[k]),
     detectedK.map((k) => noise1[k]),
-    joint,
+    checked,
     estBounds,
   )
   base.replicateCheck = replicate.state
@@ -1583,15 +1618,17 @@ function searchSecondMode(fit: JointFitResult): SecondModeSearch {
   const seed = DETECTION_GRID[top.index]
   const two = twoModeFit(bases, noises, [joint.frequencyHz, joint.dampingRatio, seed.frequencyHz, seed.dampingRatio, Math.log(joint.tauS)], tauBounds)
   if (two === null) return { pBound, modes: null }
-  const [dominant, other] = two.modes[0].mode.amplitudeMm >= two.modes[1].mode.amplitudeMm ? two.modes : [two.modes[1], two.modes[0]]
-  return { pBound, modes: { dominant, other } }
+  const swapped = two.modes[0].mode.amplitudeMm < two.modes[1].mode.amplitudeMm
+  const [dominant, other] = swapped ? [two.modes[1], two.modes[0]] : two.modes
+  return { pBound, modes: { dominant, other, swapped } }
 }
 
 /** The outcome of the second-mode search of a joint fit: its Bonferroni bound and, when it found
- *  a second mode, both modes of the two-mode fit, the dominant (larger amplitude) first. */
+ *  a second mode, both modes of the two-mode fit, the dominant (larger amplitude) first, and
+ *  whether the dominant one is the mode the search found rather than the joint fit's. */
 interface SecondModeSearch {
   pBound: number
-  modes: { dominant: FittedMode; other: FittedMode } | null
+  modes: { dominant: FittedMode; other: FittedMode; swapped: boolean } | null
 }
 
 /** A mode of the two-mode fit with each line's ring of it, aligned with the fit's bases. */
@@ -1746,7 +1783,8 @@ function speedCheck(
   return { state: 'not-confirmed', tiers }
 }
 
-/** One tier: the detection must survive leaving out any single line (Cook 1977). */
+/** One tier: the detection must survive leaving out any single line, the detection test repeated
+ *  with each line deleted in turn (a leave-one-out influence check). */
 function influenceCheck(states: LineState[]): CheckState {
   const K = states.length
   if (K < 2) return 'failed'

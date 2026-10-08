@@ -250,15 +250,23 @@ export function olsNull(line: LineBasis, tauS: number): { ssr: number; residual:
   return { ssr: dot(yr, yr), residual: yr }
 }
 
+/** A residual without measurable noise: no noise model can weight the ring model on it. The axis
+ *  analysis turns it into a refusal. */
+export class NoMeasurableNoiseError extends Error {
+  constructor() {
+    super('The traced lines of this axis have no measurable noise, so the ring model cannot be weighted.')
+    this.name = 'NoMeasurableNoiseError'
+  }
+}
+
 /**
  * The AR noise model of a residual: Burg's method over the runs of read samples (de Waele and
- * Broersen 2000), order by AICc (Hurvich and Tsai 1989) up to floor(10 log10 n).
+ * Broersen 2000), order by AICc (Hurvich and Tsai 1989) up to floor(10 log10 n). Throws
+ * NoMeasurableNoiseError on a residual without noise.
  */
 export function fitNoise(line: LineBasis, residual: Float64Array): LineNoise {
   const fit = selectOrderAiccSegments(latticeSegments(residual, line.rec.lattice))
-  if (!(fit.noiseVariance > 0) || !Number.isFinite(fit.noiseVariance)) {
-    throw new Error('The traced line has no measurable noise, so its ring model cannot be weighted.')
-  }
+  if (!(fit.noiseVariance > 0) || !Number.isFinite(fit.noiseVariance)) throw new NoMeasurableNoiseError()
   return noiseModel(line, fit)
 }
 
