@@ -1,8 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { mulberry32 } from '../../src/engine/math'
 import {
-  additiveOutlierStatistics,
-  additiveOutliers,
   arWhitener,
   autocovariance,
   burgAr,
@@ -354,63 +352,5 @@ describe('arWhitener', () => {
     expect(() => arWhitener({ coefficients: [0.5], noiseVariance: 1 }, [0, 2, 2])).toThrow(
       /increase strictly/,
     )
-  })
-})
-
-describe('additiveOutlierStatistics', () => {
-  // AR(1) with phi = 0.5 and unit innovations: the whitened unit impulse of an inner sample is
-  // (1, -0.5) over it and the next sample, of the first sample (sqrt(3)/2, -0.5) under the
-  // stationary start prior. With the residual r below, the maximum likelihood scale is
-  // sqrt(r'r / 5) = 1.363818, and each statistic is c'r / (|c| 1.363818) (hand-computed).
-  const residual = [0.1, -0.2, 3, 0.4, -0.3]
-
-  it('matches the hand-computed AR(1) statistics of a gapless record, the start prior included', () => {
-    const w = arWhitener({ coefficients: [0.5], noiseVariance: 1 }, [0, 1, 2, 3, 4])
-    const statistic = additiveOutlierStatistics(w, residual)
-    const expected = [0.136824, -1.114904, 1.836312, 0.360704, -0.219971]
-    expected.forEach((v, i) => expect(statistic[i]).toBeCloseTo(v, 5))
-  })
-
-  it('takes the impulse response next to an unread position from the Kalman filter', () => {
-    // Position 2 unread: the sample at 3 is predicted from the one at 1 by phi^2 = 0.25 with
-    // variance 1 + phi^2 = 1.25, so the impulse of the sample at 1 reads (1, -0.25 / sqrt(1.25))
-    // over the samples at 1 and 3 (hand-computed, as is the scale 1.017349 of this residual).
-    const w = arWhitener({ coefficients: [0.5], noiseVariance: 1 }, [0, 1, 3, 4])
-    const statistic = additiveOutlierStatistics(w, [0.1, 2, -0.3, 0.2])
-    const expected = [-0.897821, 1.982864, -0.353322, 0.196589]
-    expected.forEach((v, i) => expect(statistic[i]).toBeCloseTo(v, 5))
-  })
-
-  it('divides the impulse response by the innovation scale of a variance function', () => {
-    // The third sample's innovation scale doubled: the impulses of the second and third samples
-    // read (1, -0.25) and (0.5, -0.5) (hand-computed); the other samples do not reach it.
-    const w = arWhitener({ coefficients: [0.5], noiseVariance: 1 }, [0, 1, 2, 3, 4])
-    const statistic = additiveOutlierStatistics(w, residual, [1, 1, 2, 1, 1])
-    const expected = [0.136824, -0.675776, 1.348037, 0.360704, -0.219971]
-    expected.forEach((v, i) => expect(statistic[i]).toBeCloseTo(v, 5))
-  })
-})
-
-describe('additiveOutliers', () => {
-  // Six samples at alpha 0.001: the Bonferroni critical value is z_(1 - 0.001 / 12) = 3.7648
-  // (hand-computed).
-  const lattice = [0, 1, 2, 3, 4, 5]
-
-  it('flags the exceedances above the Bonferroni critical value of the record', () => {
-    expect(additiveOutliers([3.76, -3.77, 0, 0, 0, 0], lattice, 0, 0.001)).toEqual([1])
-  })
-
-  it('flags only the largest exceedance within the AR order of an outlier', () => {
-    expect(additiveOutliers([0.5, 5.2, 4.9, 0.1, -6.0, 0.3], lattice, 1, 0.001)).toEqual([1, 4])
-  })
-
-  it('flags every exceedance of a white series', () => {
-    expect(additiveOutliers([0.5, 5.2, 4.9, 0.1, -6.0, 0.3], lattice, 0, 0.001)).toEqual([1, 2, 4])
-  })
-
-  it('measures the reach of an outlier in lattice positions, across unread ones', () => {
-    // Samples 1 and 2 sit at lattice positions 1 and 5, four apart: beyond an AR order of 2.
-    expect(additiveOutliers([0, 5.0, 5.5, 0, 0, 0], [0, 1, 5, 6, 7, 8], 2, 0.001)).toEqual([1, 2])
-    expect(additiveOutliers([0, 5.0, 5.5, 0, 0, 0], lattice, 2, 0.001)).toEqual([2])
   })
 })

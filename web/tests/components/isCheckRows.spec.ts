@@ -31,7 +31,6 @@ function axis(overrides: Partial<IsAxisResult>): IsAxisResult {
     artifacts: [],
     cornerModel: null,
     alongTrackLag: null,
-    outlierSamples: null,
     linesUsed: 10,
     linesTraced: 10,
     scanIndex: 0,
@@ -150,12 +149,6 @@ describe('isCheckRows', () => {
     const labels = isCheckRows(axis({})).map((r) => r.label)
     expect(labels).not.toContain('Corrected for X axis ringing along the lines')
     expect(labels).not.toContain('Reason not corrected')
-  })
-
-  it('reports the trace samples set aside as outliers, and omits the row on an axis too short to analyze', () => {
-    expect(isCheckRows(axis({ outlierSamples: 12 }))).toContainEqual({ label: 'Trace samples set aside as outliers', value: '12' })
-    expect(isCheckRows(axis({ outlierSamples: 0 }))).toContainEqual({ label: 'Trace samples set aside as outliers', value: '0' })
-    expect(isCheckRows(axis({})).map((r) => r.label)).not.toContain('Trace samples set aside as outliers')
   })
 
   it('shows the bead drag length for the bead-drag corner model', () => {
