@@ -123,6 +123,19 @@ describe('formatters', () => {
     expect(klipper).toContain('shaper_freq_x: 52.3')
     expect(klipper).toContain(`shaper_type_x: ${rec.recommended.type.toLowerCase()}`)
   })
+
+  it('sets the damping ratio the shaper was designed at, so Klipper builds the same shaper', () => {
+    // One mode: the shapers are designed at the measured damping. Two modes: Klipper's
+    // fit_shaper designs every shaper at its default damping ratio 0.1, so the measured 0.05 of
+    // either mode would make the firmware build a different shaper than the one scored.
+    const single = formatKlipperShaper('x', recommendShapers(52.34, 0.06).recommended)
+    expect(single.split('\n')).toContain('damping_ratio_x: 0.060')
+    const two = recommendShapersForModes([
+      { frequencyHz: 45, dampingRatio: 0.05, amplitudeMm: 0.03 },
+      { frequencyHz: 62, dampingRatio: 0.05, amplitudeMm: 0.02 },
+    ])
+    expect(formatKlipperShaper('y', two.recommended).split('\n')).toContain('damping_ratio_y: 0.100')
+  })
 })
 
 describe('multi-mode shaper selection', () => {
