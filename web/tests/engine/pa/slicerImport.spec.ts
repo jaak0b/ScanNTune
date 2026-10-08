@@ -29,7 +29,7 @@ start_gcode = G28 ; home all\\nG90\\nM83
 end_gcode = M104 S0\\nM84
 filament_type = PETG
 gcode_flavor = klipper
-start_filament_gcode = "M900 K0.05 ; \\"PETG\\"\\nM106 S0"
+start_filament_gcode = "SET_PRESSURE_ADVANCE ADVANCE=0.05 ; \\"PETG\\"\\nM106 S0"
 end_filament_gcode = "; filament end\\nM400"
 `
 
@@ -101,7 +101,7 @@ const orcaFilament = JSON.stringify({
   filament_type: ['PLA'],
   filament_retraction_length: ['nil'],
   filament_retraction_speed: ['nil'],
-  filament_start_gcode: ['M900 K0.04\nM106 S0'],
+  filament_start_gcode: ['SET_PRESSURE_ADVANCE ADVANCE=0.04\nM106 S0'],
   filament_end_gcode: ['; filament end'],
 })
 
@@ -143,7 +143,7 @@ describe('importSlicerConfig with a flat PrusaSlicer export', () => {
   })
 
   it('reads the quoted filament gcode blocks, unescaping quotes and newlines', () => {
-    expect(result.fields.filament.filamentStartGcode).toBe('M900 K0.05 ; "PETG"\nM106 S0')
+    expect(result.fields.filament.filamentStartGcode).toBe('SET_PRESSURE_ADVANCE ADVANCE=0.05 ; "PETG"\nM106 S0')
     expect(result.fields.filament.filamentEndGcode).toBe('; filament end\nM400')
     expect(result.imported).toContain('filamentStartGcode')
     expect(result.imported).toContain('filamentEndGcode')
@@ -318,7 +318,7 @@ describe('importSlicerConfig with an OrcaSlicer filament preset', () => {
   })
 
   it('reads the filament start and end gcode from the Orca string arrays', () => {
-    expect(result.fields.filament.filamentStartGcode).toBe('M900 K0.04\nM106 S0')
+    expect(result.fields.filament.filamentStartGcode).toBe('SET_PRESSURE_ADVANCE ADVANCE=0.04\nM106 S0')
     expect(result.fields.filament.filamentEndGcode).toBe('; filament end')
   })
 

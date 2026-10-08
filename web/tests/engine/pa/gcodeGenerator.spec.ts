@@ -56,14 +56,14 @@ describe('generatePaGcode', () => {
   it('emits the filament start gcode right after the printer start gcode and the filament end gcode right before the printer end gcode', () => {
     const f = {
       ...filament,
-      startGcode: 'M900 K0.05 ; filament start\nM106 S0',
+      startGcode: 'SET_PRESSURE_ADVANCE ADVANCE=0.05 ; filament start\nM106 S0',
       endGcode: '; filament end\nM400',
     }
     const g = generatePaGcode(profile, f, spec)
     const lines = g.split('\n')
     // Start: the filament block sits between the printer start gcode's last line (G90 from
     // the default profile) and the shared M83 the preamble restates.
-    const filamentStartAt = lines.indexOf('M900 K0.05 ; filament start')
+    const filamentStartAt = lines.indexOf('SET_PRESSURE_ADVANCE ADVANCE=0.05 ; filament start')
     expect(filamentStartAt).toBeGreaterThan(lines.indexOf('G28'))
     expect(lines[filamentStartAt + 1]).toBe('M106 S0')
     expect(lines[filamentStartAt + 2]).toBe('M83')
