@@ -34,6 +34,7 @@ function pBoundText(p: number | null): string {
 
 /** Where a detected print or scan pattern comes from: its known source, or none. */
 function patternSource(artifact: DetectedArtifact): string {
+  if (artifact.pixelLockHarmonic !== null) return `pixel locking of the tracer, harmonic ${artifact.pixelLockHarmonic}`
   if (!artifact.known) return 'not a known period'
   if (artifact.periodMm === GT2_PITCH_MM) return 'GT2 belt pitch'
   if (artifact.periodMm === GT2_PITCH_MM / 2) return 'GT2 belt pitch, second harmonic'
@@ -77,10 +78,10 @@ export function isCheckRows(a: IsAxisResult): CheckRow[] {
     rows.push({ label: 'ZV shaper residual vibration at the second mode', value: `${(100 * a.zvSecondModeResidual).toFixed(1)}%` })
   }
   a.artifacts.forEach((artifact, i) => {
-    rows.push(
-      { label: `Print or scan pattern ${i + 1} period`, value: `${artifact.periodMm.toFixed(2)} mm` },
-      { label: `Print or scan pattern ${i + 1} source`, value: patternSource(artifact) },
-    )
+    if (artifact.periodMm !== null) {
+      rows.push({ label: `Print or scan pattern ${i + 1} period`, value: `${artifact.periodMm.toFixed(2)} mm` })
+    }
+    rows.push({ label: `Print or scan pattern ${i + 1} source`, value: patternSource(artifact) })
   })
   if (a.cornerModel !== null) {
     const extrusion = a.cornerModel.kind === 'flow-lag'

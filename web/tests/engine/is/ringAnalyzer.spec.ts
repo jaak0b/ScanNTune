@@ -56,6 +56,8 @@ function trace(tS: number[], lateralMm: number[], observed: number[], fitStartMi
     lateralMm: Float64Array.from(lateralMm),
     observed: Uint8Array.from(observed),
     alongPxPerMm: 23.6,
+    acrossImagePx: new Float64Array(tS.length),
+    acrossAxisPxPerMm: 23.6,
   }
 }
 
@@ -267,7 +269,7 @@ describe('poolAxisFits checks', () => {
     )
     expect(p.artifacts).toHaveLength(1)
     expect(p.artifacts[0].known).toBe(false)
-    expect(Math.abs(p.artifacts[0].periodMm - 1.7)).toBeLessThanOrEqual(0.019)
+    expect(Math.abs(p.artifacts[0].periodMm! - 1.7)).toBeLessThanOrEqual(0.019)
     expect(p.accepted).toBe(true)
     expect(Math.abs(p.frequencyHz! - 60)).toBeLessThan(0.5)
   })
@@ -278,7 +280,14 @@ describe('poolAxisFits checks', () => {
     const pedestal = { frequencyHz: 30, dampingRatio: 0.02, ampMm: 0.005, speedMmS: 45 }
     const p = pool(twoTier, simulate(twoTier, { noise: IID, pedestalRing: pedestal }, 3))
     expect(p.artifacts.length).toBeGreaterThanOrEqual(1)
-    expect(Math.abs(p.artifacts[0].periodMm - 1.5)).toBeLessThanOrEqual(0.05)
+    expect(Math.abs(p.artifacts[0].periodMm! - 1.5)).toBeLessThanOrEqual(0.05)
+    expect(p.detectionPBound!).toBeGreaterThan(0.001)
+  })
+
+  it('identifies the pixel locking of the tracer on a tilted line and finds no ringing', () => {
+    // 0.08 px locking on lines tilted 1 degree against the pixel grid.
+    const p = pool(twoTier, simulate(twoTier, { noise: IID, artifacts: { pixelLock: { tiltDeg: 1, ampPx: 0.08 } } }, 2))
+    expect(p.artifacts.map((a) => [a.periodMm, a.pixelLockHarmonic])).toEqual([[null, 1]])
     expect(p.detectionPBound!).toBeGreaterThan(0.001)
   })
 

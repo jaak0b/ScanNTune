@@ -22,7 +22,7 @@ describe('S8 artifact and ring', () => {
       )
       if (!pool.accepted) continue
       accepted++
-      if (pool.artifacts.length === 1 && Math.abs(pool.artifacts[0].periodMm - 1.7) <= 0.019) identified++
+      if (pool.artifacts.length === 1 && Math.abs(pool.artifacts[0].periodMm! - 1.7) <= 0.019) identified++
       if (pool.frequencySeHz !== null && Math.abs(pool.frequencyHz! - 60) <= 1.959964 * pool.frequencySeHz) covered++
     }
     console.log(`S8 artifact and ring: accepted ${accepted} of 60, artifact identified ${identified}, ring covered ${covered}`)

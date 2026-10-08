@@ -90,8 +90,9 @@ describe('isCheckRows', () => {
         secondMode: { frequencyHz: 62.04, dampingRatio: 0.047, frequencySeHz: 0.4, amplitudeMm: 0.004, proportionality: 'passed' },
         zvSecondModeResidual: 0.501,
         artifacts: [
-          { periodMm: 2, known: true, detectionPBound: 1e-20 },
-          { periodMm: 1.7051, known: false, detectionPBound: 1e-12 },
+          { periodMm: 2, pixelLockHarmonic: null, known: true, detectionPBound: 1e-20 },
+          { periodMm: 1.7051, pixelLockHarmonic: null, known: false, detectionPBound: 1e-12 },
+          { periodMm: null, pixelLockHarmonic: 1, known: true, detectionPBound: 1e-9 },
         ],
         cornerModel: { kind: 'flow-lag', scale: 0.0412 },
       }),
@@ -105,6 +106,8 @@ describe('isCheckRows', () => {
     expect(rows).toContainEqual({ label: 'Print or scan pattern 1 source', value: 'GT2 belt pitch' })
     expect(rows).toContainEqual({ label: 'Print or scan pattern 2 period', value: '1.71 mm' })
     expect(rows).toContainEqual({ label: 'Print or scan pattern 2 source', value: 'not a known period' })
+    expect(rows).toContainEqual({ label: 'Print or scan pattern 3 source', value: 'pixel locking of the tracer, harmonic 1' })
+    expect(rows.map((r) => r.label)).not.toContain('Print or scan pattern 3 period')
     expect(rows).toContainEqual({ label: 'Corner model', value: 'extrusion lag' })
     expect(rows).toContainEqual({ label: 'Extrusion lag time constant', value: '41 ms' })
   })

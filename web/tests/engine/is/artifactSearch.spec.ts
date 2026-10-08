@@ -12,7 +12,7 @@ describe('gridCandidates', () => {
     // Tiers 106 and 150 mm/s: spatial frequencies 20 / 150 = 0.1333 to 150 / 106 = 1.4151
     // cycles/mm at a step of 1 / 150, 193 candidates, periods 7.5 mm down to 0.707 mm
     // (hand-computed).
-    const periods = gridCandidates([106, 150])
+    const periods = gridCandidates([106, 150]).map((c) => c.periodMm!)
     expect(periods).toHaveLength(193)
     expect(periods[0]).toBeCloseTo(7.5, 9)
     expect(periods[periods.length - 1]).toBeCloseTo(0.70755, 4)
@@ -20,6 +20,15 @@ describe('gridCandidates', () => {
 })
 
 describe('knownCandidates', () => {
+  it('adds the first two harmonics of the tracer pixel locking', () => {
+    const profile = defaultPrinterProfile()
+    const spec = { ...fitSpecToPrinter(defaultIsTestRequest(profile), profile).spec, axes: ['y' as const] }
+    const lines = simulateAxis({ seed: 1, spec, noise: { model: 'iid', sigmaPx: 0.1 } })
+    const bases = lines.map((l) => lineBasis(analyzeTracedLine(l.trace).window!))
+    const harmonics = knownCandidates(bases).filter((c) => c.pixelLockHarmonic !== null)
+    expect(harmonics.map((c) => [c.pixelLockHarmonic, c.periodMm, c.known])).toEqual([[1, null, true], [2, null, true]])
+  })
+
   it('keeps the GT2 pitch and harmonic and drops JPEG blocks outside the band at 600 dpi', () => {
     // At 600 dpi the 8 and 16 px blocks are 0.339 and 0.677 mm, which read above 150 Hz on both
     // tiers; 2 mm reads 53 and 75 Hz, 1 mm 106 and 150 Hz.
@@ -27,7 +36,7 @@ describe('knownCandidates', () => {
     const spec = { ...fitSpecToPrinter(defaultIsTestRequest(profile), profile).spec, axes: ['y' as const] }
     const lines = simulateAxis({ seed: 1, spec, noise: { model: 'iid', sigmaPx: 0.1 } })
     const bases = lines.map((l) => lineBasis(analyzeTracedLine(l.trace).window!))
-    expect(knownCandidates(bases)).toEqual([2, 1])
+    expect(knownCandidates(bases).filter((c) => c.periodMm !== null).map((c) => c.periodMm)).toEqual([2, 1])
   })
 
   it('adds the 16 px JPEG block at 300 dpi, where it reads inside the band', () => {
@@ -36,7 +45,7 @@ describe('knownCandidates', () => {
     const spec = { ...fitSpecToPrinter(defaultIsTestRequest(profile), profile).spec, axes: ['y' as const] }
     const lines = simulateAxis({ seed: 1, spec, noise: { model: 'iid', sigmaPx: 0.1 }, pxPerMm: 300 / 25.4 })
     const bases = lines.map((l) => lineBasis(analyzeTracedLine(l.trace).window!))
-    const periods = knownCandidates(bases)
+    const periods = knownCandidates(bases).filter((c) => c.periodMm !== null).map((c) => c.periodMm!)
     expect(periods.slice(0, 2)).toEqual([2, 1])
     expect(periods).toHaveLength(3)
     expect(periods[2]).toBeCloseTo(1.3547, 3)

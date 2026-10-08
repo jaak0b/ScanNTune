@@ -32,6 +32,10 @@ export interface LineRecord extends CommandedMotion {
   /** Scan pixels per commanded millimetre along the line (0 when unknown), locating patterns
    *  fixed in scan pixels. */
   alongPxPerMm: number
+  /** The nominal centerline's image coordinate across the line per sample, px, and the image px
+   *  per mm of lateral deviation along it (lineTracer.TracedLine). */
+  acrossImagePx: Float64Array
+  acrossAxisPxPerMm: number
   /** Time since the corner of each observed sample, seconds. */
   tS: Float64Array
   /** Sample-lattice index of each observed sample (consecutive except across unread samples). */

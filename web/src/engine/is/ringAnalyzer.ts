@@ -353,6 +353,8 @@ export function analyzeTracedLine(line: TracedLine): LineFit {
     cornerSpeedMmS: line.cornerSpeedMmS,
     accelMmS2: line.accelMmS2,
     alongPxPerMm: line.alongPxPerMm,
+    acrossImagePx: Float64Array.from(lattice, (k) => line.acrossImagePx[k]),
+    acrossAxisPxPerMm: line.acrossAxisPxPerMm,
   }
   const columns = fixedNullColumns(record).length + 4
   if (m - columns - defaultMaxArOrder(m) - 2 <= 0) return refuse()
@@ -456,38 +458,60 @@ export function detectionStatisticAt(fits: LineFit[], frequencyHz: number, dampi
   return bases.reduce((sum, b, l) => sum + ringLikelihoodRatio(b, h0[l], { frequencyHz, dampingRatio }).statistic, 0)
 }
 
+/** Patterns carried in the null design: what was detected and each line's columns of them. */
+interface CarriedArtifacts {
+  artifacts: DetectedArtifact[]
+  /** Per line, the column pairs of the detected patterns, flattened. */
+  columns: Float64Array[][]
+}
+
+/** The line bases with the carried patterns as fixed null columns. */
+function carriedBases(
+  windows: LineRecord[],
+  carried: CarriedArtifacts,
+  cornerModel: CornerModelKind,
+  extra: Float64Array[][] = [],
+): LineBasis[] {
+  return windows.map((w, l) => lineBasis(w, [], cornerModel, [...carried.columns[l], ...(extra[l] ?? [])]))
+}
+
 /**
- * The lines' bases and null fits with the arc-length artifacts (artifactSearch.ts) the search
- * detects beyond `found`: the known periods first, then the spatial-frequency grid, each stage at
- * half the false-alarm level and repeated with every detection in the null design. `fixedModes`
- * are fitted rings carried in the null design during the search; with `search` false the found
- * artifacts are only built in.
+ * The lines' bases and null fits with the patterns (artifactSearch.ts) the search detects beyond
+ * `found`: the known patterns first, then the spatial-frequency grid, each stage at half the
+ * false-alarm level and repeated with every detection in the null design. `fixedModes` are fitted
+ * rings carried in the null design during the search; with `search` false the found patterns are
+ * only built in.
  */
 function withArtifacts(
   windows: LineRecord[],
   speedsMmS: number[],
-  found: DetectedArtifact[] = [],
+  found: CarriedArtifacts | null = null,
   fixedModes: RingPoint[] = [],
   search = true,
   cornerModel: CornerModelKind = 'flow-lag',
-): { bases: LineBasis[]; fits: NullFit[]; artifacts: DetectedArtifact[] } {
-  const artifacts = found.slice()
-  const periods = artifacts.map((a) => a.periodMm)
-  let bases = windows.map((w) => lineBasis(w, periods, cornerModel))
+): { bases: LineBasis[]; fits: NullFit[]; carried: CarriedArtifacts } {
+  const carried: CarriedArtifacts = found
+    ? { artifacts: found.artifacts.slice(), columns: found.columns.map((c) => c.slice()) }
+    : { artifacts: [], columns: windows.map(() => []) }
+  let bases = carriedBases(windows, carried, cornerModel)
   let fits = nullFits(bases, tauRange(bases), fixedModes)
-  if (!search || speedsMmS.length < 2) return { bases, fits, artifacts }
+  if (!search || speedsMmS.length < 2) return { bases, fits, carried }
   for (const known of [true, false]) {
     for (;;) {
       const candidates = known ? knownCandidates(bases) : gridCandidates(speedsMmS)
       const hit = searchStage(bases, fits, candidates, DETECTION_ALPHA / 2)
-      if (hit === null || periods.includes(hit.periodMm)) break
-      periods.push(hit.periodMm)
-      artifacts.push({ ...hit, known })
-      bases = windows.map((w) => lineBasis(w, periods, cornerModel))
+      if (hit === null) break
+      const same = carried.artifacts.some(
+        (a) => a.periodMm === hit.artifact.periodMm && a.pixelLockHarmonic === hit.artifact.pixelLockHarmonic,
+      )
+      if (same) break
+      carried.artifacts.push(hit.artifact)
+      hit.columns.forEach((pair, l) => carried.columns[l].push(...pair))
+      bases = carriedBases(windows, carried, cornerModel)
       fits = nullFits(bases, tauRange(bases), fixedModes)
     }
   }
-  return { bases, fits, artifacts }
+  return { bases, fits, carried }
 }
 
 /**
@@ -509,10 +533,9 @@ function pooledAicc(fits: NullFit[], bases: LineBasis[]): number {
  */
 function chooseCornerModel(
   windows: LineRecord[],
-  flow: { bases: LineBasis[]; fits: NullFit[]; artifacts: DetectedArtifact[] },
+  flow: { bases: LineBasis[]; fits: NullFit[]; carried: CarriedArtifacts },
 ): { bases: LineBasis[]; fits: NullFit[]; kind: CornerModelKind; flowScale: number; beadScale: number } {
-  const periods = flow.artifacts.map((a) => a.periodMm)
-  const bases = windows.map((w) => lineBasis(w, periods, 'bead-drag'))
+  const bases = carriedBases(windows, flow.carried, 'bead-drag')
   const fits = nullFits(bases, tauRange(bases))
   const scales = { flowScale: flow.fits[0].tauS, beadScale: fits[0].tauS }
   return pooledAicc(fits, bases) < pooledAicc(flow.fits, flow.bases)
@@ -763,11 +786,12 @@ const NOT_ASSESSED_SPEED: SpeedCheck = { state: 'not-assessed', tiers: [] }
  * machine. `speedsMmS` are the coupon's speed tiers; each line's own speed and corner speed come
  * with its record.
  */
-export function poolAxisFits(
-  fits: LineFit[],
-  speedsMmS: number[],
-  presetArtifacts: DetectedArtifact[] | null = null,
-): AxisPool {
+export function poolAxisFits(fits: LineFit[], speedsMmS: number[]): AxisPool {
+  return poolWithArtifacts(fits, speedsMmS, null)
+}
+
+/** poolAxisFits with the patterns to carry given (`preset`, no search) or searched (null). */
+function poolWithArtifacts(fits: LineFit[], speedsMmS: number[], preset: CarriedArtifacts | null): AxisPool {
   const verdicts: LineVerdict[] = fits.map((f) => ({
     usedInJointFit: false,
     exclusion: f.window ? null : 'no-free-response',
@@ -826,12 +850,12 @@ export function poolAxisFits(
   // Detection stage: the artifact search, the null fits, the likelihood ratio fields, the axis
   // bound.
   const windows = windowed.map((i) => fits[i].window!)
-  const searched = withArtifacts(windows, speedsMmS, presetArtifacts ?? [], [], presetArtifacts === null)
+  const searched = withArtifacts(windows, speedsMmS, preset, [], preset === null)
   const chosen = chooseCornerModel(windows, searched)
   const bases = chosen.bases
   const tauBounds = tauRange(bases)
   const states = chosen.fits.map((h0, l) => lineState(bases[l], h0))
-  base.artifacts = searched.artifacts
+  base.artifacts = searched.carried.artifacts
   base.cornerModel = { kind: chosen.kind, scale: chosen.fits[0].tauS }
   const tau0 = states[0].h0.tauS
   const all = bases.map((_, l) => l)
@@ -910,9 +934,11 @@ export function poolAxisFits(
   // not rest on the AICc choice: an interval computed in the model a criterion selected is too
   // narrow (H. Leeb and B. M. Potscher, "Model selection and inference: facts and fiction",
   // Econometric Theory 21, 2005).
-  const periods = base.artifacts.map((a) => a.periodMm)
   const inBases = included.map((l) =>
-    lineBasis(windows[l], periods, 'flow-lag', cornerColumns(windows[l].tS, windows[l], 'bead-drag', chosen.beadScale)),
+    lineBasis(windows[l], [], 'flow-lag', [
+      ...searched.carried.columns[l],
+      ...cornerColumns(windows[l].tS, windows[l], 'bead-drag', chosen.beadScale),
+    ]),
   )
   const estBounds = tauRange(inBases)
   const seedIndex = refittedMaximum(states, included).index
@@ -949,9 +975,9 @@ export function poolAxisFits(
   // A ring left out of the first artifact search leaks into the artifact columns on its own tier
   // and makes an artifact's amplitude grow with the corner speed: the search runs again with the
   // fitted ring in the null design, and the analysis is repeated with whatever more it finds.
-  if (presetArtifacts === null && speedsMmS.length >= 2) {
-    const again = withArtifacts(windows, speedsMmS, searched.artifacts, [{ frequencyHz: joint.frequencyHz, dampingRatio: joint.dampingRatio }], true, chosen.kind)
-    if (again.artifacts.length > searched.artifacts.length) return poolAxisFits(fits, speedsMmS, again.artifacts)
+  if (preset === null && speedsMmS.length >= 2) {
+    const again = withArtifacts(windows, speedsMmS, searched.carried, [{ frequencyHz: joint.frequencyHz, dampingRatio: joint.dampingRatio }], true, chosen.kind)
+    if (again.carried.artifacts.length > searched.carried.artifacts.length) return poolWithArtifacts(fits, speedsMmS, again.carried)
   }
   base.cornerModel = { kind: chosen.kind, scale: chosen.kind === 'flow-lag' ? joint.tauS : chosen.beadScale }
   const interval = profileFrequencyInterval(inBases, noise1, joint, estBounds)

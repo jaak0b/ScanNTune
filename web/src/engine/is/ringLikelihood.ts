@@ -83,8 +83,13 @@ export interface PeriodicComponent {
   periodMm: number
 }
 
-/** The component a likelihood ratio tests: a ring, or an arc-length artifact. */
-export type TestedComponent = RingPoint | PeriodicComponent
+/** A component given by its two raw columns on the line's samples. */
+export interface ColumnComponent {
+  columns: Float64Array[]
+}
+
+/** The component a likelihood ratio tests: a ring, an arc-length artifact, or explicit columns. */
+export type TestedComponent = RingPoint | PeriodicComponent | ColumnComponent
 
 /** The likelihood ratio of a ring at one point of one line, with its alternative fit. */
 export interface RingRatio {
@@ -160,7 +165,9 @@ function alternativeWith(
   }
   const whitened = new Float64Array(m)
   let ring: RingProjection
-  if ('periodMm' in point) {
+  if ('columns' in point) {
+    ring = projectColumns(basis, noise, design, point.columns[0], point.columns[1], whitened)
+  } else if ('periodMm' in point) {
     const [cos, sin] = periodicColumns(arcLengthMm(basis.rec.tS, basis.rec), [point.periodMm])
     ring = projectColumns(basis, noise, design, cos, sin, whitened)
   } else {
