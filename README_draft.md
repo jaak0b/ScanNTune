@@ -30,7 +30,7 @@ You get the exact snippet your setup expects, ready to paste:
 
 | Target | Skew and shrinkage | Pressure advance | Input shaper | Extrusion multiplier |
 | --- | --- | --- | --- | --- |
-| Klipper | `SET_SKEW XY=...` | `SET_PRESSURE_ADVANCE ADVANCE=...` | `SET_INPUT_SHAPER ...` | `M221 S...` |
+| Klipper | `SET_SKEW XY=...` | `SET_PRESSURE_ADVANCE ADVANCE=...` | `[input_shaper]` block for `printer.cfg` | `M221 S...` |
 | Slicer | shrinkage compensation % | per-filament pressure advance (OrcaSlicer) | not applicable, firmware only | extrusion multiplier / flow ratio |
 
 Shrinkage compensation percentage and extrusion multiplier / flow ratio are plain slicer settings, and
@@ -106,7 +106,7 @@ The result is ready to paste as Klipper `SET_PRESSURE_ADVANCE`. An optional foll
 Replaces running the accelerometer-based resonance test built into Klipper, or eyeballing which shaper
 setting reduces ringing on a test print.
 
-1. **Print the coupon:** a small crossing-line coupon, about 105 mm with the default settings. Sharp
+1. **Print the coupon:** a small crossing-line coupon, about 115 mm square with the default settings. Sharp
    corners in the toolpath excite each axis, and any resonance shows up as ringing printed into the
    lines.
 2. **Scan it twice,** flat and then quarter-turned, the same way as the skew and shrinkage flow.
@@ -116,7 +116,7 @@ setting reduces ringing on a test print.
 3. **Get the corrections back:** a recommended shaper type, chosen for robustness across a frequency
    tolerance band, and the resulting maximum usable acceleration.
 
-The result is ready to paste as Klipper `SET_INPUT_SHAPER`. Like the skew and shrinkage flow, it
+The result is ready to paste: a Klipper `[input_shaper]` block for `printer.cfg`. Like the skew and shrinkage flow, it
 requires the one-time card calibration for absolute scale.
 
 <!-- IMAGE REQUEST: the input shaper results page showing the two quarter-turned scans, the fitted per-axis frequency and damping, and the recommended shaper type with its ready-to-paste command -->
@@ -129,7 +129,7 @@ Replaces measuring a thin wall with calipers or judging a top surface by feel.
    single-bead lines at precisely known spacings.
 2. **Scan it once,** face down. ScanNTune measures the air gap between neighboring lines to sub-pixel
    precision; since the line spacing is known exactly, the deposited bead width falls out of a single
-   subtraction, averaged over more than a hundred gaps.
+   subtraction, pooled over the 72 gaps of the default coupon.
 3. **Enter your current slicer flow** and get the corrected value back in the same format, plus an `M221`
    command for prints that are already sliced.
 
@@ -183,8 +183,8 @@ fixture-backed tests that pin the math are in [`web/tests/`](web/tests), if you 
   validation as XY yet. Sanity-check the results before trusting them on your printer.
 - **The pressure advance coupon needs two filaments** that differ in brightness, and a printer that can
   pause for a filament swap.
-- **Input shaper has no slicer-level output:** the correction is a Klipper setting
-  (`SET_INPUT_SHAPER`).
+- **Input shaper has no slicer-level output:** the correction is a Klipper `[input_shaper]` block for
+  `printer.cfg`.
 - **Firmware commands are Klipper only.** Marlin and RepRapFirmware are not supported: the generated
   coupons and every firmware command are Klipper G-code.
 
