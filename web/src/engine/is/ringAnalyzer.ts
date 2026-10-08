@@ -64,10 +64,15 @@ import { tQuantile } from '../studentT'
 //    tracer's gap fill serves the window search alone.
 // 2. Model per line (ringGls.ts): a discrete cosine drift basis below DRIFT_CUTOFF_HZ (the SPM
 //    regression high-pass; Friston et al. 2007), which by Frisch-Waugh-Lovell acts as one linear
-//    prefilter applied identically to the data and every column; the first-order flow lag of the
-//    commanded flow, its particular solution and its homogeneous term for the flow state at the
-//    corner (one time constant tau shared per axis, chosen by golden-section search on log tau;
-//    Kiefer 1953); the damped quadrature ring pair; and AR(p) noise on the sample lattice.
+//    prefilter applied identically to the data and every column; the corner model, either the
+//    first-order flow lag of the commanded flow (its particular solution and its homogeneous
+//    term for the flow state at the corner) or the bead dragged at the corner, exp(-s / lambda)
+//    in commanded arc length, whichever null model has the lower pooled AICc (Hurvich and Tsai
+//    1989), its one scale per axis chosen by golden-section search on a log scale (Kiefer 1953);
+//    the arc-length patterns the pattern search detected (artifactSearch.ts: belt teeth, JPEG
+//    blocks, pixel locking, other stationary patterns of the print or the scan), searched before
+//    the detection and again with the fitted ring in the null design; the damped quadrature ring
+//    pair; and AR(p) noise on the sample lattice.
 // 3. Noise: per line AR(p) by Burg's method over the runs of read samples (Burg 1975; de Waele
 //    and Broersen 2000), order by AICc (Hurvich and Tsai 1989) up to floor(10 log10 n), and the
 //    exact innovations whitening of data and every column with missing observations handled by
@@ -92,8 +97,11 @@ import { tQuantile } from '../studentT'
 //    and Pereyra 1973) over (f, zeta, log tau) with each line's noise model refitted under the
 //    alternative at the seed, polished by Levenberg-Marquardt (Levenberg 1944; Marquardt 1963),
 //    then the noise model refitted to the full-fit residuals with its order chosen again (the
-//    second feasible GLS step); covariance sigma^2 (J'J)^-1 on the whitened stacked Jacobian
-//    (Seber and Wild 1989); zeta is bounded to [0, ZETA_MAX].
+//    second feasible GLS step), in the model that encompasses both corner models so the interval
+//    does not rest on their AICc choice (Leeb and Potscher 2005). The frequency interval is the
+//    profile-likelihood interval (Bates and Watts 1988); zeta is bounded to [0, ZETA_MAX]. A
+//    second mode is then searched with the first one in the null design (sequential forward
+//    detection, Quinn and Hannan 2001) and, when detected, both are fitted jointly.
 // 6. Checks, each at DETECTION_ALPHA:
 //    - Input proportionality (output-error model, Ljung 1999): the ring is the linear response
 //      to the corner's velocity step, so each line's ring amplitude is its rung's corner speed
