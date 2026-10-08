@@ -34,6 +34,23 @@ describe('flowLagRegressor', () => {
     expect(r[1]).toBeCloseTo(-0.5308781, 7)
     expect(r[2]).toBeCloseTo(-0.1283489, 7)
   })
+
+  it('keeps its relative precision on a cruise window long after the ramp', () => {
+    // Corner 20 mm/s, tier 106 mm/s, 3000 mm/s^2, tau 4.468 ms: the ramp ends at 28.67 ms. After
+    // it the commanded flow is constant, so the lag equation leaves q - v decaying as e^(-t / tau)
+    // and successive samples one cruise step dt apart stand in the ratio e^(-dt / tau). The window
+    // starts at 81.77 ms, where the deficit is already below 1e-6, and runs 576 one-pixel samples.
+    const motion = { cornerSpeedMmS: 20, speedMmS: 106, accelMmS2: 3000 }
+    const tau = 0.004468
+    const dt = 25.4 / 600 / 106
+    const tS = Float64Array.from({ length: 576 }, (_, i) => 0.08177 + i * dt)
+    const r = flowLagRegressor(tS, motion, tau)
+    const ratio = Math.exp(-dt / tau)
+    expect(r[0]).toBeLessThan(0)
+    for (let i = 1; i < r.length; i++) {
+      expect(Math.abs(r[i] / r[i - 1] - ratio)).toBeLessThan(1e-12)
+    }
+  })
 })
 
 describe('flowLagColumns', () => {

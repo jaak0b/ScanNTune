@@ -211,6 +211,9 @@ function commandedSpeedMmS(t: number, motion: CommandedMotion): number {
  * linear nozzle model behind pressure advance). On the ramp the input is c + a t and the lagged
  * response is c + a (t - tau) + a tau e^(-t / tau); after the ramp it relaxes exponentially
  * toward the tier speed. The regressor is the relative flow deficit the lag leaves in the bead.
+ * It is evaluated in its difference form, q - (c + a t) = a tau (e^(-t / tau) - 1) on the ramp
+ * and (q(t_ramp) - v) e^(-(t - t_ramp) / tau) after it, never as q / v - 1: once the deficit
+ * falls below the rounding of the speed, that quotient loses every digit.
  */
 export function flowLagRegressor(
   tS: Float64Array,
@@ -221,15 +224,16 @@ export function flowLagRegressor(
   const v = motion.speedMmS
   const a = motion.accelMmS2
   const tRamp = Math.max(0, (v - c) / a)
-  const atRampEnd = c + a * (tRamp - tauS) + a * tauS * Math.exp(-tRamp / tauS)
+  // q(t_ramp) - v: on a ramp c + a t_ramp = v, so only the lag term remains; without a ramp the
+  // flow leaves the corner at c.
+  const endDeficit = (tRamp > 0 ? a * tauS * Math.expm1(-tRamp / tauS) : c - v) / v
   const out = new Float64Array(tS.length)
   for (let i = 0; i < tS.length; i++) {
     const t = tS[i]
     if (t <= tRamp) {
-      const q = c + a * (t - tauS) + a * tauS * Math.exp(-t / tauS)
-      out[i] = q / (c + a * t) - 1
+      out[i] = (a * tauS * Math.expm1(-t / tauS)) / (c + a * t)
     } else {
-      out[i] = (v + (atRampEnd - v) * Math.exp(-(t - tRamp) / tauS)) / v - 1
+      out[i] = endDeficit * Math.exp(-(t - tRamp) / tauS)
     }
   }
   return out

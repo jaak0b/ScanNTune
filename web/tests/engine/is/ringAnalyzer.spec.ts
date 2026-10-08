@@ -153,6 +153,18 @@ describe('poolAxisFits estimation', () => {
     expect(p.linesUsed).toBe(10)
   })
 
+  it('moves the joint fit off its grid seed', () => {
+    // The fit starts at the detection grid point nearest the truth, 60 Hz and damping 0.05. On a
+    // noisy trace the least squares optimum lies a fraction of a standard error (about 0.12 Hz)
+    // away, while a fit that stalls at its seed returns it to within 1e-7. On these seeds the fit
+    // used to stall.
+    for (const seed of [3, 4, 6]) {
+      const p = pool(twoTier, simulate(twoTier, { noise: IID, ring: { frequencyHz: 60, dampingRatio: 0.05, ampMm: 0.03 } }, seed))
+      expect(Math.abs(p.frequencyHz! - 60)).toBeGreaterThan(1e-3)
+      expect(Math.abs(p.dampingRatio! - 0.05)).toBeGreaterThan(1e-5)
+    }
+  })
+
   it('passes every check on a real ring: speed, proportionality, replicates, decay', () => {
     const p = pool(twoTier, simulate(twoTier, { noise: IID, ring: { frequencyHz: 60, dampingRatio: 0.05, ampMm: 0.03 } }))
     expect(p.speedCheck.state).toBe('confirmed')
