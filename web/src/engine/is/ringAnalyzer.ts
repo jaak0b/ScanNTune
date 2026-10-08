@@ -42,7 +42,7 @@ import {
   rawFullResidual,
   ringScratch,
 } from './ringGls'
-import type { LineBasis, LineNoise, LineRecord, LmResult, NullDesign, RingProjection } from './ringGls'
+import type { LineBasis, LineNoise, LineRecord, LmResult, NullDesign, RingProjection, VarianceLine } from './ringGls'
 import {
   cruiseSampleIntervalS,
   heldNoiseStatistic,
@@ -425,28 +425,41 @@ function nullFits(bases: LineBasis[], tauBounds: [number, number], fixedModes: R
     tauBounds[1],
   )
   const plain = bases.map((b, l) => nullHypothesisFit(b, initial[l].fit, tau, 0, null, fixedModes))
-  const noises = plain.map((h) => h.noise)
   const covariates = bases.map((b) => varianceCovariate(b.rec, b.cornerModel, tau))
-  if (axisVarianceSlope(noises, plain.map((h) => h.residual), covariates) === 0) return plain
+  const nullColumns = bases.map((b, l) => meanColumns(b, tau, plain[l].fixedColumns))
+  if (axisVarianceSlope(bases.map((b, l) => varianceLine(b, plain[l].noise, nullColumns[l], covariates[l]))) === 0) return plain
   // A ring the null model leaves in its residual also raises the early variance. The variance
   // function is kept only if its test still rejects once every line's own strongest ring
-  // candidate (the maximum of its held-noise field) is removed by GLS, and its slope is then
-  // estimated from those residuals: a rougher bead does not go away with a ring.
-  const withoutRing = bases.map((b, l) => residualWithoutStrongestRing(b, plain[l]))
-  const slope = axisVarianceSlope(noises, withoutRing, covariates)
+  // candidate (the maximum of its held-noise field) joins the mean model, and its slope is then
+  // estimated in that model: a rougher bead does not go away with a ring.
+  const slope = axisVarianceSlope(
+    bases.map((b, l) => varianceLine(b, plain[l].noise, [...nullColumns[l], ...strongestRingColumns(b, plain[l])], covariates[l])),
+  )
   if (slope === 0) return plain
   return bases.map((b, l) => nullHypothesisFit(b, plain[l].noise.fit, tau, slope, covariates[l], fixedModes))
 }
 
-/** The raw residual of a line's null fit with its strongest held-noise ring candidate added. */
-function residualWithoutStrongestRing(basis: LineBasis, h0: NullFit): Float64Array {
+/** The raw ring columns of a line's strongest held-noise ring candidate. */
+function strongestRingColumns(basis: LineBasis, h0: NullFit): Float64Array[] {
   const field = heldNoiseField(basis, h0)
   let best = 0
   for (let g = 1; g < field.length; g++) if (field[g] > field[best]) best = g
   const point = DETECTION_GRID[best]
-  const scratch = ringScratch(basis.m)
-  const ring = projectRing(basis, h0.noise, h0.design, point.frequencyHz, point.dampingRatio, scratch, new Float64Array(h0.design.k), new Float64Array(h0.design.k))
-  return rawFullResidual(basis, h0.noise, h0.design, point.frequencyHz, point.dampingRatio, ring, scratch)
+  return ringColumns(depositTimes(basis.rec), point.frequencyHz, point.dampingRatio)
+}
+
+/** The raw columns of a line's null mean model at the corner-model scale tauS: the fixed
+ *  columns, the corner model's, and `extra` (the columns of modes already fitted, or a ring). */
+function meanColumns(basis: LineBasis, tauS: number, extra: Float64Array[] = []): Float64Array[] {
+  return [...basis.fixedColumns, ...cornerColumns(basis.rec, basis.cornerModel, tauS), ...extra]
+}
+
+/** A line's input to the variance function's fit: its data and mean-model columns whitened by
+ *  the AR operator of `noise` (its innovations before any variance function), and the values of
+ *  the covariate every noise model built with the fitted slope carries. */
+function varianceLine(basis: LineBasis, noise: LineNoise, columns: Float64Array[], covariate: VarianceCovariate): VarianceLine {
+  const { whitener } = noise
+  return { y: whitener.whiten(basis.rec.y), columns: columns.map((c) => whitener.whiten(c)), covariate: covariate.values }
 }
 
 /** The flow-lag time constant of the axis's ordinary least squares null fits. */
@@ -462,14 +475,13 @@ function olsTau(bases: LineBasis[], tauBounds: [number, number]): number {
 const VARIANCE_CRITICAL = normalQuantile(1 - DETECTION_ALPHA / 2) ** 2
 
 /**
- * The slope of the axis's innovation variance function (ringGls.pooledVarianceSlope) from the
- * lines' raw residuals under their AR models against each line's `covariates`, or 0 when the
+ * The slope of the axis's innovation variance function (ringGls.pooledVarianceSlope, by
+ * restricted likelihood over each line's mean model) against each line's covariate, or 0 when its
  * likelihood ratio test does not reject a constant variance at DETECTION_ALPHA. A nonzero slope
  * is valid only on these covariates, so every noise model built with it carries them.
  */
-function axisVarianceSlope(noises: LineNoise[], residuals: Float64Array[], covariates: VarianceCovariate[]): number {
-  const innovations = residuals.map((r, l) => noises[l].whitener.whiten(r))
-  const pooled = pooledVarianceSlope(innovations, covariates.map((c) => c.values))
+function axisVarianceSlope(lines: VarianceLine[]): number {
+  const pooled = pooledVarianceSlope(lines)
   return pooled.statistic > VARIANCE_CRITICAL ? pooled.slope : 0
 }
 
@@ -1442,7 +1454,11 @@ function jointFit(
   })
   const ar1 = inBases.map((b, k) => fitNoise(b, residuals1[k]))
   const covariates = inBases.map((b) => jointCovariate(b.rec, chosen, first.tauS))
-  const slope1 = axisVarianceSlope(ar1, residuals1, covariates)
+  const slope1 = axisVarianceSlope(
+    inBases.map((b, k) =>
+      varianceLine(b, ar1[k], meanColumns(b, first.tauS, ringColumns(depositTimes(b.rec), first.frequencyHz, first.dampingRatio)), covariates[k]),
+    ),
+  )
   const noise1 = slope1 === 0 ? ar1 : inBases.map((b, k) => noiseModel(b, ar1[k].fit, slope1, covariates[k]))
   const joint = varproFit(
     inBases,

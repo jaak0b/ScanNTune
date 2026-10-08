@@ -18,13 +18,15 @@ import { analyzeTracedLine } from '../../../src/engine/is/ringAnalyzer'
 import { defaultIsTestRequest, fitSpecToPrinter } from '../../../src/engine/is/types'
 import { defaultPrinterProfile } from '../../../src/engine/gcode/profileTypes'
 import { simulateAxis } from '../../helpers/isTraceSim'
+import { mulberry32 } from '../../../src/engine/math'
 
 describe('pooledVarianceSlope', () => {
   it('recovers the variance ratio of two groups of innovations as e^b', () => {
-    // Four innovations of square 1 at g = 0 and four of square 4 at g = 1: the likelihood is
-    // maximized where the variance ratio e^b equals the ratio of mean squares, 4, so b = ln 4 =
-    // 1.386294; the likelihood ratio of b = 0 is 8 ln(20 / 8) - 4 ln 4 = 1.785148 (hand-computed).
-    const result = pooledVarianceSlope([[1, -1, 1, -1, 2, -2, 2, -2]], [[0, 0, 0, 0, 1, 1, 1, 1]])
+    // Four innovations of square 1 at g = 0 and four of square 4 at g = 1, the mean known (no
+    // columns): the likelihood is maximized where the variance ratio e^b equals the ratio of mean
+    // squares, 4, so b = ln 4 = 1.386294; the likelihood ratio of b = 0 is
+    // 8 ln(20 / 8) - 4 ln 4 = 1.785148 (hand-computed).
+    const result = pooledVarianceSlope([{ y: [1, -1, 1, -1, 2, -2, 2, -2], columns: [], covariate: [0, 0, 0, 0, 1, 1, 1, 1] }])
     expect(result.slope).toBeCloseTo(1.386294, 5)
     expect(result.statistic).toBeCloseTo(1.785148, 5)
   })
@@ -32,16 +34,91 @@ describe('pooledVarianceSlope', () => {
   it('pools the lines, each with its own level', () => {
     // The same pattern on two lines whose levels differ by a factor 100 in variance: the shared
     // slope is still ln 4 and the statistic doubles.
-    const result = pooledVarianceSlope(
-      [[1, -1, 1, -1, 2, -2, 2, -2], [10, -10, 10, -10, 20, -20, 20, -20]],
-      [[0, 0, 0, 0, 1, 1, 1, 1], [0, 0, 0, 0, 1, 1, 1, 1]],
-    )
+    const result = pooledVarianceSlope([
+      { y: [1, -1, 1, -1, 2, -2, 2, -2], columns: [], covariate: [0, 0, 0, 0, 1, 1, 1, 1] },
+      { y: [10, -10, 10, -10, 20, -20, 20, -20], columns: [], covariate: [0, 0, 0, 0, 1, 1, 1, 1] },
+    ])
     expect(result.slope).toBeCloseTo(1.386294, 5)
     expect(result.statistic).toBeCloseTo(3.570297, 5)
   })
 
+  it('estimates the slope after the mean columns, the group means removed by restricted likelihood', () => {
+    // Two groups of four at g = 0 and g = 1, each with its own mean (one indicator column per
+    // group), deviations +-1 and +-2 around means 5 and -3. Each group's mean takes one degree of
+    // freedom from its 4 samples, so the restricted likelihood equates the variance ratio e^b to
+    // the ratio of the groups' sums of squares over their 3 residual degrees of freedom: 16 / 4,
+    // b = ln 4 = 1.386294, and the ratio statistic of b = 0 is 6 ln(20 / 8) - 3 ln 4 = 1.338861
+    // (hand-computed). Treating the residuals as eight free innovations would report the
+    // statistic of the known-mean case, 1.785148.
+    const result = pooledVarianceSlope([
+      {
+        y: [6, 4, 6, 4, -1, -5, -1, -5],
+        columns: [
+          [1, 1, 1, 1, 0, 0, 0, 0],
+          [0, 0, 0, 0, 1, 1, 1, 1],
+        ],
+        covariate: [0, 0, 0, 0, 1, 1, 1, 1],
+      },
+    ])
+    expect(result.slope).toBeCloseTo(1.386294, 5)
+    expect(result.statistic).toBeCloseTo(1.338861, 5)
+  })
+
   it('reports no slope and no evidence when the deficit vanishes', () => {
-    expect(pooledVarianceSlope([[1, -2, 3]], [[0, 0, 0]])).toEqual({ slope: 0, statistic: 0 })
+    expect(pooledVarianceSlope([{ y: [1, -2, 3], columns: [], covariate: [0, 0, 0] }])).toEqual({ slope: 0, statistic: 0 })
+  })
+
+  // Ten lines of 120 samples whose covariate g = e^(-i / 8) decays from the first sample, as the
+  // corner deficit does, with mean columns concentrated where g is large: a constant, a ramp, g
+  // itself and a decaying quadrature pair, as the corner model and a ring are. The fitted mean
+  // absorbs more of the noise where those columns live, so residuals there are smaller than the
+  // noise even when its variance is constant.
+  function cornerShapedLines(rnd: () => number, trueSlope: number) {
+    const m = 120
+    const g = Float64Array.from({ length: m }, (_, i) => Math.exp(-i / 8))
+    const columns = [
+      Float64Array.from({ length: m }, () => 1),
+      Float64Array.from({ length: m }, (_, i) => i / m),
+      g,
+      Float64Array.from({ length: m }, (_, i) => Math.exp(-i / 15) * Math.cos(0.6 * i)),
+      Float64Array.from({ length: m }, (_, i) => Math.exp(-i / 15) * Math.sin(0.6 * i)),
+    ]
+    const normal = () => Math.sqrt(-2 * Math.log(1 - rnd())) * Math.cos(2 * Math.PI * rnd())
+    return Array.from({ length: 10 }, (_, l) => ({
+      y: Float64Array.from({ length: m }, (_, i) => 3 * columns[2][i] - l * columns[1][i] + Math.exp((trueSlope * g[i]) / 2) * normal()),
+      columns,
+      covariate: g,
+    }))
+  }
+
+  it('keeps the false alarm rate of the constant-variance test nominal when the mean columns share the covariate shape', () => {
+    // 200 replicates at a constant variance, tested at the 5% level (chi2_1 critical value
+    // 3.841459): the rejection count is Binomial(200, 0.05), mean 10, and [3, 19] holds it with
+    // probability 0.995. A slope estimated from the residuals as free innovations, blind to the
+    // mean's leverage, rejects in 97 of these replicates and reads the slope near -0.44. The
+    // slope estimate's SD is near 0.27 per replicate, so its mean over 200 replicates has a
+    // standard error near 0.019, and 0.1 is five of them.
+    const rnd = mulberry32(20261008)
+    const results = Array.from({ length: 200 }, () => pooledVarianceSlope(cornerShapedLines(rnd, 0)))
+    const rejections = results.filter((r) => r.statistic > 3.841459).length
+    const meanSlope = results.reduce((s, r) => s + r.slope, 0) / results.length
+    expect(rejections).toBeGreaterThanOrEqual(3)
+    expect(rejections).toBeLessThanOrEqual(19)
+    expect(Math.abs(meanSlope)).toBeLessThan(0.1)
+  })
+
+  it('still detects and recovers a real variance slope on the same design', () => {
+    // A true slope of 1.5 (the innovation variance e^1.5 = 4.5 times larger at the corner): its
+    // estimate's SD is near 0.27 per replicate, so the mean of 40 replicates lies within 0.2 of
+    // 1.5 (about five standard errors). The test of b = 0 at the 0.1% level of the analysis
+    // (critical value 10.827566) has a power near 0.99 here (mean statistic near 42), so at least
+    // 37 of 40 replicates reject. A slope read from the residuals as free innovations comes out
+    // near 0.94 on this design.
+    const rnd = mulberry32(20261009)
+    const results = Array.from({ length: 40 }, () => pooledVarianceSlope(cornerShapedLines(rnd, 1.5)))
+    const meanSlope = results.reduce((s, r) => s + r.slope, 0) / results.length
+    expect(Math.abs(meanSlope - 1.5)).toBeLessThan(0.2)
+    expect(results.filter((r) => r.statistic > 10.827566).length).toBeGreaterThanOrEqual(37)
   })
 })
 

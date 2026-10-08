@@ -24,7 +24,8 @@ import type { SampleTimes } from './ringRegressors'
 //
 // The innovation scale is the multiplicative variance function of A. C. Harvey ("Estimating
 // regression models with multiplicative heteroscedasticity", Econometrica 44(3), 1976, 461-465),
-// log sigma_t^2 = a + b g(t), applied to the AR innovations: the bead right after a corner, where
+// log sigma_t^2 = a + b g(t), its slope estimated by restricted maximum likelihood
+// (pooledVarianceSlope), applied to the AR innovations: the bead right after a corner, where
 // the extruded flow lags the commanded flow, is rougher than the steady bead. Scaling the
 // innovations rather than the observations keeps the whitening one exact lower-triangular
 // operator (the AR filter, then a diagonal), so the ring columns keep their closed-form whitening.
@@ -313,74 +314,139 @@ export function noiseModel(
   }
 }
 
+/** One line of the variance function's fit: its observations and mean-model columns, both
+ *  whitened by the line's AR innovations operator (any basis of the columns' span; none for a
+ *  known mean), and the covariate g at each sample. */
+export interface VarianceLine {
+  y: ArrayLike<number>
+  columns: ArrayLike<number>[]
+  covariate: ArrayLike<number>
+}
+
+/** A line's restricted deviance at one slope, with its gradient and expected curvature in b. */
+interface RestrictedTerms {
+  value: number
+  gradient: number
+  information: number
+}
+
+/** A line's fixed parts of the restricted likelihood: the orthonormal mean columns, the residual
+ *  degrees of freedom and the covariate's sum. */
+interface RestrictedLine {
+  y: Float64Array
+  q0: Float64Array[]
+  g: Float64Array
+  dof: number
+  sumG: number
+}
+
 /**
- * The variance-function slope b shared by an axis's lines (Harvey 1976): the maximum likelihood
- * estimate from each line's unit innovations e_l and flow-lag deficit g_l, every line's level
- * profiled out, i.e. the minimizer of sum_l [m_l ln(sum_t e^2 e^(-b g) / m_l) + b sum_t g], a
- * convex function of b, by Newton's method with step halving; and the likelihood ratio statistic
- * of b = 0, chi2_1 under a constant innovation variance. One slope for the axis, because the
- * starved bead after a corner is one mechanism of the print on every line; per line the slope is
- * not identified when the deficit is concentrated on a few samples.
+ * The restricted deviance of one line at slope b: with weights w = e^(-b g), the weighted least
+ * squares residual r of the observations on the mean columns, S = sum w r^2, and
+ * (m - k) ln(S / (m - k)) + b sum g + ln det(X' W X), the line's level profiled out. Its gradient
+ * is sum g (1 - h) - (m - k) sum g w r^2 / S, with h the leverages of the weighted design, and its
+ * expected curvature g' M g - (sum g (1 - h))^2 / (m - k), with M the elementwise square of the
+ * residual projector I - H (the restricted Fisher information of Verbyla 1993, the level
+ * profiled out). Null when the weighted design loses a column to rounding.
  */
-export function pooledVarianceSlope(
-  innovations: ArrayLike<number>[],
-  deficits: ArrayLike<number>[],
-): { slope: number; statistic: number } {
-  const objective = (b: number) => {
-    let total = 0
-    innovations.forEach((e, l) => {
-      const g = deficits[l]
-      let s0 = 0
-      let G = 0
-      for (let i = 0; i < e.length; i++) {
-        s0 += e[i] * e[i] * Math.exp(-b * g[i])
-        G += g[i]
-      }
-      total += e.length * Math.log(s0 / e.length) + b * G
-    })
+function restrictedTerms(line: RestrictedLine, b: number): RestrictedTerms | null {
+  const { y, q0, g, dof, sumG } = line
+  const m = y.length
+  const d = Float64Array.from(g, (v) => Math.exp((-b * v) / 2))
+  const weighted = q0.map((q) => Float64Array.from(q, (v, i) => v * d[i]))
+  const Q = orthonormalBasis(weighted)
+  if (Q.length !== q0.length) return null
+  let logDet = 0
+  for (let j = 0; j < Q.length; j++) logDet += 2 * Math.log(Math.abs(dot(Q[j], weighted[j])))
+  const r = residualize(Float64Array.from(y, (v, i) => v * d[i]), Q)
+  const S = dot(r, r)
+  if (!(S > 0)) return null
+  const h = new Float64Array(m)
+  for (const q of Q) for (let i = 0; i < m; i++) h[i] += q[i] * q[i]
+  let gr2 = 0
+  let cross = 0
+  let diagonal = 0
+  for (let i = 0; i < m; i++) {
+    gr2 += g[i] * r[i] * r[i]
+    cross += g[i] * (1 - h[i])
+    diagonal += g[i] * g[i] * (1 - 2 * h[i])
+  }
+  // g' H o H g = || Q' diag(g) Q ||_F^2.
+  let offDiagonal = 0
+  for (let j = 0; j < Q.length; j++) {
+    for (let k = 0; k <= j; k++) {
+      let c = 0
+      for (let i = 0; i < m; i++) c += g[i] * Q[j][i] * Q[k][i]
+      offDiagonal += (j === k ? 1 : 2) * c * c
+    }
+  }
+  return {
+    value: dof * Math.log(S / dof) + b * sumG + logDet,
+    gradient: cross - (dof * gr2) / S,
+    information: diagonal + offDiagonal - (cross * cross) / dof,
+  }
+}
+
+/**
+ * The variance-function slope b shared by an axis's lines (the multiplicative variance function of
+ * Harvey 1976): the restricted maximum likelihood estimate (H. D. Patterson and R. Thompson,
+ * "Recovery of inter-block information when block sizes are unequal", Biometrika 58(3), 1971,
+ * 545-554; for a variance function A. P. Verbyla, "Modelling variance heterogeneity: residual
+ * maximum likelihood and diagnostics", JRSS B 55(2), 1993, 493-508), every line's level profiled
+ * out, by Fisher scoring with step halving (G. K. Smyth, "An efficient algorithm for REML in
+ * heteroscedastic regression", JCGS 11(4), 2002, 836-847); and the restricted likelihood ratio
+ * statistic of b = 0, chi2_1 under a constant innovation variance. The restricted likelihood is
+ * that of the residuals after the mean columns: where the columns concentrate, as the corner
+ * model and the ring do at the corner, the fitted mean absorbs part of the noise and the residuals
+ * fall short of it, which a likelihood of the residuals as free innovations reads as a lower
+ * variance there. One slope for the axis, because the starved bead after a corner is one
+ * mechanism of the print on every line; per line the slope is not identified when the deficit is
+ * concentrated on a few samples. A line whose columns leave no residual degree of freedom carries
+ * no information on the variance and is left out.
+ */
+export function pooledVarianceSlope(lines: VarianceLine[]): { slope: number; statistic: number } {
+  const anyDeficit = lines.some((l) => Array.prototype.some.call(l.covariate, (v: number) => v !== 0))
+  if (!anyDeficit) return { slope: 0, statistic: 0 }
+  const prepared: RestrictedLine[] = []
+  for (const l of lines) {
+    const q0 = orthonormalBasis(l.columns)
+    const dof = l.y.length - q0.length
+    if (dof <= 0) continue
+    const g = Float64Array.from(l.covariate)
+    prepared.push({ y: Float64Array.from(l.y), q0, g, dof, sumG: g.reduce((s, v) => s + v, 0) })
+  }
+  const evaluate = (b: number): RestrictedTerms | null => {
+    const total: RestrictedTerms = { value: 0, gradient: 0, information: 0 }
+    for (const line of prepared) {
+      const t = restrictedTerms(line, b)
+      if (t === null) return null
+      total.value += t.value
+      total.gradient += t.gradient
+      total.information += t.information
+    }
     return total
   }
-  const anyDeficit = deficits.some((g) => Array.prototype.some.call(g, (v: number) => v !== 0))
-  if (!anyDeficit) return { slope: 0, statistic: 0 }
   let b = 0
-  let value = objective(0)
-  const atZero = value
+  let current = evaluate(0)
+  if (current === null) return { slope: 0, statistic: 0 }
+  const atZero = current.value
   for (let iter = 0; iter < 50; iter++) {
-    let gradient = 0
-    let curvature = 0
-    innovations.forEach((e, l) => {
-      const g = deficits[l]
-      let s0 = 0
-      let s1 = 0
-      let s2 = 0
-      let G = 0
-      for (let i = 0; i < e.length; i++) {
-        const w = e[i] * e[i] * Math.exp(-b * g[i])
-        s0 += w
-        s1 += w * g[i]
-        s2 += w * g[i] * g[i]
-        G += g[i]
-      }
-      const m = e.length
-      gradient += G - (m * s1) / s0
-      curvature += (m * (s2 * s0 - s1 * s1)) / (s0 * s0)
-    })
-    if (!(curvature > 0)) break
-    let step = -gradient / curvature
+    if (!(current.information > 0)) break
+    let step = -current.gradient / current.information
     let next = b + step
-    let nextValue = objective(next)
-    while (!(nextValue <= value) && Math.abs(step) > 1e-12) {
+    let candidate = evaluate(next)
+    while (!(candidate !== null && candidate.value <= current.value) && Math.abs(step) > 1e-12) {
       step /= 2
       next = b + step
-      nextValue = objective(next)
+      candidate = evaluate(next)
     }
-    if (!(nextValue <= value)) break
+    if (!(candidate !== null && candidate.value <= current.value)) break
     const done = Math.abs(next - b) < 1e-10 * Math.max(1, Math.abs(b))
     b = next
-    value = nextValue
+    current = candidate
     if (done) break
   }
-  return { slope: b, statistic: Math.max(0, atZero - value) }
+  return { slope: b, statistic: Math.max(0, atZero - current.value) }
 }
 
 /** The whitened null design of a line at tau, with optional further raw null columns. */

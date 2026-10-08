@@ -475,12 +475,24 @@ coverage under bilinear noise fell to 178 of 200.
 The bead right after a corner, where the extruded flow lags the commanded flow, is rougher than the
 steady bead. The innovation variance follows the multiplicative variance function log sigma_t^2 = a + b
 g(t) (A. C. Harvey, Econometrica 44, 1976), with g the flow-lag deficit 1 - q / v (or the lobe shape for
-bead drag), one slope b per axis by pooled maximum likelihood. It scales the AR innovations rather than
-the observations, so the whitening stays one exact lower-triangular operator and the ring columns keep
-their closed-form whitening. The slope is used only when its chi2_1 likelihood ratio test rejects a
-constant variance at alpha, and still rejects after each line's strongest ring candidate is removed (a
-ring left in the null residual also raises the early variance). Doubled early noise: 0 of 60 axes
-accepted (before: 1 false acceptance); quadrupled: 21 of 40 axis detections, 0 acceptances.
+bead drag), one slope b per axis. It scales the AR innovations rather than the observations, so the
+whitening stays one exact lower-triangular operator and the ring columns keep their closed-form
+whitening. The slope is used only when its chi2_1 likelihood ratio test rejects a constant variance at
+alpha, and still rejects after each line's strongest ring candidate joins the mean model (a ring left
+in the null residual also raises the early variance). Doubled early noise: 0 of 60 axes accepted
+(before: 1 false acceptance); quadrupled: 21 of 40 axis detections, 0 acceptances.
+
+The slope and its test use the pooled restricted (residual) maximum likelihood of the AR-whitened data
+given each line's mean model, every line's level profiled out (Patterson and Thompson, Biometrika 58,
+1971; for a variance function A. P. Verbyla, JRSS B 55, 1993), solved by Fisher scoring (G. K. Smyth,
+JCGS 11, 2002). The mean model is the line's null design (and, in the ring check and the joint fit,
+the ring columns at the candidate or the first-step estimate). The corner-model columns have the
+covariate's own shape (the bead-drag lobe is the covariate; the flow-lag column is its negative), and
+the ring sits at the corner too, so the fitted mean absorbs part of the noise exactly where g is large.
+The plain maximum likelihood of the fitted residuals read that shortfall as a lower early variance:
+on S3 (constant variance) the joint fit's test fired on 3 of 200 seeds, all with negative slopes, and
+its mean statistic was 1.59 instead of chi2_1's 1. The restricted likelihood accounts for each
+sample's leverage and the degrees of freedom the mean takes.
 
 A slope is defined only against the covariate it was estimated on, so each line's noise model carries
 that covariate (corner model, scale and values), and every rebuild of the noise model applies the slope
