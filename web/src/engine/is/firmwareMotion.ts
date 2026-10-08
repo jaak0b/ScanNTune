@@ -11,6 +11,20 @@ export function disableShapingCommands(profile: PrinterProfile): string[] {
 }
 
 /**
+ * A zero-length dwell that brings the motion planner to a full stop: Klipper's G4 flushes the
+ * lookahead queue so the last queued move decelerates to zero (toolhead.dwell ->
+ * get_last_move_time -> lookahead.flush), Marlin's G4 calls planner.synchronize(), and
+ * RepRapFirmware's G4 waits for standstill once motion was commanded (DoDwell). The next move
+ * then starts from rest under the corner limit in force when it is queued, like the first move
+ * of any print.
+ */
+export const PLANNER_STOP = 'G4 P0'
+
+/** A persisted speed factor scales every commanded feed rate, which would scale the measured
+ *  ringing frequency of both tiers alike; all three firmwares accept M220 S100. */
+export const SPEED_FACTOR_RESET = 'M220 S100'
+
+/**
  * Marlin's planner junction deviation formula (planner.cpp): the fastest speed a junction is
  * taken at satisfies vmax_junction^2 = a * J * sin_theta_d2 / (1 - sin_theta_d2), with
  * sin_theta_d2 = sqrt(0.5 * (1 - cos_theta)) and cos_theta the cosine between the reversed
@@ -55,6 +69,24 @@ export function maxCornerSpeedMmS(profile: PrinterProfile, accelMmS2: number): n
 }
 
 /**
+ * The fastest corner Klipper's planner lets a 90 degree junction take between moves of the
+ * given length, rounded down to 0.1 mm/s, or null on other firmwares. Klipper's
+ * Move.calc_junction limits every junction by the "approximated centripetal velocity" of both
+ * moves, v^2 <= 0.5 * move_d * accel * tan(theta / 2) ("approximated circle must contact
+ * moves no further than mid-move"), which at 90 degrees (tan 45 = 1) is v^2 <= 0.5 * d * a.
+ * The binding move is the shortest run-up leg (the prime-to-corner move); the measured
+ * segment after the corner is far longer.
+ */
+export function klipperCentripetalCornerCapMmS(
+  profile: PrinterProfile,
+  legMm: number,
+  accelMmS2: number,
+): number | null {
+  if (profile.firmware !== 'Klipper') return null
+  return Math.floor(Math.sqrt(0.5 * legMm * accelMmS2) * 10) / 10
+}
+
+/**
  * The lowest acceleration at which the firmware's corner limit can express `cornerSpeedMmS`,
  * rounded up to a whole mm/s^2, or null when the firmware sets no bound: the inverse of
  * maxCornerSpeedMmS.
@@ -69,46 +101,79 @@ export function minAccelForCornerSpeedMmS2(
   )
 }
 
+/** A limit value rounded UP to 3 decimals and printed without trailing zeros, so the printed
+ *  limit is never below the speed it has to pass. */
+function limitText(v: number): string {
+  return String(Math.ceil(v * 1000 - 1e-9) / 1000)
+}
+
 /**
- * Motion limits for the test, per firmware, derived from the spec's corner speed (the TOP
- * rung of the corner-speed excitation ladder) so every run-up cruise passes its corner
- * without deceleration; the limit is an upper bound, so the ladder's slower rungs pass
- * unbraked under the same single override on all three firmwares:
- * - Klipper: SQUARE_CORNER_VELOCITY is the native semantics; any junction entered at or
- *   below it passes unbraked, so it is set to the corner speed.
- * - Marlin classic jerk: M205 X/Y is the allowed instantaneous per-axis velocity change
- *   in mm/s. For an exact 90 degree corner the per-axis delta-v equals the corner speed,
- *   so X/Y jerk set to the corner speed coincides with it. Junction-deviation
- *   builds ignore X/Y jerk, so the junction deviation that passes the same corner is also
- *   emitted (see marlinJunctionDeviationMm), on its own M205 line so a classic build
- *   rejecting J does not take the jerk values with it. The corner speed passed in must already respect
- *   maxCornerSpeedMmS, which the spec fit guarantees.
- * - RepRapFirmware: M566 is classic per-axis jerk in mm/min; the same 90 degree
- *   coincidence applies, so the value is the corner speed times 60.
- * The acceleration is set as the print and travel acceleration (Klipper ACCEL, M204 P/T)
- * and, on Marlin and RepRapFirmware, also as the per-axis maximum (M201 X/Y in mm/s^2):
- * the per-axis maximum caps every move on those firmwares, so a stock value below the test
- * acceleration would stretch the modelled ramps. Klipper's ACCEL is itself the maximum.
- * The maximum velocity is raised to the fastest commanded move of the print (rounded up
- * to a whole mm/s), so a configured maximum below a tier speed can never clamp a
- * commanded feedrate: Klipper VELOCITY, Marlin M203 in mm/s, and
- * RepRapFirmware M203 in mm/min.
+ * The commands that set the firmware's corner limit to pass a 90 degree corner at exactly
+ * `cornerSpeedMmS` without braking; the single home of that mapping, used for the test's
+ * per-line raise and for setting the profile's own value back:
+ * - Klipper: SET_VELOCITY_LIMIT SQUARE_CORNER_VELOCITY is the native semantics; a 90 degree
+ *   junction entered at or below it passes unbraked. Each queued move keeps the junction
+ *   deviation current when it was queued (Move.__init__), and the command does not flush.
+ * - Marlin classic jerk: M205 X/Y is the allowed instantaneous per-axis velocity change in
+ *   mm/s, per motor on CoreXY. For an exact 90 degree corner the per-axis (Cartesian) change
+ *   equals the corner speed, and on CoreXY the reversing motor counts max(|v_exit|, |v_entry|)
+ *   = the corner speed by the planner's reversal rule, so X/Y jerk set to the corner speed
+ *   passes it. Junction-deviation builds ignore X/Y jerk, so the junction deviation that passes
+ *   the same corner is also emitted (see marlinJunctionDeviationMm), on its own M205 line so a
+ *   classic build rejecting J does not take the jerk values with it. M205 does not
+ *   synchronize; it applies to blocks planned after it.
+ * - RepRapFirmware: M566 is per-axis jerk in mm/min, applied to the Cartesian move direction
+ *   (DDA::MatchSpeeds works on the user-space direction vector, also on CoreXY), so the value
+ *   is the corner speed times 60.
+ * Values are rounded up, so the printed limit never brakes the commanded corner.
+ */
+export function junctionLimitCommands(
+  profile: PrinterProfile,
+  cornerSpeedMmS: number,
+  accelMmS2: number,
+): string[] {
+  if (profile.firmware === 'Marlin') {
+    const jd = Math.ceil(marlinJunctionDeviationMm(cornerSpeedMmS, accelMmS2) * 1000 - 1e-9) / 1000
+    return [
+      `M205 X${limitText(cornerSpeedMmS)} Y${limitText(cornerSpeedMmS)}`,
+      `M205 J${jd.toFixed(3)}`,
+    ]
+  }
+  if (profile.firmware === 'RepRapFirmware') {
+    const perMinute = limitText(cornerSpeedMmS * 60)
+    return [`M566 X${perMinute} Y${perMinute}`]
+  }
+  return [`SET_VELOCITY_LIMIT SQUARE_CORNER_VELOCITY=${limitText(cornerSpeedMmS)}`]
+}
+
+/**
+ * Motion limits set once in the test's preamble. The acceleration is set as the print and
+ * travel acceleration (Klipper ACCEL, M204 P/T) and, on Marlin and RepRapFirmware, also as
+ * the per-axis maximum (M201 X/Y in mm/s^2): the per-axis maximum caps every move on those
+ * firmwares, so a stock value below the test acceleration would stretch the modelled ramps.
+ * Klipper's ACCEL is itself the maximum, and MINIMUM_CRUISE_RATIO=0 keeps its ramps the plain
+ * trapezoids the analysis models. The maximum velocity is raised to the fastest commanded move
+ * of the print (rounded up to a whole mm/s), so a configured maximum below a tier speed can
+ * never clamp a commanded feedrate: Klipper VELOCITY, Marlin M203 in mm/s, and RepRapFirmware
+ * M203 in mm/min. The speed factor is reset to 100%. The corner limit is the profile's own
+ * square corner velocity (Marlin jerk plus derived junction deviation): the preamble, the base
+ * layers, the band perimeters and the band raster all run at it, and each test line raises it
+ * to its own corner speed only for its run-up, corner and measured segment.
  */
 export function isMotionLimitCommands(
   profile: PrinterProfile,
   accelMmS2: number,
-  cornerSpeedMmS: number,
   maxSpeedMmS: number,
 ): string[] {
-  const scv = cornerSpeedMmS
   const vMax = Math.ceil(maxSpeedMmS)
+  const corner = junctionLimitCommands(profile, profile.squareCornerVelocityMmS, accelMmS2)
   if (profile.firmware === 'Marlin') {
     return [
       `M203 X${vMax} Y${vMax}`,
       `M201 X${accelMmS2} Y${accelMmS2}`,
       `M204 P${accelMmS2} T${accelMmS2}`,
-      `M205 X${scv} Y${scv}`,
-      `M205 J${marlinJunctionDeviationMm(scv, accelMmS2).toFixed(3)}`,
+      SPEED_FACTOR_RESET,
+      ...corner,
     ]
   }
   if (profile.firmware === 'RepRapFirmware') {
@@ -116,11 +181,13 @@ export function isMotionLimitCommands(
       `M203 X${vMax * 60} Y${vMax * 60}`,
       `M201 X${accelMmS2} Y${accelMmS2}`,
       `M204 P${accelMmS2} T${accelMmS2}`,
-      `M566 X${scv * 60} Y${scv * 60}`,
+      SPEED_FACTOR_RESET,
+      ...corner,
     ]
   }
   return [
-    `SET_VELOCITY_LIMIT VELOCITY=${vMax} ACCEL=${accelMmS2} SQUARE_CORNER_VELOCITY=${scv} ` +
-      'MINIMUM_CRUISE_RATIO=0',
+    `SET_VELOCITY_LIMIT VELOCITY=${vMax} ACCEL=${accelMmS2} MINIMUM_CRUISE_RATIO=0`,
+    SPEED_FACTOR_RESET,
+    ...corner,
   ]
 }

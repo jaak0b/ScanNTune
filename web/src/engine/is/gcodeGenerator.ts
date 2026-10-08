@@ -34,7 +34,12 @@ import {
 } from '../gcode/emitter'
 import { isCouponGeometry, type IsSegment, MIN_CORNER_SPEED_MM_S } from './couponGeometry'
 import { dipsForMove, extrudeWithDips, type PrintedBead } from './crossings'
-import { disableShapingCommands, isMotionLimitCommands } from './firmwareMotion'
+import {
+  disableShapingCommands,
+  isMotionLimitCommands,
+  junctionLimitCommands,
+  PLANNER_STOP,
+} from './firmwareMotion'
 import {
   bandTopWarning,
   fitSpecToPrinter,
@@ -47,12 +52,15 @@ import {
 export { EDGE_MARGIN_MM, HIGH_FLOW_WARNING_THRESHOLD_MM3_S }
 
 /**
- * Firmware state the test leaves changed: shaping and pressure advance are switched off and
- * the motion limits are raised for the whole print; a firmware restart brings all of it back.
+ * Firmware state the test leaves changed: shaping and pressure advance are switched off, the
+ * speed factor is reset to 100%, and the motion limits are replaced (the acceleration, the
+ * velocity ceiling, and the corner limit, which ends the print at the profile's own value); a
+ * firmware restart brings all of it back.
  */
 export const IS_OVERRIDDEN_SETTINGS: readonly OverriddenSetting[] = couponOverriddenSettings([
   'inputShaping',
   'pressureAdvance',
+  'speedFactor',
 ])
 
 /**
@@ -133,7 +141,7 @@ export const IS_MEASURED_LAYERS = 1
  * feedrate, coast the last stretch (zero-E move fed by residual pressure), then wipe on
  * retract, running the retract during a short move back along the just-printed tail. All
  * three are standard slicer end-of-line features; the E manipulation only starts past the
- * measured segment.
+ * measured segment. `beforeWipe` lines are emitted between the coast and the wipe.
  */
 function finishLine(
   e: Emitter,
@@ -144,6 +152,7 @@ function finishLine(
   ox: number,
   oy: number,
   speedMmS: number,
+  beforeWipe: readonly string[],
 ): void {
   const tailLen = Math.hypot(tail.x1 - tail.x0, tail.y1 - tail.y0)
   const ux = (tail.x1 - tail.x0) / tailLen
@@ -159,6 +168,7 @@ function finishLine(
   e.lines.push(`G1 X${endX.toFixed(3)} Y${endY.toFixed(3)} F${feed}`)
   e.x = endX
   e.y = endY
+  e.lines.push(...beforeWipe)
 
   const wipeMm = Math.min(WIPE_MM, tailLen)
   const wipeX = endX - ux * wipeMm
@@ -204,15 +214,14 @@ function emitIsGcode(profile: PrinterProfile, filament: FilamentProfile, spec: I
           `${spec.cornerSpeedMmS} mm/s across the ${spec.linesPerSpeed} lines of each tier, ` +
           'fastest corners printed last',
       ],
-      // The test rings the frame on purpose: the spec's acceleration and corner speed
-      // replace the profile's limits for the whole print, and the velocity ceiling is
-      // raised to the fastest commanded move so a low configured maximum can never clamp
-      // a tier.
+      // The test runs at the profile's acceleration and corner limit; only each test line
+      // raises the corner limit to its own corner speed (see the line loop). The velocity
+      // ceiling is raised to the fastest commanded move so a low configured maximum can
+      // never clamp a tier.
       {
         motionLines: isMotionLimitCommands(
           profile,
           spec.accelMmS2,
-          spec.cornerSpeedMmS,
           Math.max(...spec.speedsMmS, profile.travelSpeedMmS),
         ),
       },
@@ -287,20 +296,27 @@ function emitIsGcode(profile: PrinterProfile, filament: FilamentProfile, spec: I
       const speed = pedestal
         ? Math.min(line.speedMmS, profile.firstLayerSpeedMmS)
         : line.speedMmS
-      // Each line cruises its run-up at its own rung of the corner-speed ladder; the
-      // emitted corner limit equals the TOP rung, an upper bound, so every slower rung
-      // passes the corner unbraked on all firmwares. A slower tier's ladder tops out at
-      // its own speed, so the run-up never outruns the line it feeds.
+      // Each line cruises its run-up at its own rung of the corner-speed ladder. A slower
+      // tier's ladder tops out at its own speed, so the run-up never outruns the line it
+      // feeds.
       const runUpSpeed = Math.min(line.cornerSpeedMmS, speed)
+      // The corner speed exactly as the run-up feed prints it, which the line's raised
+      // corner limit must pass.
+      const cornerFeedMmS = Math.round(runUpSpeed * 60) / 60
+      // Isolated kicks: the planner comes to rest before the travel and before the moving
+      // prime, so every move from rest starts under the profile's own corner limit, like
+      // the first move of any print, and no corner kick lands on a still-ringing rotor.
+      L.push(PLANNER_STOP)
       travel(e, profile, ox + line.prime.x0, oy + line.prime.y0)
       primeOnTheMove(e, profile, filament, width, ox + line.prime.x1, oy + line.prime.y1,
-        primeSpeed)
-      // Full-flow run-up straight into the corner at the corner speed: under
-      // the per-firmware junction limits this test emits (see isMotionLimitCommands for
-      // the Klipper SCV, Marlin classic-jerk plus junction-deviation, and
-      // RepRapFirmware jerk reasoning), a 90 degree corner entered at that velocity is
-      // taken without deceleration, so the corner dumps no pressure and the bead stays
-      // continuous through it.
+        primeSpeed, [PLANNER_STOP])
+      // Raise the corner limit to this line's own corner speed only now that the prime is
+      // queued: the prime-to-run-up junction is colinear, so the raised value governs the
+      // ringing corner alone (see junctionLimitCommands for the per-firmware semantics).
+      L.push(...junctionLimitCommands(profile, cornerFeedMmS, spec.accelMmS2))
+      // Full-flow run-up straight into the corner at the corner speed: under that limit a
+      // 90 degree corner entered at that velocity is taken without deceleration, so the
+      // corner dumps no pressure and the bead stays continuous through it.
       extrude(e, profile, filament, width, ox + line.runUp.x1, oy + line.runUp.y1, runUpSpeed)
       // Crossings over beads printed earlier this layer are taken at full flow, the way
       // grid infill crosses itself: the free beads must weld into the stiff grid, and
@@ -308,7 +324,12 @@ function emitIsGcode(profile: PrinterProfile, filament: FilamentProfile, spec: I
       // breaks the bead instead. The geometry guarantees every crossing lies beyond the
       // protected span, so the read window never sees the small crossing blob.
       extrude(e, profile, filament, width, ox + line.measured.x1, oy + line.measured.y1, speed)
-      finishLine(e, profile, filament, width, line.tail, ox, oy, speed)
+      // The coast ends at rest, then the corner limit goes back to the profile's value
+      // before the wipe, so the wipe's reversal and the next travel run under it.
+      finishLine(e, profile, filament, width, line.tail, ox, oy, speed, [
+        PLANNER_STOP,
+        ...junctionLimitCommands(profile, profile.squareCornerVelocityMmS, spec.accelMmS2),
+      ])
     }
     // M107 forces the fan off for the band; any fan state the user's start G-code set
     // is not restored.

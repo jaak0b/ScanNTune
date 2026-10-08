@@ -3,54 +3,97 @@ import { defaultPrinterProfile } from '../../../src/engine/gcode/profileTypes'
 import type { Firmware, PrinterProfile } from '../../../src/engine/gcode/profileTypes'
 import {
   isMotionLimitCommands,
+  junctionLimitCommands,
+  klipperCentripetalCornerCapMmS,
   marlinJunctionDeviationMm,
   maxCornerSpeedMmS,
   minAccelForCornerSpeedMmS2,
+  PLANNER_STOP,
 } from '../../../src/engine/is/firmwareMotion'
 
 function profileWith(firmware: Firmware): PrinterProfile {
+  // The default profile's own corner limit is a 5 mm/s square corner velocity.
   return { ...defaultPrinterProfile(), firmware }
 }
 
 describe('isMotionLimitCommands', () => {
-  it('uses native square corner velocity semantics on Klipper, with the raised ceiling', () => {
+  it('sets the Klipper ceiling and acceleration, resets the speed factor, and keeps the profile corner limit', () => {
     // The 160.4 mm/s fastest commanded move rounds up to a whole 161 mm/s ceiling. ACCEL is
     // Klipper's maximum acceleration itself, so no separate per-axis limit exists.
-    expect(isMotionLimitCommands(profileWith('Klipper'), 4000, 75, 160.4)).toEqual([
-      'SET_VELOCITY_LIMIT VELOCITY=161 ACCEL=4000 SQUARE_CORNER_VELOCITY=75 MINIMUM_CRUISE_RATIO=0',
+    expect(isMotionLimitCommands(profileWith('Klipper'), 4000, 160.4)).toEqual([
+      'SET_VELOCITY_LIMIT VELOCITY=161 ACCEL=4000 MINIMUM_CRUISE_RATIO=0',
+      'M220 S100',
+      'SET_VELOCITY_LIMIT SQUARE_CORNER_VELOCITY=5',
     ])
   })
-  it('emits Marlin per-axis acceleration, classic jerk, and the junction deviation on separate lines', () => {
-    // Marlin's planner takes a 90 degree junction at v^2 = a * J * (sqrt(2) + 1), so a 50 mm/s
-    // corner at 4000 mm/s^2 needs J = 2500 / (4000 * 2.41421356) = 0.25888 mm (hand-derived),
-    // printed as 0.259 and inside the 0.01 to 0.3 mm range M205 J accepts; on its own M205
-    // line so a classic build rejecting J keeps the X/Y jerk values. M203 is the velocity
-    // ceiling in mm/s, M201 the per-axis maximum acceleration in mm/s^2.
-    expect(isMotionLimitCommands(profileWith('Marlin'), 4000, 50, 160.4)).toEqual([
+  it('emits the Marlin ceiling, per-axis acceleration, speed factor, and the profile jerk with its junction deviation', () => {
+    // The profile's 5 mm/s corner at 4000 mm/s^2 would need J = 25 / (4000 * 2.41421) =
+    // 0.0026 mm, below the 0.01 mm M205 J accepts, so the lowest accepted value is emitted.
+    expect(isMotionLimitCommands(profileWith('Marlin'), 4000, 160.4)).toEqual([
       'M203 X161 Y161',
       'M201 X4000 Y4000',
       'M204 P4000 T4000',
-      'M205 X50 Y50',
-      'M205 J0.259',
+      'M220 S100',
+      'M205 X5 Y5',
+      'M205 J0.010',
     ])
   })
-  it('emits RepRapFirmware per-axis acceleration and jerk in mm/min matching the corner velocity', () => {
-    // Classic jerk: a 90 degree corner at 75 mm/s is a 75 mm/s per-axis velocity change,
-    // in M566 units 4500 mm/min; the M203 velocity ceiling is 161 mm/s, 9660 mm/min; M201
-    // takes mm/s^2.
-    expect(isMotionLimitCommands(profileWith('RepRapFirmware'), 4000, 75, 160.4)).toEqual([
+  it('emits the RepRapFirmware ceiling and acceleration and the profile jerk in mm/min', () => {
+    // The M203 velocity ceiling is 161 mm/s, 9660 mm/min; the profile's 5 mm/s corner is
+    // 300 mm/min of M566 jerk; M201 takes mm/s^2.
+    expect(isMotionLimitCommands(profileWith('RepRapFirmware'), 4000, 160.4)).toEqual([
       'M203 X9660 Y9660',
       'M201 X4000 Y4000',
       'M204 P4000 T4000',
-      'M566 X4500 Y4500',
+      'M220 S100',
+      'M566 X300 Y300',
     ])
   })
   it('raises the per-axis maximum before the print and travel acceleration on Marlin and RepRapFirmware', () => {
     for (const firmware of ['Marlin', 'RepRapFirmware'] as const) {
-      const lines = isMotionLimitCommands(profileWith(firmware), 20000, 75, 160.4)
+      const lines = isMotionLimitCommands(profileWith(firmware), 20000, 160.4)
       expect(lines.indexOf('M201 X20000 Y20000')).toBeGreaterThanOrEqual(0)
       expect(lines.indexOf('M201 X20000 Y20000')).toBeLessThan(lines.indexOf('M204 P20000 T20000'))
     }
+  })
+})
+
+describe('junctionLimitCommands', () => {
+  it('sets the Klipper square corner velocity to the corner speed', () => {
+    expect(junctionLimitCommands(profileWith('Klipper'), 75, 3000)).toEqual([
+      'SET_VELOCITY_LIMIT SQUARE_CORNER_VELOCITY=75',
+    ])
+  })
+  it('sets the Marlin jerk and, on its own line, the junction deviation that passes the corner', () => {
+    // 50 mm/s at 4000 mm/s^2: J = 2500 / (4000 * 2.41421356) = 0.25888 mm, rounded UP to 0.259
+    // so the printed J never brakes the corner.
+    expect(junctionLimitCommands(profileWith('Marlin'), 50, 4000)).toEqual([
+      'M205 X50 Y50',
+      'M205 J0.259',
+    ])
+    // 29.9 mm/s at 3000 mm/s^2 needs 0.12344 mm: rounded up to 0.124, not down to 0.123.
+    expect(junctionLimitCommands(profileWith('Marlin'), 29.9, 3000)).toEqual([
+      'M205 X29.9 Y29.9',
+      'M205 J0.124',
+    ])
+  })
+  it('rounds a fractional corner speed up, never below the commanded corner', () => {
+    // A rung fed at F2683 runs at 44.716667 mm/s; the printed limits are 44.717 mm/s and
+    // 2683 mm/min, and its junction deviation 0.27608 mm prints as 0.277.
+    const v = 2683 / 60
+    expect(junctionLimitCommands(profileWith('Klipper'), v, 3000)).toEqual([
+      'SET_VELOCITY_LIMIT SQUARE_CORNER_VELOCITY=44.717',
+    ])
+    expect(junctionLimitCommands(profileWith('Marlin'), v, 3000)).toEqual([
+      'M205 X44.717 Y44.717',
+      'M205 J0.277',
+    ])
+    expect(junctionLimitCommands(profileWith('RepRapFirmware'), v, 3000)).toEqual([
+      'M566 X2683 Y2683',
+    ])
+  })
+  it('stops the planner with a zero-length dwell', () => {
+    expect(PLANNER_STOP).toBe('G4 P0')
   })
 })
 
@@ -77,12 +120,12 @@ describe('maxCornerSpeedMmS', () => {
     expect(maxCornerSpeedMmS(profileWith('Marlin'), 20000)).toBe(120.3)
   })
   it('keeps the emitted J inside the accepted range at the cap', () => {
-    // At the 4000 mm/s^2 cap the exact requirement is 0.29973 mm, printed as 0.300: inside
-    // the range, never above it.
-    expect(isMotionLimitCommands(profileWith('Marlin'), 4000, 53.8, 150)).toContain('M205 J0.300')
+    // At the 3000 mm/s^2 cap of 46.6 mm/s the exact requirement is 0.29983 mm, printed as
+    // 0.300: inside the range, never above it.
+    expect(junctionLimitCommands(profileWith('Marlin'), 46.6, 3000)).toContain('M205 J0.300')
     for (const accel of [600, 3000, 4000, 7777, 20000]) {
       const cap = maxCornerSpeedMmS(profileWith('Marlin'), accel)!
-      const lines = isMotionLimitCommands(profileWith('Marlin'), accel, cap, 150)
+      const lines = junctionLimitCommands(profileWith('Marlin'), cap, accel)
       const j = lines.find((l) => l.startsWith('M205 J'))!
       expect(Number(j.replace('M205 J', '')), `${accel} mm/s^2`).toBeLessThanOrEqual(0.3)
     }
@@ -90,6 +133,19 @@ describe('maxCornerSpeedMmS', () => {
   it('sets no cap on Klipper or RepRapFirmware', () => {
     expect(maxCornerSpeedMmS(profileWith('Klipper'), 4000)).toBeNull()
     expect(maxCornerSpeedMmS(profileWith('RepRapFirmware'), 4000)).toBeNull()
+  })
+})
+
+describe('klipperCentripetalCornerCapMmS', () => {
+  it("caps a Klipper 90 degree corner at sqrt(0.5 * leg * accel), calc_junction's centripetal term", () => {
+    // 14 mm leg: sqrt(7000) = 83.67 mm/s at 1000 mm/s^2 and sqrt(21000) = 144.91 mm/s at
+    // 3000 mm/s^2, rounded down to 0.1 mm/s (hand-derived).
+    expect(klipperCentripetalCornerCapMmS(profileWith('Klipper'), 14, 1000)).toBe(83.6)
+    expect(klipperCentripetalCornerCapMmS(profileWith('Klipper'), 14, 3000)).toBe(144.9)
+  })
+  it('sets no centripetal cap on Marlin or RepRapFirmware', () => {
+    expect(klipperCentripetalCornerCapMmS(profileWith('Marlin'), 14, 1000)).toBeNull()
+    expect(klipperCentripetalCornerCapMmS(profileWith('RepRapFirmware'), 14, 1000)).toBeNull()
   })
 })
 

@@ -204,12 +204,29 @@ describe('fitSpecToPrinter firmware fit', () => {
     expect(fitted(hot, withFirmware('Marlin')).cornerSpeedMmS).toBe(100)
   })
 
-  it('never caps Klipper or RepRapFirmware', () => {
+  it('leaves the default corner speed on Klipper and RepRapFirmware at 3000 mm/s^2', () => {
+    // Klipper's centripetal cap over the 14 mm shortest run-up is 144.9 mm/s here.
     for (const firmware of ['Klipper', 'RepRapFirmware'] as const) {
       const { spec, notes } = fitSpecToPrinter(request, withFirmware(firmware))
       expect(spec.cornerSpeedMmS).toBe(100)
       expect(notes).toEqual([])
     }
+  })
+
+  it("caps a Klipper corner at the planner's centripetal junction limit over the shortest run-up", () => {
+    // 1000 mm/s^2: the 150 mm/s tail widens the band to 1 + 11.25 + 1 + 1 = 14.25 mm, so the
+    // shortest run-up move is 14.25 + 8 - 3 - 3 = 16.25 mm and the corner at most
+    // sqrt(0.5 * 16.25 * 1000) = 90.14 mm/s, rounded down to 90.1 (hand-derived).
+    const slow = { ...profile, printAccelMmS2: 1000 }
+    const { spec, notes } = fitSpecToPrinter(defaultIsTestRequest(slow), slow)
+    expect(spec.cornerSpeedMmS).toBe(90.1)
+    expect(notes).toEqual([
+      "The corner speed was limited to 90.1 mm/s because Klipper's centripetal junction " +
+        'limit allows no faster corner after the 16.25 mm run-up at 1000 mm/s^2.',
+    ])
+    // RepRapFirmware has no centripetal term.
+    const rrf = { ...slow, firmware: 'RepRapFirmware' as const }
+    expect(fitted(defaultIsTestRequest(rrf), rrf).cornerSpeedMmS).toBe(100)
   })
 
   it('refuses a Marlin acceleration too low to express the 20 mm/s minimum corner', () => {

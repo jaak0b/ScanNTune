@@ -142,13 +142,18 @@ interface Seg {
   startDist: number
 }
 
-/** Walk the printing moves of one test line from its corner up to and including the wipe. */
+/** The planner stop and the corner-limit commands a line carries between its moves. */
+const NON_MOTION = /^(G4 P0|SET_VELOCITY_LIMIT SQUARE_CORNER_VELOCITY=|M205 |M566 )/
+
+/** Walk the printing moves of one test line from its corner up to and including the wipe,
+ *  stepping over the planner stop and the corner-limit commands between them. */
 function walkLine(chunk: string[], cornerIdx: number, cx: number, cy: number): Seg[] {
   const segs: Seg[] = []
   let x = cx
   let y = cy
   let dist = 0
   for (let i = cornerIdx + 1; i < chunk.length; i++) {
+    if (NON_MOTION.test(chunk[i])) continue
     const m = chunk[i].match(/^G1 X(-?[\d.]+) Y(-?[\d.]+)(?: E(-?[\d.]+))? F(\d+)$/)
     if (!m) break
     const nx = Number(m[1])
@@ -175,14 +180,18 @@ describe('generateIsGcodeWithReport (Klipper)', () => {
     expect(report.gcode).toContain('G90')
   })
 
-  it('sets the test motion limits with the raised corner velocity before any extrusion', () => {
+  it('sets the ceiling, the profile acceleration, the speed factor and the profile corner limit before any extrusion', () => {
     // VELOCITY raises the ceiling to the fastest commanded move (the 150 mm/s tier and
-    // travel speed here), so a low configured maximum can never clamp a commanded feed.
-    const limit = lines.indexOf(
-      'SET_VELOCITY_LIMIT VELOCITY=150 ACCEL=3000 SQUARE_CORNER_VELOCITY=100 MINIMUM_CRUISE_RATIO=0',
-    )
+    // travel speed here), so a low configured maximum can never clamp a commanded feed; the
+    // corner limit starts at the profile's own 5 mm/s square corner velocity.
+    const limit = lines.indexOf('SET_VELOCITY_LIMIT VELOCITY=150 ACCEL=3000 MINIMUM_CRUISE_RATIO=0')
     expect(limit).toBeGreaterThan(0)
-    expect(limit).toBeLessThan(firstExtrusionIndex(lines))
+    expect(lines.slice(limit, limit + 3)).toEqual([
+      'SET_VELOCITY_LIMIT VELOCITY=150 ACCEL=3000 MINIMUM_CRUISE_RATIO=0',
+      'M220 S100',
+      'SET_VELOCITY_LIMIT SQUARE_CORNER_VELOCITY=5',
+    ])
+    expect(limit + 2).toBeLessThan(firstExtrusionIndex(lines))
   })
 
   it('disables input shaping and pressure advance before any extrusion', () => {
@@ -204,9 +213,12 @@ describe('generateIsGcodeWithReport (Klipper)', () => {
   })
 
   it('replaces the numeric motion limit restore with the firmware restart note', () => {
-    // No profile values are re-applied: the only SET_VELOCITY_LIMIT is the test's own.
-    const velocityLimits = lines.filter((l) => l.startsWith('SET_VELOCITY_LIMIT'))
-    expect(velocityLimits).toHaveLength(1)
+    // The velocity ceiling and acceleration are set once; nothing re-applies a motion limit
+    // after the last extrusion, the restart note does.
+    expect(lines.filter((l) => l.startsWith('SET_VELOCITY_LIMIT VELOCITY='))).toHaveLength(1)
+    expect(
+      lines.slice(lastExtrusionIndex(lines)).some((l) => l.startsWith('SET_VELOCITY_LIMIT')),
+    ).toBe(false)
     const note = lines.indexOf('; run FIRMWARE_RESTART to restore your configured motion limits')
     expect(note).toBeGreaterThan(lastExtrusionIndex(lines))
     // The old separate MINIMUM_CRUISE_RATIO note is folded into the restart note.
@@ -258,16 +270,34 @@ describe('generateIsGcodeWithReport (Klipper)', () => {
     expect(cornerFeeds.slice(-4)).toEqual([6000, 6000, 6000, 6000])
   })
 
-  it('keeps the single motion-limit override at the top rung, above every slower rung', () => {
-    // The corner limit is an upper bound: one override at the 100 mm/s top rung lets
-    // every slower rung pass its corner unbraked, so no per-line limit changes exist.
-    const limits = lines.filter((l) => l.startsWith('SET_VELOCITY_LIMIT'))
-    expect(limits).toHaveLength(1)
-    expect(limits[0]).toContain('SQUARE_CORNER_VELOCITY=100')
-    for (const group of g.groups) {
-      for (const line of group.lines) {
-        expect(line.cornerSpeedMmS).toBeLessThanOrEqual(fitted.cornerSpeedMmS + 1e-9)
-      }
+  it("raises the corner limit to each line's own corner speed after its prime, and lowers it before the wipe", () => {
+    // Raise values: the rung feeds F1200, F1794, F2683, F4012, F6000 as mm/s, rounded up to
+    // 3 decimals (hand-derived); lower value: the profile's 5 mm/s.
+    const raise = ['20', '29.9', '44.717', '66.867', '100']
+    const chunk = measuredChunk(lines)
+    for (const line of allLines) {
+      const idx = chunk.indexOf(cornerMoveStr(line))
+      expect(chunk[idx - 1]).toBe(`SET_VELOCITY_LIMIT SQUARE_CORNER_VELOCITY=${raise[line.rungIndex]}`)
+      // The lower follows the coast's planner stop and precedes the wipe.
+      const wipe = chunk.findIndex((l, i) => i > idx && /^G1 X.* E-/.test(l))
+      expect(chunk.slice(wipe - 2, wipe)).toEqual([
+        'G4 P0',
+        'SET_VELOCITY_LIMIT SQUARE_CORNER_VELOCITY=5',
+      ])
+      expect(chunk[wipe - 3]).toMatch(/^G1 X[\d.]+ Y[\d.]+ F\d+$/)
+    }
+  })
+
+  it('brings the planner to rest three times per line: before the travel, the moving prime and the wipe', () => {
+    const chunk = measuredChunk(lines)
+    expect(chunk.filter((l) => l === 'G4 P0')).toHaveLength(60)
+    for (const line of allLines) {
+      const idx = chunk.indexOf(cornerMoveStr(line))
+      // Backwards from the corner: raise, moving prime, stop, stationary remainder, travel,
+      // stop.
+      expect(chunk[idx - 3]).toBe('G4 P0')
+      expect(chunk[idx - 5]).toMatch(/^G0 X/)
+      expect(chunk[idx - 6]).toBe('G4 P0')
     }
   })
 
@@ -293,12 +323,13 @@ describe('generateIsGcodeWithReport (Klipper)', () => {
     const chunk = measuredChunk(lines)
     for (const line of allLines) {
       const idx = chunk.indexOf(cornerMoveStr(line))
-      // Backwards from the corner: moving prime, stationary remainder, retracted travel.
-      expect(chunk[idx - 1], `prime of the ${line.speedMmS} mm/s line`).toMatch(
+      // Backwards from the corner: the corner-limit raise, the moving prime, the planner
+      // stop, the stationary remainder, the retracted travel.
+      expect(chunk[idx - 2], `prime of the ${line.speedMmS} mm/s line`).toMatch(
         /^G1 X.* E0\.79824 F1800$/,
       )
-      expect(chunk[idx - 2]).toBe('G1 E0.09582 F2100')
-      expect(chunk[idx - 3]).toMatch(/^G0 X/)
+      expect(chunk[idx - 4]).toBe('G1 E0.09582 F2100')
+      expect(chunk[idx - 5]).toMatch(/^G0 X/)
     }
   })
 
@@ -551,9 +582,11 @@ describe('generateIsGcodeWithReport (Marlin and RepRapFirmware)', () => {
     const marlin: PrinterProfile = { ...profile, firmware: 'Marlin' }
     const report = generateIsGcodeWithReport(marlin, filament, spec)
     const lines = report.gcode.split('\n')
-    const j = lines.find((l) => l.startsWith('M205 J'))!
-    expect(j).toBe('M205 J0.300')
+    // The top rung's per-line raise carries the capped J; the profile's own limit is set back
+    // after every line.
+    expect(lines).toContain('M205 J0.300')
     expect(lines).toContain('M205 X46.6 Y46.6')
+    expect(lines).toContain('M205 X5 Y5')
     expect(lines).toContain(
       '; corner-speed excitation ladder 20 to 46.6 mm/s across the 3 lines of each tier, ' +
         'fastest corners printed last',
@@ -835,9 +868,7 @@ describe('validation and reporting', () => {
     const spec20k = defaultIsTestRequest(fast)
     expect(spec20k.accelMmS2).toBe(20000)
     const gcode = generateIsGcodeWithReport(fast, filament, spec20k).gcode
-    expect(gcode).toContain(
-      'SET_VELOCITY_LIMIT VELOCITY=150 ACCEL=20000 SQUARE_CORNER_VELOCITY=100 MINIMUM_CRUISE_RATIO=0',
-    )
+    expect(gcode).toContain('SET_VELOCITY_LIMIT VELOCITY=150 ACCEL=20000 MINIMUM_CRUISE_RATIO=0')
   })
 })
 

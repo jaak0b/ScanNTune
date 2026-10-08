@@ -155,7 +155,12 @@ export function setupPreamble(
  * of it is re-applied numerically: the restore is a firmware restart (or the saved
  * configuration), so no printer settings need to be stored for it.
  */
-export type OverriddenSetting = 'inputShaping' | 'pressureAdvance' | 'flowPercentage' | 'motionLimits'
+export type OverriddenSetting =
+  | 'inputShaping'
+  | 'pressureAdvance'
+  | 'flowPercentage'
+  | 'speedFactor'
+  | 'motionLimits'
 
 interface OverriddenSettingText {
   /** The setting's name in the UI note. */
@@ -181,6 +186,11 @@ const OVERRIDDEN_SETTING_TEXT: Record<OverriddenSetting, OverriddenSettingText> 
     label: 'flow percentage',
     plural: false,
     comment: () => '; the M221 flow percentage resumes with the next firmware restart',
+  },
+  speedFactor: {
+    label: 'speed factor',
+    plural: false,
+    comment: () => '; the M220 speed factor resumes with the next firmware restart',
   },
   motionLimits: {
     label: 'motion limits',

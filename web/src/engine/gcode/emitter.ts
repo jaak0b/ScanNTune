@@ -295,7 +295,9 @@ function filamentAreaMm2(f: FilamentProfile): number {
  * start. The move's filament is capped at Klipper's default max_extrude_cross_section times
  * the path length (see maxExtrudeCrossSectionMm2), so the moving prime is never refused; any
  * deretract beyond the cap is restored by a stationary un-retract right before the move. The
- * two together restore exactly the filament the single move would have carried.
+ * two together restore exactly the filament the single move would have carried. `beforeMove`
+ * lines (a planner stop, for example) are emitted right before the moving prime, after any
+ * stationary remainder.
  */
 export function primeOnTheMove(
   e: Emitter,
@@ -305,6 +307,7 @@ export function primeOnTheMove(
   x: number,
   y: number,
   speedMmS: number,
+  beforeMove: readonly string[] = [],
 ): void {
   // The bead's E over the printed segment plus the deretract, quantized once.
   const len = printedSegmentLengthMm(e.x, e.y, x, y)
@@ -317,6 +320,7 @@ export function primeOnTheMove(
     const stationary = (totalSteps - movingSteps) / 100000
     e.lines.push(`G1 E${stationary.toFixed(5)} F${Math.round(p.retractSpeedMmS * 60)}`)
   }
+  e.lines.push(...beforeMove)
   e.lines.push(
     `G1 X${x.toFixed(3)} Y${y.toFixed(3)} E${(movingSteps / 100000).toFixed(5)} F${Math.round(speedMmS * 60)}`,
   )

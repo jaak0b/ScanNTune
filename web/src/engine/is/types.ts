@@ -13,10 +13,15 @@ import {
   MIN_CORNER_SPEED_MM_S,
   MIN_MEASURED_LINE_MM,
   protectedSpanMm,
+  shortestRunUpMoveMm,
   timeAtDistance,
   TRACE_START_MM,
 } from './couponGeometry'
-import { maxCornerSpeedMmS, minAccelForCornerSpeedMmS2 } from './firmwareMotion'
+import {
+  klipperCentripetalCornerCapMmS,
+  maxCornerSpeedMmS,
+  minAccelForCornerSpeedMmS2,
+} from './firmwareMotion'
 
 export { accelRampMm, MIN_CORNER_SPEED_MM_S, MIN_MEASURED_LINE_MM }
 
@@ -136,12 +141,28 @@ export const MIN_LINES_PER_SPEED = 3
  *  required three lines per axis survive print damage and scan artifacts. */
 export const MAX_LINES_PER_SPEED = 15
 /**
- * Default corner (run-up) speed. The per-axis velocity step at the corner leaves a
- * residual ring amplitude of approximately delta-v over omega: at 100 mm/s about
- * 0.64 mm at 25 Hz down to 0.27 mm at 60 Hz, several scanner pixels at 600 dpi even
- * on stiff frames. A 150 mm/s corner step skipped steps and shifted layers on a
- * sturdy CoreXY test machine, so the default stays at 100; users with stiff machines
- * can raise it.
+ * Default corner (run-up) speed, the top rung of the ladder: the fastest corner proven to
+ * print clean on a tested 300 mm CoreXY printer, where ladders topping out at 145 to 200 mm/s
+ * skipped steps. The field is entered by the user, and the page warns above this value. The
+ * corner's velocity step leaves a residual ring amplitude of approximately delta-v over omega:
+ * at 100 mm/s about 0.64 mm at 25 Hz down to 0.27 mm at 60 Hz, several scanner pixels at
+ * 600 dpi even on stiff frames.
+ *
+ * Why no safe corner speed is computed: at the corner the field of a motor jumps while its
+ * rotor and the reflected load keep their velocity. The motor stays in step while the kinetic
+ * energy of that velocity step, 0.5 * J_eff * (dv_m / r)^2, stays below the work 2 * T_h / N_r
+ * the holding torque does across the stable half of the sinusoidal torque-angle curve (the
+ * equal-area criterion, Kundur 1994 section 13.1.2, applied to the torque-angle curve of
+ * Acarnley 2002 chapters 2 to 5). The criterion is sufficient, not exact: it ignores damping,
+ * and energy conservation in the field frame keeps it valid with belt compliance. The holding
+ * torque T_h, the rotor tooth count N_r, the rotor inertia, the pulley radius r and the moving
+ * mass are not in the printer profile, so no bound follows from the profile. Qualitatively the
+ * risk grows with dv_m^2: on CoreXY one motor reverses by twice the corner speed, which
+ * quadruples its rotor energy at the same corner speed, while the load term grows only about
+ * 1.5 to 2 times; the other motor carries about a third of the reversing motor's reaction
+ * through the mass coupling (m_x - m_y) / 4; 0.9 degree motors have half the well depth; and
+ * the acceleration ramp after the corner tilts the well by about 5% (9% at the peak of
+ * Marlin's S-curve).
  */
 export const DEFAULT_CORNER_SPEED_MM_S = 100
 /** The line speed the defaults are built around. */
@@ -354,16 +375,39 @@ export function fitSpecToPrinter(
 }
 
 /**
- * Lowers the corner speed to the fastest corner the firmware's corner limit can express at
- * the test acceleration (see maxCornerSpeedMmS). The lowered value becomes the spec's one
- * corner speed, so the ladder's top rung, the ramps, the packing, the emitted limits, and the
- * analysis time base all agree with the corner the printer actually takes. Throws when the
- * firmware cannot express even the minimum corner speed.
+ * Lowers the corner speed to the fastest corner the firmware can take at the test
+ * acceleration: Marlin's junction deviation range (see maxCornerSpeedMmS) and Klipper's
+ * centripetal junction limit over the shortest run-up move (see
+ * klipperCentripetalCornerCapMmS). The lowered value becomes the spec's one corner speed, so
+ * the ladder's top rung, the ramps, the packing, the emitted limits, and the analysis time
+ * base all agree with the corner the printer actually takes. Throws when the firmware cannot
+ * take even the minimum corner speed.
  */
 function fitSpecToFirmware(
   request: IsTestRequest,
   profile: PrinterProfile,
 ): { request: IsTestRequest; notes: string[] } {
+  const legMm = shortestRunUpMoveMm(request)
+  const klipperCap = klipperCentripetalCornerCapMmS(profile, legMm, request.accelMmS2)
+  if (klipperCap !== null) {
+    if (klipperCap < MIN_CORNER_SPEED_MM_S) {
+      throw new Error(
+        'Raise the print acceleration in the printer profile. At ' +
+          `${request.accelMmS2} mm/s^2, Klipper's centripetal junction limit caps a corner after ` +
+          `the ${legMm} mm run-up at ${klipperCap} mm/s, below the ${MIN_CORNER_SPEED_MM_S} mm/s ` +
+          'minimum.',
+      )
+    }
+    if (request.cornerSpeedMmS <= klipperCap) return { request, notes: [] }
+    return {
+      request: { ...request, cornerSpeedMmS: klipperCap },
+      notes: [
+        `The corner speed was limited to ${klipperCap} mm/s because Klipper's centripetal ` +
+          `junction limit allows no faster corner after the ${legMm} mm run-up at ` +
+          `${request.accelMmS2} mm/s^2.`,
+      ],
+    }
+  }
   const cap = maxCornerSpeedMmS(profile, request.accelMmS2)
   if (cap === null) return { request, notes: [] }
   if (cap < MIN_CORNER_SPEED_MM_S) {

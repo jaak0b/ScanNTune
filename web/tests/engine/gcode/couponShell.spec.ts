@@ -50,6 +50,12 @@ describe('restartNoteComments', () => {
     ])
   })
 
+  it('names the M220 speed factor', () => {
+    expect(restartNoteComments(profileWith('Klipper'), ['speedFactor'])).toEqual([
+      '; the M220 speed factor resumes with the next firmware restart',
+    ])
+  })
+
   it('keeps the order it is given', () => {
     const lines = restartNoteComments(profileWith('Klipper'), ['motionLimits', 'pressureAdvance'])
     expect(lines[0]).toContain('motion limits')
@@ -100,8 +106,8 @@ describe('couponOverriddenSettings', () => {
     )
     expect(restartNoteText(IS_OVERRIDDEN_SETTINGS)).toBe(
       'Restart the firmware after the print finishes. The test overrides the printer\'s ' +
-        'input shaping, pressure advance, and motion limits, and the restart restores the ' +
-        'configured values.',
+        'input shaping, pressure advance, speed factor, and motion limits, and the restart ' +
+        'restores the configured values.',
     )
   })
 })

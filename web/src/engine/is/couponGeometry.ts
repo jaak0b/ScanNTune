@@ -103,12 +103,15 @@ export function protectedSpanMm(
   return tierRampMm(spec, speedMmS, cornerSpeedMmS) + spec.measuredLineMm
 }
 
+/** What the band width depends on: the tiers, the weld and the acceleration. */
+type BandInputs = Pick<IsTestSpec, 'speedsMmS' | 'weldMm' | 'accelMmS2'>
+
 /**
  * How deep into the frame band a line's deceleration tail ends, measured from the window
  * edge: the weld overrun plus the kinematic stopping distance. The band is sized so the
  * deepest tail still keeps its edge clearance; no clamp is needed.
  */
-function tailDepthMm(speedMmS: number, spec: IsTestSpec): number {
+function tailDepthMm(speedMmS: number, spec: Pick<IsTestSpec, 'weldMm' | 'accelMmS2'>): number {
   return spec.weldMm + accelRampMm(speedMmS, spec.accelMmS2) + TAIL_MARGIN_MM
 }
 
@@ -117,9 +120,19 @@ function tailDepthMm(speedMmS: number, spec: IsTestSpec): number {
  * that the fastest tier's full deceleration tail ends clear of the coupon outer perimeter,
  * so firmware lookahead never bleeds deceleration back into a measured segment.
  */
-export function frameBandMm(spec: IsTestSpec): number {
+export function frameBandMm(spec: BandInputs): number {
   const deepest = Math.max(...spec.speedsMmS.map((v) => tailDepthMm(v, spec)))
   return Math.max(MIN_FRAME_BAND_MM, deepest + TAIL_EDGE_CLEARANCE_MM)
+}
+
+/**
+ * Length of the shortest run-up move, from the end of the prime to the corner: the line at
+ * offset zero of either group, whose leg starts LEG_INSET_MM + PRIME_MM inside the outer edge
+ * and runs through the band and the in-window run-up. Every other line's run-up move is longer
+ * by its offset.
+ */
+export function shortestRunUpMoveMm(spec: BandInputs & Pick<IsTestSpec, 'runUpMm'>): number {
+  return frameBandMm(spec) + spec.runUpMm - LEG_INSET_MM - PRIME_MM
 }
 
 /** An axis-aligned segment or rectangle in coupon-local mm, origin at the min corner. */
