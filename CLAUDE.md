@@ -159,7 +159,7 @@ A third calibration flow lives under `web/src/engine/em/`: it measures the depos
 a single scan of a single-color coupon and emits the flow correction (slicer flow % and `M221 S`).
 The coupon (generated in-app, `em/gcodeGenerator.ts` over the shared `web/src/engine/gcode/emitter.ts`
 extracted from the PA generator) is a frame band with the same 3-hole + solid-origin-corner fiducial
-convention, a center rail, and two mirrored rows of 13 blocks of 7 parallel single-bead lines, each
+convention, a center rail, and two mirrored rows of 9 blocks of 7 parallel single-bead lines, each
 block at a different known pitch (defaults 0.70-1.10 mm, always above the bead width: a flatbed cannot
 read a slit much narrower than ~0.25 mm through the part's depth, so every gap must stay open). Lines
 are 3 layers tall (1 narrower pedestal layer absorbs z-offset squish, 2 measured layers define the
