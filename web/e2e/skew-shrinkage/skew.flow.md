@@ -98,7 +98,7 @@ degrees for skew) are stated once in "Assertions per case" and apply to both row
     (`data-testid="reset-skew-code"`) and the "Fix skew" tab's `skew-code` (`data-testid="skew-code"`)
     and compare against "Klipper commands" below.
 13. Click the "Fix shrinkage" tab (no testid today on the tab buttons themselves; they are
-    `button.fix-tab` elements with the visible text `Fix skew` / `Fix shrinkage` — add testids, for
+    `button.fix-tab` elements with the visible text `Fix skew` / `Fix shrinkage`; add testids, for
     example `fix-tab-skew` / `fix-tab-shrinkage`, before writing the test) and read `shrinkage-code`
     (`data-testid="shrinkage-code"`) once, with the Format selector left at its default, `Shrinkage %`.
     `shrinkage-code` does not depend on the Firmware select; see `PROVENANCE.md`'s "Firmware vs.

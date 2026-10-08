@@ -189,7 +189,7 @@ const OVERRIDDEN_SETTING_TEXT: Record<OverriddenSetting, OverriddenSettingText> 
  * Everything a coupon leaves changed: the flow's own test overrides, then the motion limits.
  * Every coupon's preamble (setupPreamble) sets the acceleration and corner limit, either the
  * profile's values or a test's own, which replaces whatever the firmware had configured, so
- * the motion limits belong on every flow's restart note and end-of-print comments.
+ * the motion limits belong in every flow's end-of-print comments.
  */
 export function couponOverriddenSettings(
   testOverrides: readonly OverriddenSetting[],

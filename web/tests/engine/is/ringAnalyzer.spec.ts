@@ -4,8 +4,9 @@ import {
   DETECTION_GRID_SIZE,
   analyzeTracedLine,
   poolAxisFits,
+  withSecondMode,
 } from '../../../src/engine/is/ringAnalyzer'
-import type { LineFit } from '../../../src/engine/is/ringAnalyzer'
+import type { AxisPool, LineFit, SecondMode } from '../../../src/engine/is/ringAnalyzer'
 import type { TracedLine } from '../../../src/engine/is/lineTracer'
 import { defaultIsTestRequest, fitSpecToPrinter } from '../../../src/engine/is/types'
 import type { IsTestSpec } from '../../../src/engine/is/types'
@@ -413,5 +414,22 @@ describe('poolAxisFits checks', () => {
     )
     expect(p.replicateCheck).toBe('failed')
     expect(p.accepted).toBe(false)
+  })
+})
+
+describe('withSecondMode', () => {
+  it('leaves the frequency interval unset when the swapped dominant mode has no standard error', () => {
+    // The search found a larger mode than the joint fit's, so the axis now reports that mode. The
+    // pool's interval belongs to the joint fit's mode at another frequency, so it must not stand
+    // in for the reported one: the confidence gate then has no interval and refuses the axis.
+    const found: SecondMode = { frequencyHz: 62, dampingRatio: 0.05, frequencySeHz: null, amplitudeMm: 0.03, proportionality: 'passed' }
+    const joint: SecondMode = { frequencyHz: 45, dampingRatio: 0.05, frequencySeHz: 0.2, amplitudeMm: 0.02, proportionality: 'passed' }
+    const pool = { frequencyHz: 45, frequencyCi95Hz: 0.4 } as AxisPool
+    const fields = withSecondMode(pool, {
+      pBound: 1e-6,
+      modes: { dominant: { mode: found, rings: [] }, other: { mode: joint, rings: [] }, swapped: true },
+    })
+    expect(fields.frequencyHz).toBe(62)
+    expect(fields.frequencyCi95Hz).toBeNull()
   })
 })

@@ -1596,28 +1596,31 @@ function searchSecondMode(fit: JointFitResult): SecondModeSearch {
 /** The outcome of the second-mode search of a joint fit: its Bonferroni bound and, when it found
  *  a second mode, both modes of the two-mode fit, the dominant (larger amplitude) first, and
  *  whether the dominant one is the mode the search found rather than the joint fit's. */
-interface SecondModeSearch {
+export interface SecondModeSearch {
   pBound: number
   modes: { dominant: FittedMode; other: FittedMode; swapped: boolean } | null
 }
 
 /** A mode of the two-mode fit with each line's ring of it, aligned with the fit's bases. */
-interface FittedMode {
+export interface FittedMode {
   mode: SecondMode
   rings: RingProjection[]
 }
 
-/** The pool fields of a second-mode search: the dominant mode's figures and the second mode. */
-function withSecondMode(pool: AxisPool, search: SecondModeSearch): Partial<AxisPool> {
+/** The pool fields of a second-mode search: the dominant mode's figures and the second mode. When
+ *  the dominant mode has no standard error, the joint fit's interval stands in only for the joint
+ *  fit's own mode; a swapped dominant mode then has no interval, so the confidence gate refuses. */
+export function withSecondMode(pool: AxisPool, search: SecondModeSearch): Partial<AxisPool> {
   if (search.modes === null) return { secondModePBound: search.pBound }
   const m1 = search.modes.dominant.mode
   const m2 = search.modes.other.mode
   const pBound = search.pBound
+  const fallbackCi95 = search.modes.swapped ? null : pool.frequencyCi95Hz
   return {
     frequencyHz: m1.frequencyHz,
     dampingRatio: m1.dampingRatio,
     frequencySeHz: m1.frequencySeHz,
-    frequencyCi95Hz: m1.frequencySeHz !== null ? normalQuantile(0.975) * m1.frequencySeHz : pool.frequencyCi95Hz,
+    frequencyCi95Hz: m1.frequencySeHz !== null ? normalQuantile(0.975) * m1.frequencySeHz : fallbackCi95,
     amplitudeMm: m1.amplitudeMm,
     proportionality: m1.proportionality,
     secondModePBound: pBound,
