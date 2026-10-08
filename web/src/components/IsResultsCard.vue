@@ -101,7 +101,7 @@ const snippet = computed(() => {
   // The formatter sets the damping ratio the recommended shaper was designed at (the measured one
   // for one mode, Klipper's default for two), so the firmware builds the shaper that was scored.
   // A damping ratio at the upper bound of the fit is not a measurement: the shaper is then
-  // designed at Klipper's default and the formatter leaves the damping ratio unset.
+  // designed at Klipper's default, and the formatter writes that value.
   const lines = accepted.flatMap((a) => formatKlipperShaper(a.axis, a.recommended!).split('\n'))
   return { code: ['[input_shaper]', ...lines].join('\n'), note: 'Add the block to printer.cfg and restart the firmware.' }
 })
@@ -155,14 +155,6 @@ const snippet = computed(() => {
             />
           </div>
           <p class="tip mt-0 mb-2">The interval covers the statistical error of the fit only.</p>
-          <p
-            v-if="!axis.recommended!.configuresDampingRatio"
-            class="tip mt-0 mb-2"
-            :data-testid="`is-damping-default-${axis.axis}`"
-          >
-            The fitted damping ratio is at the upper limit of the fit range, so it is not a
-            measurement. The configuration leaves the damping ratio at the Klipper default.
-          </p>
           <v-table density="compact" class="shaper-table" :data-testid="`is-shapers-${axis.axis}`">
             <thead>
               <tr>

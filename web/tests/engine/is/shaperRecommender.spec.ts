@@ -137,25 +137,28 @@ describe('formatters', () => {
     expect(formatKlipperShaper('y', two.recommended).split('\n')).toContain('damping_ratio_y: 0.100')
   })
 
-  it('leaves the damping ratio to the Klipper default when the fitted one sits at the bound', () => {
+  it('writes the 0.1 design damping ratio when the fitted one sits at the bound', () => {
     // A damping ratio of 0.4 is the upper bound of the fit, not a measurement: the shaper is
-    // designed at Klipper's default damping ratio 0.1, which the snippet then leaves unset.
+    // designed at Klipper's default damping ratio 0.1. The snippet still writes it, because an
+    // older damping_ratio line in printer.cfg would otherwise stay in effect and Klipper would
+    // build a different shaper than the one scored.
     const rec = recommendShapers(72.2, 0.4, 3.3)
     expect(rec.recommended.dampingRatio).toBe(0.1)
     expect(formatKlipperShaper('x', rec.recommended).split('\n')).toEqual([
       'shaper_freq_x: 72.2',
       `shaper_type_x: ${rec.recommended.type.toLowerCase()}`,
+      'damping_ratio_x: 0.100',
     ])
   })
 
-  it('leaves the damping ratio unset for two modes when one mode sits at the bound', () => {
+  it('writes the 0.1 design damping ratio for two modes when one mode sits at the bound', () => {
     const two = recommendShapersForModes([
       { frequencyHz: 45, dampingRatio: 0.4, amplitudeMm: 0.03 },
       { frequencyHz: 62, dampingRatio: 0.05, amplitudeMm: 0.02 },
     ])
     const lines = formatKlipperShaper('y', two.recommended).split('\n')
-    expect(lines).toHaveLength(2)
-    expect(lines.some((l) => l.startsWith('damping_ratio_y'))).toBe(false)
+    expect(lines).toHaveLength(3)
+    expect(lines).toContain('damping_ratio_y: 0.100')
   })
 })
 

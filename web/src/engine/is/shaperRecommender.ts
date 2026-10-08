@@ -35,13 +35,6 @@ export interface ShaperOption {
   /** The damping ratio the shaper is designed at; the firmware must build it with the same. */
   dampingRatio: number
   /**
-   * Whether the Klipper configuration sets the damping ratio. False when a fitted damping ratio
-   * sits at the upper bound of the fit's range, which is a limit of the fit and not a
-   * measurement: the shaper is then designed at Klipper's default damping ratio, which the
-   * firmware applies when the configuration leaves it unset.
-   */
-  configuresDampingRatio: boolean
-  /**
    * Worst-case residual vibration over the tolerance band around the measured resonance, as
    * a fraction (0.05 = 5%). Evaluated across a band, not only at the point estimate: the
    * point residual degenerates (ZV always shows ~0% at its own design frequency) while the
@@ -219,7 +212,7 @@ function dampingMeasured(dampingRatio: number): boolean {
  * tolerance, take the one permitting the highest acceleration (the least smoothing); if none
  * qualifies, take the lowest worst-case residual. A damping ratio at the upper bound of the fit's
  * range is not a measurement, so the shapers are then designed and judged at Klipper's default
- * damping ratio and the configuration leaves the damping ratio to the firmware.
+ * damping ratio.
  */
 export function recommendShapers(
   frequencyHz: number,
@@ -227,8 +220,7 @@ export function recommendShapers(
   frequencyCi95Hz = 0,
 ): ShaperRecommendation {
   const bandHalfWidth = Math.max(BAND_HALF_WIDTH_MIN, frequencyCi95Hz / frequencyHz)
-  const measured = dampingMeasured(fittedDampingRatio)
-  const dampingRatio = measured ? fittedDampingRatio : KLIPPER_DESIGN_DAMPING
+  const dampingRatio = dampingMeasured(fittedDampingRatio) ? fittedDampingRatio : KLIPPER_DESIGN_DAMPING
   const options: ShaperOption[] = SHAPER_TYPES.map((type) => {
     const impulses = shaperImpulses(type, frequencyHz, dampingRatio)
     const maxAccel = shaperMaxAccel(impulses)
@@ -236,7 +228,6 @@ export function recommendShapers(
       type,
       frequencyHz,
       dampingRatio,
-      configuresDampingRatio: measured,
       bandResidualVibration: worstBandResidual(impulses, frequencyHz, dampingRatio, bandHalfWidth),
       maxAccelMmS2: maxAccel,
       smoothingMm: shaperSmoothingMm(impulses, maxAccel),
@@ -252,15 +243,15 @@ export function recommendShapers(
   return { options, recommended }
 }
 
-/** Klipper configuration snippet for a per-axis recommendation, with the damping ratio the
- *  shaper was designed at, so the firmware builds the shaper that was scored; without it when
- *  the shaper is designed at Klipper's default damping ratio for want of a measured one. */
+/** Klipper configuration snippet for a per-axis recommendation. It always sets the damping ratio
+ *  the shaper was designed at, Klipper's default included, because a damping_ratio line already
+ *  in printer.cfg would otherwise stay in effect and the firmware would build a different shaper
+ *  than the one scored. */
 export function formatKlipperShaper(axis: 'x' | 'y', option: ShaperOption): string {
   const f = option.frequencyHz.toFixed(1)
   const type = option.type.toLowerCase()
-  const lines = [`shaper_freq_${axis}: ${f}`, `shaper_type_${axis}: ${type}`]
-  if (option.configuresDampingRatio) lines.push(`damping_ratio_${axis}: ${option.dampingRatio.toFixed(3)}`)
-  return lines.join('\n')
+  const damping = option.dampingRatio.toFixed(3)
+  return `shaper_freq_${axis}: ${f}\nshaper_type_${axis}: ${type}\ndamping_ratio_${axis}: ${damping}`
 }
 
 // Shaper selection for an axis with more than one mode, following Klipper's shaper_calibrate.py
@@ -338,7 +329,7 @@ interface FittedShaper {
  *  one scoring best among those within 10% (plus 0.0005) of it. The test frequencies are
  *  np.arange(min_freq, MAX_SHAPER_FREQ, 0.2), which stops short of MAX_SHAPER_FREQ, visited from
  *  the highest down. */
-function fitShaper(type: ShaperType, freqs: number[], psd: number[], configuresDampingRatio: boolean): FittedShaper {
+function fitShaper(type: ShaperType, freqs: number[], psd: number[]): FittedShaper {
   const results: FittedShaper[] = []
   let best: FittedShaper | null = null
   // np.arange's length, ceil((stop - start) / step).
@@ -355,7 +346,6 @@ function fitShaper(type: ShaperType, freqs: number[], psd: number[], configuresD
         type,
         frequencyHz: testFreq,
         dampingRatio: KLIPPER_DESIGN_DAMPING,
-        configuresDampingRatio,
         bandResidualVibration: vibrations,
         maxAccelMmS2: maxAccel,
         smoothingMm: shaperSmoothingMm(impulses, maxAccel),
@@ -378,15 +368,13 @@ function fitShaper(type: ShaperType, freqs: number[], psd: number[], configuresD
  * All shaper types fitted to an axis with several modes, plus Klipper's choice among them: a
  * shaper replaces the current best when its score is 20% lower, or 5% lower with 10% less
  * smoothing (find_best_shaper). Each option's bandResidualVibration is the remaining vibration
- * over the synthesized spectrum. The configuration sets the damping ratio only when every mode's
- * fitted damping ratio is a measurement (below the upper bound of the fit's range).
+ * over the synthesized spectrum.
  */
 export function recommendShapersForModes(modes: ModeComponent[]): ShaperRecommendation {
   const freqs: number[] = []
   for (let f = SPECTRUM_BIN_HZ; f <= KLIPPER_MAX_FREQ_HZ + 1e-9; f += SPECTRUM_BIN_HZ) freqs.push(f)
   const psd = modeSpectrum(modes, freqs)
-  const configuresDampingRatio = modes.every((m) => dampingMeasured(m.dampingRatio))
-  const fitted = SHAPER_TYPES.map((type) => fitShaper(type, freqs, psd, configuresDampingRatio))
+  const fitted = SHAPER_TYPES.map((type) => fitShaper(type, freqs, psd))
   let best: FittedShaper | null = null
   for (const f of fitted) {
     if (
