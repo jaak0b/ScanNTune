@@ -286,7 +286,7 @@ const correction = computed(() => {
   if (!r || !r.success || r.wMm === null || !s || h === null || entered === null || entered <= 0) {
     return null
   }
-  return emCorrection(store.selected?.firmware ?? 'Klipper', s.nominalLineWidthMm, h, r.wMm, entered)
+  return emCorrection(s.nominalLineWidthMm, h, r.wMm, entered)
 })
 
 // Corrected slicer flow: the absolute measured ratio the M221 command also derives from,

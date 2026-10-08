@@ -237,26 +237,6 @@ export function formatKlipperShaper(axis: 'x' | 'y', option: ShaperOption): stri
   return `shaper_freq_${axis}: ${f}\nshaper_type_${axis}: ${type}`
 }
 
-/**
- * Marlin ZV input shaping command (M593). Marlin implements the ZV shaper only, so the
- * frequency and the measured damping ratio are emitted regardless of the recommended type.
- */
-export function formatMarlinShaper(axis: 'x' | 'y', frequencyHz: number, dampingRatio: number): string {
-  return `M593 ${axis.toUpperCase()} F${frequencyHz.toFixed(1)} D${dampingRatio.toFixed(3)}`
-}
-
-/** RepRapFirmware input shaping command (M593 with a shaper type). */
-export function formatRrfShaper(option: ShaperOption): string {
-  const typeMap: Record<ShaperType, string> = {
-    ZV: 'zvd',
-    MZV: 'mzv',
-    EI: 'ei2',
-    '2HUMP_EI': 'ei3',
-    '3HUMP_EI': 'ei3',
-  }
-  return `M593 P"${typeMap[option.type]}" F${option.frequencyHz.toFixed(1)}`
-}
-
 // Shaper selection for an axis with more than one mode, following Klipper's shaper_calibrate.py
 // (fit_shaper and find_best_shaper) on a spectrum synthesized from the fitted modes instead of an
 // accelerometer's: each shaper type is designed at Klipper's default damping ratio over its test
@@ -384,10 +364,4 @@ export function recommendShapersForModes(modes: ModeComponent[]): ShaperRecommen
     }
   }
   return { options: fitted.map((f) => f.option), recommended: best!.option }
-}
-
-/** The residual vibration a ZV shaper at the dominant mode leaves at another mode (Marlin
- *  implements ZV only), as a fraction. */
-export function zvResidualAtMode(dominant: ModeComponent, other: ModeComponent): number {
-  return residualVibration(shaperImpulses('ZV', dominant.frequencyHz, dominant.dampingRatio), other.frequencyHz, other.dampingRatio)
 }

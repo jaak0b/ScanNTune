@@ -98,7 +98,6 @@ function fakeAxisResult(alignment: IsAlignment): IsAxisResult {
     amplitudeMm: 0.2,
     secondModePBound: null,
     secondMode: null,
-    zvSecondModeResidual: null,
     artifacts: [],
     cornerModel: null,
     alongTrackLag: null,

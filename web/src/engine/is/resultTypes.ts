@@ -146,9 +146,6 @@ export interface IsAxisResult {
    *  are then the dominant mode's. Its proportionality 'failed' marks a steady tone, which the
    *  shaper selection ignores. */
   secondMode: SecondMode | null
-  /** The residual vibration Marlin's ZV shaper at the dominant mode leaves at the second mode, as
-   *  a fraction; null without a second mode. */
-  zvSecondModeResidual: number | null
   /** Arc-length artifacts (belt teeth, JPEG blocks, other stationary patterns of the print or the
    *  scan) the analysis detected and carried in its model; empty without a search. */
   artifacts: DetectedArtifact[]

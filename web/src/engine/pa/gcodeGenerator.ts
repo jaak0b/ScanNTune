@@ -17,30 +17,27 @@ import { BASE_LAYERS, extrude, newEmitter, retract, travel } from '../gcode/emit
 export { extrusionMm } from '../gcode/emitter'
 
 /**
- * Firmware state the test leaves changed: pressure advance (and on Klipper the smooth time)
- * stays at the last test line's value, and the preamble's motion limits stay in force; a
- * firmware restart brings the configured values back.
+ * Firmware state the test leaves changed: pressure advance (and the smooth time) stays at the
+ * last test line's value, and the preamble's motion limits stay in force; a firmware restart
+ * brings the configured values back.
  */
 export const PA_OVERRIDDEN_SETTINGS: readonly OverriddenSetting[] = couponOverriddenSettings([
   'pressureAdvance',
 ])
 
-export function paCommand(firmware: PrinterProfile['firmware'], value: number): string {
-  const v = value.toFixed(4)
-  if (firmware === 'Marlin') return `M900 K${v}`
-  if (firmware === 'RepRapFirmware') return `M572 D0 S${v}`
-  return `SET_PRESSURE_ADVANCE ADVANCE=${v}`
+export function paCommand(value: number): string {
+  return `SET_PRESSURE_ADVANCE ADVANCE=${value.toFixed(4)}`
 }
 
-/** Klipper-only: set the fixed advance K together with a swept smooth time. */
+/** Sets the fixed advance K together with a swept smooth time. */
 export function smoothTimeCommand(fixedAdvance: number, smoothTime: number): string {
   return `SET_PRESSURE_ADVANCE ADVANCE=${fixedAdvance.toFixed(4)} SMOOTH_TIME=${smoothTime.toFixed(4)}`
 }
 
 /** The per-line parameter command for the spec's sweep kind. */
-function sweepCommand(profile: PrinterProfile, spec: PaTestSpec, value: number): string {
+function sweepCommand(spec: PaTestSpec, value: number): string {
   if (spec.sweep === 'smoothTime') return smoothTimeCommand(spec.fixedAdvance as number, value)
-  return paCommand(profile.firmware, value)
+  return paCommand(value)
 }
 
 export function generatePaGcode(
@@ -63,15 +60,8 @@ export function generatePaGcodeWithReport(
   if (spec.fastSpeedMmS <= spec.slowSpeedMmS) {
     throw new Error('Fast speed must exceed slow speed')
   }
-  if (spec.sweep === 'smoothTime') {
-    if (profile.firmware !== 'Klipper') {
-      throw new Error(
-        'Smooth time calibration requires Klipper; Marlin and RepRapFirmware have no equivalent setting.',
-      )
-    }
-    if (!Number.isFinite(spec.fixedAdvance)) {
-      throw new Error('A smooth time sweep needs a fixed pressure advance value (fixedAdvance).')
-    }
+  if (spec.sweep === 'smoothTime' && !Number.isFinite(spec.fixedAdvance)) {
+    throw new Error('A smooth time sweep needs a fixed pressure advance value (fixedAdvance).')
   }
   const g = couponGeometry(spec)
   const { ox, oy } = couponOrigin(profile, g.baseWidthMm, g.baseHeightMm)
@@ -109,7 +99,7 @@ function emitPaGcode(profile: PrinterProfile, filament: FilamentProfile, spec: P
   L.push(
     spec.sweep === 'smoothTime'
       ? smoothTimeCommand(spec.fixedAdvance as number, KLIPPER_DEFAULT_SMOOTH_TIME)
-      : paCommand(profile.firmware, 0),
+      : paCommand(0),
   )
   travel(e, profile, ox + 2, oy + 1.5)
   extrude(e, profile, filament, spec.lineWidthMm, ox + g.baseWidthMm - 2, oy + 1.5, spec.slowSpeedMmS)
@@ -119,7 +109,7 @@ function emitPaGcode(profile: PrinterProfile, filament: FilamentProfile, spec: P
   const [startXMm, endXMm] = g.lineExtentXsMm
   const [accelXMm, decelXMm] = g.transitionXsMm
   for (let i = 0; i < spec.lineCount; i++) {
-    L.push(sweepCommand(profile, spec, paValueForLine(spec, i)))
+    L.push(sweepCommand(spec, paValueForLine(spec, i)))
     const y = oy + g.lineStartYMm(i)
     const x0 = ox + g.lineStartXMm
     retract(e, profile, 1)

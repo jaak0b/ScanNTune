@@ -3,12 +3,8 @@ import { combinePlanes } from '../../src/engine/multiPlaneCombiner'
 import {
   skewCorrectionMulti,
   axisSizeCorrection,
-  KLIPPER,
-  MARLIN,
-  REPRAP,
   SCALE,
   SHRINKAGE,
-  STEPS_PER_MM,
   ROTATION_DISTANCE,
 } from '../../src/engine/correctionFormatter'
 import { defaultCouponSpec } from '../../src/engine/types'
@@ -65,7 +61,7 @@ describe('multi-plane skew formatter', () => {
   ]
 
   it('Klipper carries every plane in one SET_SKEW', () => {
-    const c = skewCorrectionMulti(KLIPPER, skews, coupon)
+    const c = skewCorrectionMulti(skews, coupon)
     expect(c.code).toContain('SET_SKEW')
     expect(c.code).toContain('XY=')
     expect(c.code).toContain('XZ=')
@@ -73,26 +69,10 @@ describe('multi-plane skew formatter', () => {
     expect(c.code).toContain('SKEW_PROFILE SAVE=ScanNTune')
   })
 
-  it('Marlin uses I/J/K per plane', () => {
-    const c = skewCorrectionMulti(MARLIN, skews, coupon)
-    expect(c.code).toMatch(/^M852 I-?\d/)
-    expect(c.code).toContain(' J')
-    expect(c.code).toContain(' K')
-    expect(c.code).toContain('M500')
-  })
-
-  it('RRF maps XY->X, XZ->Z, YZ->Y', () => {
-    const c = skewCorrectionMulti(REPRAP, skews, coupon)
-    expect(c.code).toContain('M556 S100')
-    expect(c.code).toMatch(/ X-?\d/)
-    expect(c.code).toMatch(/ Z-?\d/)
-    expect(c.code).toMatch(/ Y-?\d/)
-  })
-
   it('drops an out-of-range plane and notes it', () => {
-    const c = skewCorrectionMulti(MARLIN, [{ plane: 'XY', skewDegrees: 0.2 }, { plane: 'XZ', skewDegrees: 60 }], coupon)
-    expect(c.code).toContain('I')
-    expect(c.code).not.toContain('J')
+    const c = skewCorrectionMulti([{ plane: 'XY', skewDegrees: 0.2 }, { plane: 'XZ', skewDegrees: 60 }], coupon)
+    expect(c.code).toContain('XY=')
+    expect(c.code).not.toContain('XZ=')
     expect(c.hint).toContain('XZ')
   })
 })
@@ -174,7 +154,6 @@ describe('per-axis size formatter', () => {
 
   it('An XY current has no effect on flavours other than Shrinkage', () => {
     const withXY = { XY: 98 }
-    expect(axisSizeCorrection(STEPS_PER_MM, scales, withXY)).toEqual(axisSizeCorrection(STEPS_PER_MM, scales, {}))
     expect(axisSizeCorrection(ROTATION_DISTANCE, scales, withXY)).toEqual(
       axisSizeCorrection(ROTATION_DISTANCE, scales, {}),
     )

@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import type { Firmware } from '../engine/gcode/profileTypes'
 import type {
   IsAxisResult,
   IsLineExclusion,
@@ -10,18 +9,14 @@ import type {
 } from '../engine/is/resultTypes'
 import { isCheckRows } from './isCheckRows'
 import { F_MIN_HZ, F_MAX_HZ } from '../engine/is/types'
-import {
-  formatKlipperShaper,
-  formatMarlinShaper,
-  formatRrfShaper,
-} from '../engine/is/shaperRecommender'
+import { formatKlipperShaper } from '../engine/is/shaperRecommender'
 import CodeBlock from './CodeBlock.vue'
 import MetricTile from './MetricTile.vue'
 
 // Renders the outcome of the two-scan input shaper analysis: per-axis figures or refusals,
-// the shaper comparison table, and the firmware snippet for the profile's firmware. Pure
-// presentation over the IsResult; the firmware is the one selected when the scans were analyzed.
-const props = defineProps<{ result: IsResult; firmware: Firmware }>()
+// the shaper comparison table, and the Klipper configuration snippet. Pure presentation over
+// the IsResult.
+const props = defineProps<{ result: IsResult }>()
 
 const axes = computed(() => props.result.axes)
 const acceptedAxes = computed(() => axes.value.filter((a) => a.accepted))
@@ -98,37 +93,15 @@ function refusalCounts(a: IsAxisResult): string[] {
     .map((c) => `${CATEGORY_LABELS[c]}: ${counts.get(c)} ${counts.get(c) === 1 ? 'line' : 'lines'}`)
 }
 
-// The ready-to-paste snippet in the selected firmware's own configuration language. Klipper
-// takes a persistent [input_shaper] block; Marlin and RepRapFirmware take M593 commands.
+// The ready-to-paste Klipper snippet: a persistent [input_shaper] block for printer.cfg.
 const snippet = computed(() => {
   const accepted = acceptedAxes.value
   if (accepted.length === 0) return null
-  switch (props.firmware) {
-    case 'Klipper': {
-      const lines = accepted.flatMap((a) => [
-        ...formatKlipperShaper(a.axis, a.recommended!).split('\n'),
-        `damping_ratio_${a.axis}: ${a.dampingRatio!.toFixed(3)}`,
-      ])
-      return { code: ['[input_shaper]', ...lines].join('\n'), note: 'Add the block to printer.cfg and restart the firmware.' }
-    }
-    case 'Marlin':
-      return {
-        code: accepted.map((a) => formatMarlinShaper(a.axis, a.frequencyHz!, a.dampingRatio!)).join('\n'),
-        note:
-          'Marlin implements the ZV shaper, so the command carries the measured frequency and ' +
-          'damping ratio. Add M500 to save the values.',
-      }
-    case 'RepRapFirmware':
-      return {
-        code: accepted.map((a) => formatRrfShaper(a.recommended!)).join('\n'),
-        note:
-          accepted.length > 1
-            ? 'RepRapFirmware applies one shaper to all axes, so only one of the commands can ' +
-              'be active. Put the chosen line in config.g.'
-            : 'Put the command in config.g to make it permanent.',
-      }
-  }
-  return null
+  const lines = accepted.flatMap((a) => [
+    ...formatKlipperShaper(a.axis, a.recommended!).split('\n'),
+    `damping_ratio_${a.axis}: ${a.dampingRatio!.toFixed(3)}`,
+  ])
+  return { code: ['[input_shaper]', ...lines].join('\n'), note: 'Add the block to printer.cfg and restart the firmware.' }
 })
 </script>
 

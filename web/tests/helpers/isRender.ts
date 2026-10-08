@@ -15,9 +15,7 @@ import { timeAtDistance } from '../../src/engine/is/lineTracer'
 // distance at the commanded time whatever the part does afterwards: `shrink` scales the whole
 // printed coupon (lines, rings, fiducials) by 1 - shrink about its origin, the way plastic
 // shrinkage or a printer axis scale error does, while the ring stays timed by the commanded
-// distance. `rampProfile: 'sCurve'` times the post-corner acceleration ramp by Marlin's
-// S_CURVE_ACCELERATION quintic Bezier, v0 + dv (10 tau^3 - 15 tau^4 + 6 tau^5) over the
-// trapezoid's duration (stepper.cpp _calc_bezier_curve_coeffs), instead of the trapezoid.
+// distance.
 //
 // Along-track lag: the axis along a group's lines is the other group's axis, and the corner
 // changes its velocity the same way (the Y group starts it from rest along +X, the X group stops
@@ -59,8 +57,6 @@ export interface IsRenderOptions {
   wavinessPeriodMm?: number
   /** Fraction the printed coupon is smaller than commanded (0.005 = 0.5% shrinkage). */
   shrink?: number
-  /** Velocity profile of the post-corner acceleration ramp. */
-  rampProfile?: 'trapezoid' | 'sCurve'
   /** Deposit each line where its nozzle, lagging by the other axis's ring, passed it. */
   alongTrackLag?: boolean
 }
@@ -80,7 +76,6 @@ const DEFAULTS: Omit<Resolved, 'spec' | 'truth'> = {
   wavinessAmpMm: 0,
   wavinessPeriodMm: 40,
   shrink: 0,
-  rampProfile: 'trapezoid',
   alongTrackLag: true,
 }
 
@@ -95,40 +90,11 @@ function rng(seed: number): () => number {
   }
 }
 
-/**
- * Time since the corner at commanded distance sMm when the acceleration ramp from the corner
- * speed c to the tier speed v follows Marlin's quintic Bezier: v(t) = c + (v - c) B(t / T)
- * with B(tau) = 10 tau^3 - 15 tau^4 + 6 tau^5 and T = (v - c) / a, the trapezoid's duration.
- * The distance covered by time t inside the ramp is c t + (v - c) T S(t / T) with
- * S(tau) = 2.5 tau^4 - 3 tau^5 + tau^6 (the integral of B), solved for t by bisection; the ramp
- * ends at the trapezoid's distance (S(1) = 1/2), so the cruise part is shared.
- */
-function timeAtDistanceSCurve(sMm: number, c: number, v: number, a: number): number {
-  const T = (v - c) / a
-  const rampMm = c * T + 0.5 * (v - c) * T
-  if (sMm > rampMm) return T + (sMm - rampMm) / v
-  const distance = (t: number) => {
-    const tau = t / T
-    return c * t + (v - c) * T * (2.5 * tau ** 4 - 3 * tau ** 5 + tau ** 6)
-  }
-  let lo = 0
-  let hi = T
-  for (let k = 0; k < 60; k++) {
-    const mid = 0.5 * (lo + hi)
-    if (distance(mid) < sMm) lo = mid
-    else hi = mid
-  }
-  return 0.5 * (lo + hi)
-}
-
-/** Commanded distance covered by time t after the corner: the trapezoid, or Marlin's Bezier ramp
- *  of the trapezoid's duration (see timeAtDistanceSCurve), then cruise. */
-function distanceAtTime(t: number, c: number, v: number, a: number, profile: 'trapezoid' | 'sCurve'): number {
+/** Commanded distance covered by time t after the corner: the trapezoid ramp, then cruise. */
+function distanceAtTime(t: number, c: number, v: number, a: number): number {
   const T = (v - c) / a
   if (t >= T) return 0.5 * (c + v) * T + v * (t - T)
-  if (profile === 'trapezoid') return c * t + 0.5 * a * t * t
-  const tau = t / T
-  return c * t + (v - c) * T * (2.5 * tau ** 4 - 3 * tau ** 5 + tau ** 6)
+  return c * t + 0.5 * a * t * t
 }
 
 /** Step of the deposit-time table along a lagged line, mm: linear interpolation over it misses a
@@ -233,24 +199,23 @@ function buildRingedLines(spec: IsTestSpec, g: IsCouponGeometry, o: Resolved): R
       const phi = truth.phaseRad ?? 0
       const omega = 2 * Math.PI * f
       const omegaD = omega * Math.sqrt(1 - zeta * zeta)
-      const timeAt = o.rampProfile === 'sCurve' ? timeAtDistanceSCurve : timeAtDistance
       const c = line.cornerSpeedMmS
       const v = line.speedMmS
       const a = spec.accelMmS2
       const atTime = (t: number) =>
         lobeA * Math.exp(-t / lobeTau) + B * Math.exp(-omega * zeta * t) * Math.cos(omegaD * t + phi)
       const lag = lagFunction(g, o, group.axis, c)
-      let lat = (sMm: number) => atTime(timeAt(sMm, c, v, a))
+      let lat = (sMm: number) => atTime(timeAtDistance(sMm, c, v, a))
       if (lag) {
         // The ring is bounded by its corner amplitude, so the deposit time lies between the
         // commanded times of s - bound and s + bound.
         const bound = Math.abs(o.truth[g.groups.find((other) => other.axis !== group.axis)!.axis]!.ringAmpMm) * (c / spec.cornerSpeedMmS)
         const depositTime = (sMm: number) => {
-          let lo = timeAt(Math.max(0, sMm - bound), c, v, a)
-          let hi = timeAt(sMm + bound, c, v, a)
+          let lo = timeAtDistance(Math.max(0, sMm - bound), c, v, a)
+          let hi = timeAtDistance(sMm + bound, c, v, a)
           for (let k = 0; k < 60; k++) {
             const mid = 0.5 * (lo + hi)
-            if (distanceAtTime(mid, c, v, a, o.rampProfile) - lag(mid) < sMm) lo = mid
+            if (distanceAtTime(mid, c, v, a) - lag(mid) < sMm) lo = mid
             else hi = mid
           }
           return 0.5 * (lo + hi)

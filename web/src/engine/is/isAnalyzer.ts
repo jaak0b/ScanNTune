@@ -10,7 +10,7 @@ import { imageDirection, measuredDirection, traceGroup, tracedSpanPx } from './l
 import { analyzeTracedLine, poolCouponAxes } from './ringAnalyzer'
 import type { AxisPool, LineFit } from './ringAnalyzer'
 import { layerShiftDetected } from './layerShift'
-import { recommendShapers, recommendShapersForModes, zvResidualAtMode } from './shaperRecommender'
+import { recommendShapers, recommendShapersForModes } from './shaperRecommender'
 import type { IsAxisResult, IsLineOutcome, IsResult, IsScanInfo } from './resultTypes'
 import { sampleBgrTriples, selectMeasurementChannel } from '../cvUtils'
 import { evaluateScanSetResolution } from '../resolutionGate'
@@ -309,7 +309,6 @@ function refusedAxis(
     layerShiftDetected: null,
     secondModePBound: null,
     secondMode: null,
-    zvSecondModeResidual: null,
     artifacts: [],
     cornerModel: null,
     alongTrackLag: null,
@@ -565,7 +564,6 @@ function axisResult(group: IsLineGroup, traced: TracedAxisGroup, pool: AxisPool,
     amplitudeMm: pool.amplitudeMm,
     secondModePBound: pool.secondModePBound,
     secondMode: pool.secondMode,
-    zvSecondModeResidual: second !== null ? zvResidualAtMode(dominant, second) : null,
     linesUsed: pool.linesUsed,
     linesTraced: tracedIndices.length,
     scanIndex,

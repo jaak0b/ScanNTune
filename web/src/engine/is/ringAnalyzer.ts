@@ -355,10 +355,8 @@ export function analyzeTracedLine(line: TracedLine): LineFit {
   const trend = gaussianTrend(line.tS, line.lateralMm, 1 / DRIFT_CUTOFF_HZ, half)
   const detrended = new Float64Array(n)
   for (let i = 0; i < half; i++) detrended[i] = line.lateralMm[i] - trend[i]
-  const freeStart = freeResponseStart(detrended)
-  const timedStart = line.tS.findIndex((t) => t >= line.fitStartMinS)
-  if (freeStart === null || timedStart < 0) return refuse()
-  const start = Math.max(freeStart, timedStart)
+  const start = freeResponseStart(detrended)
+  if (start === null) return refuse()
 
   const lattice: number[] = []
   for (let k = start; k < n; k++) if (line.observed[k]) lattice.push(k)

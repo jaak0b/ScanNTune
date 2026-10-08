@@ -11,9 +11,8 @@ import type { TracedLine } from '../../src/engine/is/lineTracer'
 // - Time base: samples sit on the tracer's lattice, one scan pixel apart along the line
 //   (600 dpi by default), from 1 mm past the corner to the end of the clean read. The physical
 //   time of a sample follows the commanded profile after the corner: the trapezoid (constant
-//   acceleration from the corner speed to the tier speed, then cruise) or Marlin's quintic Bezier
-//   S-curve of the same duration. The traced time base the analyzer receives is always the
-//   trapezoid, exactly as the tracer computes it.
+//   acceleration from the corner speed to the tier speed, then cruise), which is also the traced
+//   time base the analyzer receives, exactly as the tracer computes it.
 // - Ring: the free response to the corner's velocity step, amplitude proportional to the line's
 //   rung (the top rung carries ampMm), one phase for the whole axis (fixed by the corner).
 // - Noise models (per traced sample, in scan pixels): iid; bilinear (iid pixel noise read by the
@@ -132,8 +131,6 @@ export interface TraceSimOptions {
   lateralTowardRunUp?: 1 | -1
   /** Unreadable samples: this fraction of the samples, in runs of 1 to maxRun samples. */
   gaps?: { fraction: number; maxRun: number }
-  /** Velocity profile the printer actually ran after the corner. */
-  rampProfile?: 'trapezoid' | 'sCurve'
   /** Lines to simulate, by group index; absent means every line of the group. */
   lineIndices?: number[]
 }
@@ -185,30 +182,6 @@ function trapezoidDistance(t: number, c: number, v: number, a: number): number {
   const tRamp = (v - c) / a
   if (t <= tRamp) return c * t + 0.5 * a * t * t
   return c * tRamp + 0.5 * a * tRamp * tRamp + v * (t - tRamp)
-}
-
-/** Distance covered by time t after the corner on Marlin's quintic Bezier ramp of the
- *  trapezoid's duration. */
-function sCurveDistance(t: number, c: number, v: number, a: number): number {
-  const T = (v - c) / a
-  if (t >= T) return 0.5 * (c + v) * T + v * (t - T)
-  const u = t / T
-  return c * t + (v - c) * T * (2.5 * u ** 4 - 3 * u ** 5 + u ** 6)
-}
-
-/** Time to cover distance s on Marlin's quintic Bezier ramp of the trapezoid's duration. */
-function sCurveTime(s: number, c: number, v: number, a: number): number {
-  const T = (v - c) / a
-  const sRamp = 0.5 * (c + v) * T
-  if (s > sRamp) return T + (s - sRamp) / v
-  let lo = 0
-  let hi = T
-  for (let k = 0; k < 80; k++) {
-    const mid = 0.5 * (lo + hi)
-    if (sCurveDistance(mid, c, v, a) < s) lo = mid
-    else hi = mid
-  }
-  return 0.5 * (lo + hi)
 }
 
 /**
@@ -399,8 +372,6 @@ export function simulateAxis(options: TraceSimOptions): SimLine[] {
     const tTraced = new Float64Array(count)
     const lateral = new Float64Array(count)
     const acrossNominal = new Float64Array(count)
-    const timeOf = options.rampProfile === 'sCurve' ? sCurveTime : trapezoidTime
-    const distanceAt = options.rampProfile === 'sCurve' ? sCurveDistance : trapezoidDistance
     const along = options.alongTrack
     const alongAmp = along ? (along.ampMm ?? cTop / (2 * Math.PI * along.frequencyHz)) * (c / cTop) : 0
     const sign = options.lateralTowardRunUp ?? 1
@@ -421,8 +392,8 @@ export function simulateAxis(options: TraceSimOptions): SimLine[] {
       // The nozzle lags its commanded arc position by the along-track mode's response to the
       // corner's velocity step, so the bead at s is deposited when the lagging nozzle reaches s.
       const t = along
-        ? depositTime(s, (u) => distanceAt(u, c, v, a), (x) => timeOf(x, c, v, a), lag, Math.abs(alongAmp))
-        : timeOf(s, c, v, a)
+        ? depositTime(s, (u) => trapezoidDistance(u, c, v, a), (x) => trapezoidTime(x, c, v, a), lag, Math.abs(alongAmp))
+        : trapezoidTime(s, c, v, a)
       let y = 0
       if (ring) y += modeAt(t, f, ring.dampingRatio, ring.ampMm * (c / cTop), ring.phaseRad ?? 0)
       for (const mode of options.extraModes ?? []) {
@@ -508,7 +479,6 @@ export function simulateAxis(options: TraceSimOptions): SimLine[] {
       cornerSpeedMmS: c,
       accelMmS2: a,
       tS: tTraced,
-      fitStartMinS: spec.exactRampTiming ? 0 : (v - c) / a,
       lateralMm: lateral,
       observed: Uint8Array.from(observed, (o) => (o ? 1 : 0)),
       alongPxPerMm: pxPerMm,

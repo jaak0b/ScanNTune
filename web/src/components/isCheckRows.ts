@@ -87,9 +87,6 @@ export function isCheckRows(a: IsAxisResult): CheckRow[] {
       { label: 'Second mode grows with corner speed', value: stateYesNo(a.secondMode.proportionality) },
     )
   }
-  if (a.zvSecondModeResidual !== null) {
-    rows.push({ label: 'ZV shaper residual vibration at the second mode', value: `${(100 * a.zvSecondModeResidual).toFixed(1)}%` })
-  }
   a.artifacts.forEach((artifact, i) => {
     if (artifact.periodMm !== null) {
       rows.push({ label: `Print or scan pattern ${i + 1} period`, value: `${artifact.periodMm.toFixed(2)} mm` })

@@ -233,15 +233,6 @@ describe('fitSpecToPrinter firmware fit', () => {
   })
 })
 
-describe('fitSpecToPrinter ramp timing', () => {
-  it('marks only Marlin ramps as inexact, because its S-curve build flag cannot be detected', () => {
-    for (const firmware of ['Klipper', 'RepRapFirmware'] as const) {
-      expect(fitted(request, { ...profile, firmware }).exactRampTiming).toBe(true)
-    }
-    expect(fitted(request, { ...profile, firmware: 'Marlin' }).exactRampTiming).toBe(false)
-  })
-})
-
 describe('fitSpecToPrinter bed fit', () => {
   const bed = (mm: number) => ({ ...profile, bedWidthMm: mm, bedDepthMm: mm })
 

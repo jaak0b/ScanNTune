@@ -46,13 +46,12 @@ function addToLine(line: SimLine, ampMm: number, frequencyHz: number, dampingRat
   }
 }
 
-function trace(tS: number[], lateralMm: number[], observed: number[], fitStartMinS = 0): TracedLine {
+function trace(tS: number[], lateralMm: number[], observed: number[]): TracedLine {
   return {
     speedMmS: 150,
     cornerSpeedMmS: 100,
     accelMmS2: 3000,
     tS: Float64Array.from(tS),
-    fitStartMinS,
     lateralMm: Float64Array.from(lateralMm),
     observed: Uint8Array.from(observed),
     alongPxPerMm: 23.6,
@@ -69,20 +68,6 @@ describe('analyzeTracedLine', () => {
     expect(fit.screening).toBe('windowed')
     const unread = Array.from(fit.window!.lattice).filter((k) => line.trace.observed[k] === 0)
     expect(unread).toEqual([])
-  })
-
-  it('starts the window no earlier than the earliest exactly timed sample', () => {
-    const [line] = simulate(twoTier, { noise: IID, lineIndices: [0] })
-    const held = analyzeTracedLine({ ...line.trace, fitStartMinS: 0.05 })
-    expect(held.window!.tS[0]).toBeGreaterThanOrEqual(0.05)
-  })
-
-  it('finds no window when the earliest exactly timed sample lies past the trace', () => {
-    const [line] = simulate(twoTier, { noise: IID, lineIndices: [0] })
-    const fit = analyzeTracedLine({ ...line.trace, fitStartMinS: 10 })
-    expect(fit.screening).toBe('no-free-response')
-    expect(fit.refusalCategory).toBe('irregular-trace')
-    expect(fit.window).toBeNull()
   })
 
   it('finds no window in a trace too short to host the model', () => {

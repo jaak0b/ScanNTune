@@ -44,15 +44,6 @@ describe('generatePaGcode smooth time sweep', () => {
     expect(g).toContain('SET_PRESSURE_ADVANCE ADVANCE=0.0300 SMOOTH_TIME=0.0400')
   })
 
-  it('throws for non-Klipper firmwares', () => {
-    expect(() => generatePaGcode({ ...profile, firmware: 'Marlin' }, filament, spec)).toThrow(
-      /Klipper/,
-    )
-    expect(() =>
-      generatePaGcode({ ...profile, firmware: 'RepRapFirmware' }, filament, spec),
-    ).toThrow(/Klipper/)
-  })
-
   it('throws when the fixed advance is missing', () => {
     expect(() =>
       generatePaGcode(profile, filament, { ...spec, fixedAdvance: undefined }),
@@ -62,32 +53,27 @@ describe('generatePaGcode smooth time sweep', () => {
 
 describe('smoothTimeCorrection', () => {
   it('formats the Klipper command and printer.cfg line', () => {
-    const c = smoothTimeCorrection('Klipper', 0.03, 0.0351)
+    const c = smoothTimeCorrection(0.03, 0.0351)
     expect(c.code).toBe('SET_PRESSURE_ADVANCE ADVANCE=0.0300 SMOOTH_TIME=0.0351')
     expect(c.secondaryCode).toBe('pressure_advance_smooth_time: 0.0351')
     expect(c.secondaryCaption).toBe('printer.cfg')
-  })
-
-  it('throws for non-Klipper firmwares', () => {
-    expect(() => smoothTimeCorrection('Marlin', 0.03, 0.035)).toThrow(/Klipper/)
-    expect(() => smoothTimeCorrection('RepRapFirmware', 0.03, 0.035)).toThrow(/Klipper/)
   })
 })
 
 describe('sweepCorrection', () => {
   it('picks the smooth time correction for a smoothTime sweep', () => {
-    const c = sweepCorrection('Klipper', defaultSmoothTimeTestSpec(0.03), 0.0351)
+    const c = sweepCorrection(defaultSmoothTimeTestSpec(0.03), 0.0351)
     expect(c.code).toBe('SET_PRESSURE_ADVANCE ADVANCE=0.0300 SMOOTH_TIME=0.0351')
   })
 
   it('picks the pressure advance correction for an advance sweep', () => {
-    const c = sweepCorrection('Klipper', defaultPaTestSpec(), 0.0312)
+    const c = sweepCorrection(defaultPaTestSpec(), 0.0312)
     expect(c.code).toBe('SET_PRESSURE_ADVANCE ADVANCE=0.0312')
   })
 
   it('throws when a smoothTime sweep has no fixed advance', () => {
     const spec = { ...defaultSmoothTimeTestSpec(0.03), fixedAdvance: undefined }
-    expect(() => sweepCorrection('Klipper', spec, 0.035)).toThrow(/fixedAdvance/)
+    expect(() => sweepCorrection(spec, 0.035)).toThrow(/fixedAdvance/)
   })
 })
 

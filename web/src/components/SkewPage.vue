@@ -28,10 +28,10 @@ import type { CouponSpec, Plane } from '../engine/types'
 import type { MetricRange } from './MetricTile.vue'
 import { ScanState, SkewCouponScan } from '../model/skewCouponScan'
 import { mirroredScanInvalid } from '../engine/scanDiagnostics'
+import { FIRMWARES, type Firmware } from '../engine/gcode/profileTypes'
 import {
-  skewFlavours,
   sizeFlavours,
-  resetSkewCommand,
+  RESET_SKEW_COMMAND,
   skewCorrectionMulti,
   axisSizeCorrection,
   currentValueLabel,
@@ -294,10 +294,10 @@ function dialLabel(g: PlaneGroup): string {
   return `Scan angles: ${g.anglesDegrees.map(formatAngle).join(', ')}`
 }
 
-// One firmware choice drives every firmware-specific command on the page (reset, and the skew fix),
-// so the reset command and the fix always agree on which firmware they're talking to.
-const firmware = ref<string>(skewFlavours[0])
-const resetCommand = computed(() => resetSkewCommand(firmware.value))
+// The firmware dropdown shows the supported firmware, which the reset command and the skew fix
+// are written for.
+const firmware = ref<Firmware>(FIRMWARES[0])
+const resetCommand = RESET_SKEW_COMMAND
 
 // Set once Analyze succeeds: locks step 5 (no more uploads or removals) and reveals step 6.
 const hasResults = computed(() => app.payload !== null)
@@ -481,7 +481,7 @@ watch(shrinkageFlavour, () => {
 
 const skewFix = computed(() =>
   result.value && app.payload
-    ? skewCorrectionMulti(firmware.value, skews.value, app.payload.coupon)
+    ? skewCorrectionMulti(skews.value, app.payload.coupon)
     : null,
 )
 const shrinkageFix = computed(() =>
@@ -616,7 +616,7 @@ function getCoupon(file: string): void {
         <h1 class="text-h5 font-weight-bold">Skew/shrinkage calibration</h1>
         <v-select
           v-model="firmware"
-          :items="skewFlavours"
+          :items="FIRMWARES"
           label="Firmware"
           density="comfortable"
           hide-details

@@ -1,10 +1,9 @@
 import { beadCrossSectionMm2, roundedBeadCrossSectionMm2 } from '../gcode/emitter'
-import type { Firmware } from '../pa/types'
 
 export interface EmCorrection {
   /** New slicer flow / extrusion multiplier percentage. */
   newFlowPercent: number
-  /** Runtime command per firmware, e.g. 'M221 S97' (Marlin/RRF) or Klipper equivalent. */
+  /** The runtime flow override command Klipper accepts, e.g. 'M221 S97'. */
   command: string
   /** One-line explanation for the UI. */
   summary: string
@@ -67,7 +66,6 @@ export function flowRatioRelativeSe(wMm: number, seMm: number, layerHeightMm: nu
  * percentages are computed from the unrounded ratio and rounded once.
  */
 export function emCorrection(
-  firmware: Firmware,
   nominalWidthMm: number,
   layerHeightMm: number,
   wMm: number,
@@ -77,10 +75,7 @@ export function emCorrection(
   const newFlowPercent = roundPercent(100 * ratio)
   const m221Percent = roundPercent((100 * ratio) / enteredFlowFactor(enteredCurrentFlow))
   const command = `M221 S${m221Percent}`
-  const summary =
-    firmware === 'Klipper'
-      ? `Set the slicer flow to ${newFlowPercent}% for a permanent fix; the M221 command above only changes the current session.`
-      : `Set the slicer flow to ${newFlowPercent}% to make the correction permanent.`
+  const summary = `Set the slicer flow to ${newFlowPercent}% for a permanent fix; the M221 command above only changes the current session.`
   return { newFlowPercent, command, summary }
 }
 

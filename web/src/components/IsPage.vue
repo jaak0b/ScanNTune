@@ -20,7 +20,6 @@ import {
 import type { ScanResolutionVerdict } from '../util/scanResolution'
 import { analyzeIsScans } from '../workerClient'
 import type { IsProcessing } from '../workerClient'
-import type { Firmware } from '../engine/gcode/profileTypes'
 import {
   generateIsGcodeWithReport,
   IS_OVERRIDDEN_SETTINGS,
@@ -261,9 +260,6 @@ const {
   errorLabel: 'Input shaper scan analysis failed',
 })
 const result = computed(() => processing.value?.result ?? null)
-// The firmware the current result was analyzed under, so the snippet stays consistent even if
-// the profile selection changes afterwards.
-const analyzedFirmware = ref<Firmware>('Klipper')
 
 // Per-scan card facts, derived from the result: the alignment (fiducials), the resolved
 // orientation, and which axis group this scan measured with its line tally. The engine stops
@@ -381,9 +377,7 @@ async function analyze(): Promise<void> {
     // The calibration's scale error holds across resolutions; the scan is expected at the
     // calibration DPI, so the calibration is priced at exactly that resolution.
     const scanPxPerMm = scaleReferenceAtDpi(cal, cal.dpi)
-    const p = await analyzeIsScans(bytesA, bytesB, usedSpec, scanPxPerMm, cal.dpi)
-    analyzedFirmware.value = store.selected?.firmware ?? 'Klipper'
-    return p
+    return analyzeIsScans(bytesA, bytesB, usedSpec, scanPxPerMm, cal.dpi)
   })
 }
 </script>
@@ -827,7 +821,7 @@ async function analyze(): Promise<void> {
       <div class="step-head mb-3">
         <span class="num">6</span><span class="step-title">Result</span>
       </div>
-      <IsResultsCard :result="result" :firmware="analyzedFirmware" />
+      <IsResultsCard :result="result" />
     </section>
 
     <p class="tip">

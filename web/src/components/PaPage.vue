@@ -265,7 +265,7 @@ const linesReadable = computed(() =>
 const correction = computed(() => {
   const r = result.value
   if (!r || !r.success || r.bestPa === null) return null
-  return paCorrection(store.selected?.firmware ?? 'Klipper', r.bestPa)
+  return paCorrection(r.bestPa)
 })
 // Raw diagnostic: the resolution geometrically measured from the coupon itself.
 const hasResolution = computed(() => hasMeasuredResolution(result.value?.measuredPxPerMm))
@@ -289,9 +289,8 @@ function applyShift(): void {
   resetProcessing()
 }
 
-// Step 5, smooth time (optional, Klipper only). Shown once a successful PA result exists in this
-// session; hidden again if the user switches to a non-Klipper profile. The sweep range and the
-// fixed pressure advance are the persisted settings above, so both the generated coupon and the
+// Step 5, smooth time (optional). Shown once a successful PA result exists in this session and a
+// printer profile is selected. The sweep range and the fixed pressure advance are the persisted settings above, so both the generated coupon and the
 // analysis of an already printed one read the same values, also after a reload.
 const stSpec = computed<PaTestSpec>(() => ({
   ...defaultSmoothTimeTestSpec(stFixedAdvance.value ?? 0),
@@ -299,7 +298,7 @@ const stSpec = computed<PaTestSpec>(() => ({
   paEnd: stEnd.value ?? stDefaults.paEnd,
 }))
 const showSmoothStep = computed(
-  () => store.selected?.firmware === 'Klipper' && result.value?.success === true,
+  () => store.selected !== null && result.value?.success === true,
 )
 // The smooth time coupon prints its fast segments at the default fast speed, so it gets the
 // same flow check as the main coupon.
@@ -348,8 +347,7 @@ const stCorrection = computed(() => {
   const r = stResult.value
   const s = stAnalyzedSpec.value
   if (!r || !r.success || r.bestPa === null || !s) return null
-  if (store.selected?.firmware !== 'Klipper') return null
-  return sweepCorrection('Klipper', s, r.bestPa)
+  return sweepCorrection(s, r.bestPa)
 })
 </script>
 

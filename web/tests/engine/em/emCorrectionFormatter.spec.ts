@@ -17,20 +17,20 @@ describe('emCorrection', () => {
   it('expresses the flow in the rounded bead model: nominal 0.42 measured 0.437 at 0.2 mm reads 95.7 percent', () => {
     // A(0.42) = 0.2 x (0.42 - 0.0429204) = 0.0754159. A(0.437) = 0.2 x (0.437 - 0.0429204) =
     // 0.0788159. 0.0754159 / 0.0788159 = 0.956861, rounded once to 95.7.
-    const result = emCorrection('Marlin', 0.42, 0.2, 0.437, 1)
+    const result = emCorrection(0.42, 0.2, 0.437, 1)
     expect(result.newFlowPercent).toBe(95.7)
   })
 
   it('reads a bead wider than nominal as too much flow: nominal 0.435 measured 0.5 reads 85.8 percent', () => {
     // A(0.435) = 0.2 x (0.435 - 0.0429204) = 0.0784159. A(0.5) = 0.2 x (0.5 - 0.0429204) =
     // 0.0914159. 0.0784159 / 0.0914159 = 0.857793, rounded once to 85.8.
-    const result = emCorrection('Marlin', 0.435, 0.2, 0.5, 1)
+    const result = emCorrection(0.435, 0.2, 0.5, 1)
     expect(result.newFlowPercent).toBe(85.8)
     expect(result.command).toBe('M221 S85.8')
   })
 
   it('reads a bead printed at its nominal width as exactly 100 percent', () => {
-    const result = emCorrection('Marlin', 0.45, 0.2, 0.45, 1)
+    const result = emCorrection(0.45, 0.2, 0.45, 1)
     expect(result.newFlowPercent).toBe(100)
     expect(result.command).toBe('M221 S100')
   })
@@ -39,48 +39,44 @@ describe('emCorrection', () => {
     // A(0.4378) = 0.2 x (0.4378 - 0.0429204) = 0.0789759; 0.0754159 / 0.0789759 = 0.954923, so
     // the slicer flow is 95.5. A part sliced at flow 0.925 needs the firmware to multiply it by
     // 0.954923 / 0.925 = 1.032349 to print at 0.954923: S103.2.
-    const result = emCorrection('Marlin', 0.42, 0.2, 0.4378, 0.925)
+    const result = emCorrection(0.42, 0.2, 0.4378, 0.925)
     expect(result.newFlowPercent).toBe(95.5)
     expect(result.command).toBe('M221 S103.2')
   })
 
   it('emits an M221 equal to the slicer percentage when the current slicer flow is 1.0', () => {
     for (const widthMm of [0.4, 0.41, 0.437, 0.45, 0.4813, 0.5, 0.512]) {
-      const c = emCorrection('Marlin', 0.45, 0.2, widthMm, 1)
+      const c = emCorrection(0.45, 0.2, widthMm, 1)
       expect(m221Percent(c.command)).toBe(c.newFlowPercent)
     }
   })
 
   it('reads a percentage-style current flow the same as the equivalent factor', () => {
-    expect(emCorrection('Marlin', 0.42, 0.2, 0.4378, 92.5).command).toBe(
-      emCorrection('Marlin', 0.42, 0.2, 0.4378, 0.925).command,
+    expect(emCorrection(0.42, 0.2, 0.4378, 92.5).command).toBe(
+      emCorrection(0.42, 0.2, 0.4378, 0.925).command,
     )
-    expect(emCorrection('Marlin', 0.42, 0.2, 0.4378, 92.5).command).toBe('M221 S103.2')
+    expect(emCorrection(0.42, 0.2, 0.4378, 92.5).command).toBe('M221 S103.2')
   })
 
   it('rounds the M221 percentage once from the unrounded ratio', () => {
     // A(0.401) = 0.2 x (0.401 - 0.0429204) = 0.0716159; 0.0754159 / 0.0716159 = 1.053061. Over a
     // 0.963 current flow the raw ratio gives 109.3521 percent (S109.4), while dividing the
     // already rounded 105.3 would give 109.3458 (S109.3).
-    expect(emCorrection('Marlin', 0.42, 0.2, 0.401, 0.963).command).toBe('M221 S109.4')
+    expect(emCorrection(0.42, 0.2, 0.401, 0.963).command).toBe('M221 S109.4')
   })
 
-  it('emits the same M221 command for Marlin, RepRapFirmware and Klipper', () => {
-    for (const firmware of ['Marlin', 'RepRapFirmware', 'Klipper'] as const) {
-      expect(emCorrection(firmware, 0.42, 0.2, 0.437, 1).command).toBe('M221 S95.7')
-    }
+  it('emits the M221 command for the measured flow', () => {
+    expect(emCorrection(0.42, 0.2, 0.437, 1).command).toBe('M221 S95.7')
   })
 
-  it('advises setting the slicer flow instead of M221 on Klipper', () => {
-    const result = emCorrection('Klipper', 0.42, 0.2, 0.437, 1)
+  it('advises setting the slicer flow instead of M221', () => {
+    const result = emCorrection(0.42, 0.2, 0.437, 1)
     expect(result.summary.toLowerCase()).toContain('slicer flow')
   })
 
-  it('mentions the slicer flow value in the summary for all firmwares', () => {
-    for (const firmware of ['Marlin', 'RepRapFirmware', 'Klipper'] as const) {
-      const result = emCorrection(firmware, 0.42, 0.2, 0.437, 0.925)
-      expect(result.summary).toContain('95.7')
-    }
+  it('mentions the slicer flow value in the summary', () => {
+    const result = emCorrection(0.42, 0.2, 0.437, 0.925)
+    expect(result.summary).toContain('95.7')
   })
 })
 
@@ -120,7 +116,7 @@ describe('formatSlicerFlow', () => {
 
   it('agrees with the M221 command at a current flow of 1.0 for every rounded percentage in both styles', () => {
     for (const widthMm of [0.4, 0.41, 0.437, 0.45, 0.4813, 0.5, 0.512]) {
-      const c = emCorrection('Marlin', 0.45, 0.2, widthMm, 1)
+      const c = emCorrection(0.45, 0.2, widthMm, 1)
       const commandPercent = m221Percent(c.command)
       expect(Number(formatSlicerFlow(c.newFlowPercent, null, 96).replace('%', ''))).toBeCloseTo(
         commandPercent,

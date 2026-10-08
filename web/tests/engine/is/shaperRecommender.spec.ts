@@ -3,8 +3,6 @@ import { describe, expect, it } from 'vitest'
 import {
   SHAPER_TYPES,
   formatKlipperShaper,
-  formatMarlinShaper,
-  formatRrfShaper,
   modeSpectrum,
   recommendShapers,
   recommendShapersForModes,
@@ -13,7 +11,6 @@ import {
   shaperMaxAccel,
   shaperSmoothingMm,
   worstBandResidual,
-  zvResidualAtMode,
 } from '../../../src/engine/is/shaperRecommender'
 
 describe('shaperImpulses', () => {
@@ -120,13 +117,11 @@ describe('recommendShapers', () => {
 })
 
 describe('formatters', () => {
-  it('formats Klipper, Marlin, and RepRapFirmware suggestions', () => {
+  it('formats the Klipper suggestion', () => {
     const rec = recommendShapers(52.34, 0.06)
     const klipper = formatKlipperShaper('x', rec.recommended)
     expect(klipper).toContain('shaper_freq_x: 52.3')
     expect(klipper).toContain(`shaper_type_x: ${rec.recommended.type.toLowerCase()}`)
-    expect(formatMarlinShaper('y', 52.34, 0.06)).toBe('M593 Y F52.3 D0.060')
-    expect(formatRrfShaper(rec.recommended)).toMatch(/^M593 P"(zvd|mzv|ei2|ei3)" F52\.3$/)
   })
 })
 
@@ -157,12 +152,5 @@ describe('multi-mode shaper selection', () => {
     const { options } = recommendShapersForModes(twoModes)
     expect(options.map((o) => o.type)).toEqual(['ZV', 'MZV', 'EI', '2HUMP_EI', '3HUMP_EI'])
     for (const o of options) expect(o.frequencyHz).toBeLessThanOrEqual(150)
-  })
-
-  it('reports what a ZV shaper at the dominant mode leaves at the other mode', () => {
-    // ZV at 45 Hz, zeta 0.05: impulses 1 and K = 0.85448 half a damped period (0.011125 s)
-    // apart; at 62 Hz, zeta 0.05 the residual is 0.501 (hand-computed with Singer and Seering's
-    // formula).
-    expect(zvResidualAtMode(twoModes[0], twoModes[1])).toBeCloseTo(0.501, 3)
   })
 })

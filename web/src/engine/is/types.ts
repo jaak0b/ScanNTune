@@ -75,25 +75,14 @@ export interface IsTestSpec {
    * down on the glass) and the traced geometry are unchanged.
    */
   contrastBase: boolean
-  /**
-   * Whether the firmware's post-corner acceleration ramp is the exact trapezoid the time base
-   * models. False on Marlin, whose S_CURVE_ACCELERATION build flag (undetectable) replaces the
-   * ramp by a quintic Bezier of the same duration and distance; the ringing fit then starts at
-   * the end of the ramp. Set by fitSpecToPrinter from the firmware.
-   */
-  exactRampTiming: boolean
 }
 
 /**
- * What the page asks for: a spec without its line count and ramp timing. The lines per speed
- * are always derived by fitSpecToPrinter (ladderLinesPerSpeed) after the firmware fit, and the
- * ramp timing comes from the firmware, so the generator and the analysis both read one fitted
- * IsTestSpec.
+ * What the page asks for: a spec without its line count. The lines per speed are always
+ * derived by fitSpecToPrinter (ladderLinesPerSpeed) after the firmware fit, so the generator
+ * and the analysis both read one fitted IsTestSpec.
  */
-export type IsTestRequest = Omit<IsTestSpec, 'linesPerSpeed' | 'exactRampTiming'>
-
-/** A request after the firmware fit: its ramp timing is known, its line count not yet. */
-type FirmwareFittedRequest = IsTestRequest & Pick<IsTestSpec, 'exactRampTiming'>
+export type IsTestRequest = Omit<IsTestSpec, 'linesPerSpeed'>
 
 /** Frequency search range of the ringing fit: the flow's measurable resonance band. */
 export const F_MIN_HZ = 20
@@ -372,7 +361,7 @@ export function fitSpecToPrinter(
   profile: PrinterProfile,
 ): { spec: IsTestSpec; notes: string[] } {
   const tiers = fitTiersToLadder(request)
-  const firmware = fitSpecToFirmware(tiers.request, profile)
+  const firmware = fitSpecToFirmware(tiers.request)
   const bed = fitSpecToBed(firmware.request, profile)
   return { spec: bed.spec, notes: [...tiers.notes, ...firmware.notes, ...bed.notes] }
 }
@@ -425,11 +414,7 @@ function fitTiersToLadder(request: IsTestRequest): { request: IsTestRequest; not
  * base all agree with the corner the printer actually takes. Throws when the firmware cannot
  * take even the minimum corner speed.
  */
-function fitSpecToFirmware(
-  req: IsTestRequest,
-  profile: PrinterProfile,
-): { request: FirmwareFittedRequest; notes: string[] } {
-  const request: FirmwareFittedRequest = { ...req, exactRampTiming: profile.firmware !== 'Marlin' }
+function fitSpecToFirmware(request: IsTestRequest): { request: IsTestRequest; notes: string[] } {
   const legMm = shortestRunUpMoveMm(request)
   const cap = klipperCentripetalCornerCapMmS(legMm, request.accelMmS2)
   if (cap < MIN_CORNER_SPEED_MM_S) {
@@ -462,7 +447,7 @@ const BED_FIT_REASON = 'so the coupon fits the configured bed.'
  * note; a derived line count that changes with the tiers is no reduction and gets none.
  */
 function fitSpecToBed(
-  request: FirmwareFittedRequest,
+  request: IsTestRequest,
   profile: PrinterProfile,
 ): { spec: IsTestSpec; notes: string[] } {
   const attempt = (speedsMmS: number[]): { spec: IsTestSpec; notes: string[] } | null => {

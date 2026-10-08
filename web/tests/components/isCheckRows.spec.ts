@@ -28,7 +28,6 @@ function axis(overrides: Partial<IsAxisResult>): IsAxisResult {
     amplitudeMm: 0.05,
     secondModePBound: null,
     secondMode: null,
-    zvSecondModeResidual: null,
     artifacts: [],
     cornerModel: null,
     alongTrackLag: null,
@@ -84,12 +83,11 @@ describe('isCheckRows', () => {
     expect(isCheckRows(axis({})).map((r) => r.label)).not.toContain('Detection without any single line')
   })
 
-  it('lists a second mode, its ZV residual, the found patterns and the corner model as raw rows', () => {
+  it('lists a second mode, the found patterns and the corner model as raw rows', () => {
     const rows = isCheckRows(
       axis({
         secondModePBound: 3.2e-9,
         secondMode: { frequencyHz: 62.04, dampingRatio: 0.047, frequencySeHz: 0.4, amplitudeMm: 0.004, proportionality: 'passed' },
-        zvSecondModeResidual: 0.501,
         artifacts: [
           { periodMm: 2, pixelLockHarmonic: null, known: true, detectionPBound: 1e-20 },
           { periodMm: 1.7051, pixelLockHarmonic: null, known: false, detectionPBound: 1e-12 },
@@ -102,7 +100,6 @@ describe('isCheckRows', () => {
     expect(rows).toContainEqual({ label: 'Second mode frequency', value: '62.0 Hz' })
     expect(rows).toContainEqual({ label: 'Second mode damping ratio', value: '0.047' })
     expect(rows).toContainEqual({ label: 'Second mode grows with corner speed', value: 'yes' })
-    expect(rows).toContainEqual({ label: 'ZV shaper residual vibration at the second mode', value: '50.1%' })
     expect(rows).toContainEqual({ label: 'Print or scan pattern 1 period', value: '2.00 mm' })
     expect(rows).toContainEqual({ label: 'Print or scan pattern 1 source', value: 'GT2 belt pitch' })
     expect(rows).toContainEqual({ label: 'Print or scan pattern 2 period', value: '1.71 mm' })

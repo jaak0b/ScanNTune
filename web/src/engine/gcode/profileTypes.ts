@@ -1,5 +1,8 @@
 export type Firmware = 'Klipper' | 'Marlin' | 'RepRapFirmware'
 
+/** The firmwares the app writes commands for; every firmware dropdown lists exactly these. */
+export const FIRMWARES: readonly Firmware[] = ['Klipper']
+
 export interface FilamentProfile {
   id: string
   name: string

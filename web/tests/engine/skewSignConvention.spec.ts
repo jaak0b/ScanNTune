@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { solveAffine } from '../../src/engine/affineSolver'
-import { skewCorrection, KLIPPER, MARLIN, REPRAP } from '../../src/engine/correctionFormatter'
+import { skewCorrection } from '../../src/engine/correctionFormatter'
 import { defaultCouponSpec } from '../../src/engine/types'
 import type { GridCorrespondence } from '../../src/engine/types'
 
@@ -40,12 +40,6 @@ function firstLine(code: string): string {
   return code.split('\n')[0]
 }
 
-function parseAfterPrefix(code: string, prefix: string): number {
-  const line = firstLine(code)
-  expect(line.startsWith(prefix)).toBe(true)
-  return parseFloat(line.substring(prefix.length))
-}
-
 describe('skew sign convention', () => {
   it('+X shear reads negative in the image frame', () => {
     const m = solveAffine(shearedGrid(false))
@@ -58,7 +52,7 @@ describe('skew sign convention', () => {
   })
 
   it('Klipper correction cancels the measured shear', () => {
-    const c = skewCorrection(KLIPPER, -ShearDeg, defaultCouponSpec())
+    const c = skewCorrection(-ShearDeg, defaultCouponSpec())
     const line = firstLine(c.code)
     const prefix = 'SET_SKEW XY='
     expect(line.startsWith(prefix)).toBe(true)
@@ -87,7 +81,7 @@ describe('skew sign convention', () => {
     // this uses a near-zero value rather than 0.0 itself; that degeneracy is inherent to the
     // formula for any square side, not something this change introduces.
     for (const skewDegrees of [-2.0, -0.3, 0.01, 0.3, 2.0]) {
-      const c = skewCorrection(KLIPPER, skewDegrees, coupon)
+      const c = skewCorrection(skewDegrees, coupon)
       const line = firstLine(c.code)
       const prefix = 'SET_SKEW XY='
       expect(line.startsWith(prefix)).toBe(true)
@@ -103,17 +97,5 @@ describe('skew sign convention', () => {
       // recovered factor carries that rounding error, not full floating-point precision.
       expect(Math.abs(factor - expected)).toBeLessThanOrEqual(1e-5)
     }
-  })
-
-  it('Marlin emits a positive factor for a +X shear', () => {
-    const marlin = skewCorrection(MARLIN, -ShearDeg, defaultCouponSpec())
-    const marlinI = parseAfterPrefix(marlin.code, 'M852 I')
-    expect(Math.abs(marlinI - shearTan)).toBeLessThanOrEqual(1e-6)
-  })
-
-  it('RepRap emits a negative factor for a +X shear', () => {
-    const rrf = skewCorrection(REPRAP, -ShearDeg, defaultCouponSpec())
-    const rrfX = parseAfterPrefix(rrf.code, 'M556 S100 X')
-    expect(Math.abs(rrfX - -100.0 * shearTan)).toBeLessThanOrEqual(1e-3)
   })
 })

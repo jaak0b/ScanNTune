@@ -35,13 +35,7 @@ import type { ScaleReference } from '../scannerCalibration'
 // Commanded distances are mapped to time since the corner with the commanded trapezoidal
 // velocity profile (constant-acceleration kinematics): t(s) = (sqrt(v0^2 + 2 a s) - v0) / a
 // inside the acceleration ramp from the corner speed to the tier speed, then linear at the
-// cruise speed. Klipper and RepRapFirmware ramps are exact trapezoids. Marlin may be built with
-// S_CURVE_ACCELERATION, which replaces the ramp by the quintic Bezier v0 + dv (10 tau^3 -
-// 15 tau^4 + 6 tau^5) over the trapezoid's own duration (stepper.cpp,
-// _calc_bezier_curve_coeffs): same duration and distance, but the nozzle trails the trapezoid
-// inside the ramp. The build flag cannot be detected, so on Marlin (spec.exactRampTiming false)
-// the fit window starts no earlier than the end of the ramp, (v - c) / a after the corner, from
-// where both profiles agree.
+// cruise speed. Klipper's ramps are exact trapezoids.
 
 export interface TracedLine {
   speedMmS: number
@@ -52,9 +46,6 @@ export interface TracedLine {
   /** Time since the corner of each sample, seconds: the commanded coupon-frame distance mapped
    *  through the commanded trapezoidal velocity profile. */
   tS: Float64Array
-  /** Earliest time since the corner the ringing fit may start at, seconds: 0 when the ramp
-   *  timing is exact, else the end of the post-corner acceleration ramp. */
-  fitStartMinS: number
   /** Lateral deviation from the nominal centerline of each sample, true mm. Samples the tracer
    *  could not read are filled by linear interpolation between read neighbours, for locating
    *  the free ringdown only; `observed` marks which samples were read. */
@@ -323,9 +314,6 @@ function traceLine(
     cornerSpeedMmS: line.cornerSpeedMmS,
     accelMmS2: spec.accelMmS2,
     tS,
-    fitStartMinS: spec.exactRampTiming
-      ? 0
-      : (line.speedMmS - line.cornerSpeedMmS) / spec.accelMmS2,
     lateralMm,
     observed,
     alongPxPerMm: affinePxPerMm,

@@ -93,13 +93,6 @@ describe('generatePaGcode', () => {
     }
   })
 
-  it('uses M900 for Marlin and M572 for RepRap', () => {
-    const marlin = generatePaGcode({ ...profile, firmware: 'Marlin' }, filament, spec)
-    expect(marlin).toContain('M900 K0.0000')
-    const rrf = generatePaGcode({ ...profile, firmware: 'RepRapFirmware' }, filament, spec)
-    expect(rrf).toContain('M572 D0 S0.0000')
-  })
-
   it('resets PA to 0 after the filament swap, before the prime line and before the first stepped PA command', () => {
     const g = generatePaGcode(profile, filament, spec)
     const zeroPaAt = g.indexOf('SET_PRESSURE_ADVANCE ADVANCE=0.0000')
