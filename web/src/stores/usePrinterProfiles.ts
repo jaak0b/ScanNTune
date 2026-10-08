@@ -97,6 +97,22 @@ function backfillNewFields(value: unknown): unknown {
   return value
 }
 
+/** Firmwares older versions of the app stored, which the app no longer supports. */
+const RETIRED_FIRMWARES = ['Marlin', 'RepRapFirmware']
+
+/**
+ * Loads a profile stored with a retired firmware as Klipper, the only supported firmware, so the
+ * profile keeps working instead of carrying a firmware no generator or output understands.
+ */
+function withSupportedFirmware(value: unknown): unknown {
+  if (typeof value !== 'object' || value === null) return value
+  const record = value as Record<string, unknown>
+  if (typeof record.firmware === 'string' && RETIRED_FIRMWARES.includes(record.firmware)) {
+    record.firmware = 'Klipper'
+  }
+  return value
+}
+
 function loadFromStorage(): StoredState {
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
@@ -107,6 +123,7 @@ function loadFromStorage(): StoredState {
     const rawProfiles = Array.isArray(record.profiles) ? record.profiles : []
     const profiles = rawProfiles
       .map(backfillNewFields)
+      .map(withSupportedFirmware)
       .filter((p): p is PrinterProfile => {
         if (isValidProfile(p)) return true
         console.warn('Dropping invalid stored printer profile', p)

@@ -459,7 +459,7 @@ const stCorrection = computed(() => {
                 and fast speeds are configurable for that reason.
               </li>
               <li>
-                <strong>Acceleration and jerk (square corner velocity):</strong> these do not
+                <strong>Acceleration and square corner velocity:</strong> these do not
                 change the correct value; they change how visible a wrong value is. Higher
                 acceleration makes speed changes sharper, so errors bulge or starve more.
               </li>

@@ -4,7 +4,7 @@ import { useApp } from '../stores/useApp'
 import { usePrinterProfiles } from '../stores/usePrinterProfiles'
 import { useProfileForm } from '../composables/useProfileForm'
 import type { ImportKind } from '../composables/useProfileForm'
-import type { Firmware } from '../engine/pa/types'
+import { FIRMWARES } from '../engine/gcode/profileTypes'
 import NumericField from './NumericField.vue'
 import ImportView from './ImportView.vue'
 
@@ -12,7 +12,6 @@ const app = useApp()
 const store = usePrinterProfiles()
 const form = useProfileForm()
 
-const firmwares: Firmware[] = ['Klipper', 'Marlin', 'RepRapFirmware']
 
 
 const editedId = app.profilePayload?.profileId ?? null
@@ -114,7 +113,7 @@ function save(): void {
           />
           <v-select
             v-model="form.firmware.value"
-            :items="firmwares"
+            :items="FIRMWARES"
             label="Firmware"
             density="comfortable"
             data-testid="profile-firmware"

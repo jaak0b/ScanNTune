@@ -21,6 +21,6 @@
     <text x="4" y="70" font-size="34" font-weight="500" fill="#818cf8">Caliper-free calibration from a flatbed scan</text>
     <text x="4" y="118" font-size="27" fill="#aeb3bd">Skew, shrinkage, pressure advance,</text>
     <text x="4" y="153" font-size="27" fill="#aeb3bd">input shaper, and flow.</text>
-    <text x="4" y="191" font-size="27" fill="#aeb3bd">Klipper, Marlin, RRF, slicer output.</text>
+    <text x="4" y="191" font-size="27" fill="#aeb3bd">Klipper and slicer output.</text>
   </g>
 </svg>

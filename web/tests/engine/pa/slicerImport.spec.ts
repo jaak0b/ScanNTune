@@ -172,12 +172,15 @@ describe('importSlicerConfig Prusa edge cases', () => {
     expect(result.warnings.some((w) => w.includes('75%'))).toBe(true)
   })
 
-  it('warns on an unknown gcode_flavor and leaves firmware unset', () => {
-    const result = importSlicerConfig('config.ini', 'gcode_flavor = sailfish\n')
-    expect(result.fields.printer.firmware).toBeUndefined()
-    expect(result.missing).toContain('firmware')
-    expect(result.warnings.some((w) => w.includes('sailfish'))).toBe(true)
-  })
+  it.each(['reprap', 'reprapfirmware', 'sailfish'])(
+    'imports the %s gcode_flavor as Klipper without a warning',
+    (flavor) => {
+      const result = importSlicerConfig('config.ini', `gcode_flavor = ${flavor}\n`)
+      expect(result.fields.printer.firmware).toBe('Klipper')
+      expect(result.imported).toContain('firmware')
+      expect(result.warnings).toEqual([])
+    },
+  )
 
   it('falls back to non-first-layer temperatures', () => {
     const result = importSlicerConfig('config.ini', 'temperature = 240\nbed_temperature = 85\n')
@@ -226,8 +229,8 @@ describe('importSlicerConfig with a PrusaSlicer bundle', () => {
     expect(result.fields.printer.startGcode).toBe('G28\nG1 Z5')
   })
 
-  it('maps marlin2 to Marlin', () => {
-    expect(result.fields.printer.firmware).toBe('Marlin')
+  it('imports the marlin2 gcode_flavor as Klipper', () => {
+    expect(result.fields.printer.firmware).toBe('Klipper')
   })
 
   it('lists one named filament per non-hidden [filament:...] section', () => {

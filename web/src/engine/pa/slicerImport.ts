@@ -1,4 +1,4 @@
-import type { FilamentProfile, Firmware, PrinterProfile } from './types'
+import type { FilamentProfile, PrinterProfile } from './types'
 
 export { importSlicerConfigs } from './slicerImportChain'
 export type { SlicerFile } from './slicerImportChain'
@@ -71,14 +71,6 @@ const MAPPED_FIELDS_LIST = [
 ] as const satisfies readonly (keyof ImportedFields)[]
 
 const MAPPED_FIELDS: (typeof MAPPED_FIELDS_LIST)[number][] = [...MAPPED_FIELDS_LIST]
-
-const FLAVOR_TO_FIRMWARE: Record<string, Firmware> = {
-  klipper: 'Klipper',
-  marlin: 'Marlin',
-  marlin2: 'Marlin',
-  reprap: 'RepRapFirmware',
-  reprapfirmware: 'RepRapFirmware',
-}
 
 /**
  * Parses a PrusaSlicer .ini export (flat or bundle) or an OrcaSlicer preset .json and returns
@@ -212,17 +204,13 @@ function polygonSize(points: string[]): { width: number; depth: number } | undef
   }
 }
 
+/**
+ * A preset that names a G-code flavor is a printer preset, and its firmware imports as Klipper,
+ * the only supported firmware, whatever flavor it names.
+ */
 function applyFirmware(ctx: Ctx): void {
-  const flavor = ctx.get('gcode_flavor')
-  if (flavor === undefined) return
-  const fw = FLAVOR_TO_FIRMWARE[flavor.trim().toLowerCase()]
-  if (fw !== undefined) {
-    ctx.fields.firmware = fw
-  } else {
-    ctx.warnings.push(
-      `G-code flavor "${flavor}" has no matching firmware option here; pick the firmware manually.`,
-    )
-  }
+  if (ctx.get('gcode_flavor') === undefined) return
+  ctx.fields.firmware = 'Klipper'
 }
 
 /** Fills the fields shared by both formats (temps, sizes, speeds, accel, jerk). */

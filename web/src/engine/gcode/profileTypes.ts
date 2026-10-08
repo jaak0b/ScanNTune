@@ -1,4 +1,5 @@
-export type Firmware = 'Klipper' | 'Marlin' | 'RepRapFirmware'
+/** The printer firmware; the app supports Klipper only. */
+export type Firmware = 'Klipper'
 
 /** The firmwares the app writes commands for; every firmware dropdown lists exactly these. */
 export const FIRMWARES: readonly Firmware[] = ['Klipper']
@@ -39,7 +40,7 @@ export interface PrinterProfile {
   /** Speed cap for everything printed on the first layer, for bed adhesion. */
   firstLayerSpeedMmS: number
   printAccelMmS2: number
-  /** Klipper square corner velocity, Marlin XY jerk, in mm/s. */
+  /** Klipper square corner velocity, in mm/s. */
   squareCornerVelocityMmS: number
   layerHeightMm: number
   retractMm: number

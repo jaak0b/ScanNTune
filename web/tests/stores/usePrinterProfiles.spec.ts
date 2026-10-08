@@ -142,4 +142,19 @@ describe('stored profile migration', () => {
     expect(store.profiles[0].filaments[0].startGcode).toBe('')
     expect(store.profiles[0].filaments[0].endGcode).toBe('')
   })
+
+  it('loads profiles stored with Marlin or RepRapFirmware as Klipper', () => {
+    const marlin = { ...defaultPrinterProfile(), id: 'p1', firmware: 'Marlin' }
+    const rrf = { ...defaultPrinterProfile(), id: 'p2', firmware: 'RepRapFirmware' }
+    localStorage.setItem(
+      'scanntune.printerProfiles',
+      JSON.stringify({ profiles: [marlin, rrf], selectedId: 'p1' }),
+    )
+    const store = usePrinterProfiles()
+    expect(store.profiles.map((p) => [p.id, p.firmware])).toEqual([
+      ['p1', 'Klipper'],
+      ['p2', 'Klipper'],
+    ])
+    expect(store.selected?.id).toBe('p1')
+  })
 })
