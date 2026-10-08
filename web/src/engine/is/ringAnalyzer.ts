@@ -458,10 +458,16 @@ const VARIANCE_CRITICAL = normalQuantile(1 - DETECTION_ALPHA / 2) ** 2
 /**
  * The slope of the axis's innovation variance function (ringGls.pooledVarianceSlope) from the
  * lines' raw residuals under their AR models, or 0 when the likelihood ratio test does not reject
- * a constant variance at DETECTION_ALPHA.
+ * a constant variance at DETECTION_ALPHA. The covariate is each line's corner-model deficit at
+ * tauS unless `deficits` gives it.
  */
-function axisVarianceSlope(bases: LineBasis[], noises: LineNoise[], residuals: Float64Array[], tauS: number): number {
-  const deficits = bases.map((b) => cornerDeficit(b.rec, b.cornerModel, tauS))
+function axisVarianceSlope(
+  bases: LineBasis[],
+  noises: LineNoise[],
+  residuals: Float64Array[],
+  tauS: number,
+  deficits: Float64Array[] = bases.map((b) => cornerDeficit(b.rec, b.cornerModel, tauS)),
+): number {
   const innovations = residuals.map((r, l) => noises[l].whitener.whiten(r))
   const pooled = pooledVarianceSlope(innovations, deficits)
   return pooled.statistic > VARIANCE_CRITICAL ? pooled.slope : 0
@@ -555,13 +561,13 @@ function pooledAicc(fits: NullFit[], bases: LineBasis[]): number {
 function chooseCornerModel(
   windows: LineRecord[],
   flow: { bases: LineBasis[]; fits: NullFit[]; carried: CarriedArtifacts },
-): { bases: LineBasis[]; fits: NullFit[]; kind: CornerModelKind; flowScale: number; beadScale: number } {
+): { bases: LineBasis[]; fits: NullFit[]; kind: CornerModelKind; beadScale: number } {
   const bases = carriedBases(windows, flow.carried, 'bead-drag')
   const fits = nullFits(bases, tauRange(bases))
-  const scales = { flowScale: flow.fits[0].tauS, beadScale: fits[0].tauS }
+  const beadScale = fits[0].tauS
   return pooledAicc(fits, bases) < pooledAicc(flow.fits, flow.bases)
-    ? { bases, fits, kind: 'bead-drag', ...scales }
-    : { bases: flow.bases, fits: flow.fits, kind: 'flow-lag', ...scales }
+    ? { bases, fits, kind: 'bead-drag', beadScale }
+    : { bases: flow.bases, fits: flow.fits, kind: 'flow-lag', beadScale }
 }
 
 /** One line's detection state for a null fit (see detectionStates). */
@@ -1371,15 +1377,26 @@ function jointFit(
   const estBounds = tauRange(inBases)
   const seedIndex = start ? gridIndex(Math.round(start.frequencyHz), nearestGridZeta(start.dampingRatio)) : refittedMaximum(states, included).index
   const seed = start ?? DETECTION_GRID[seedIndex]
+  // The variance slope of a detection noise model was estimated on the covariate of the detection's
+  // own corner model, so it is carried with that covariate.
   const noiseAtSeed = included.map((l, k) => {
     if (depositTimeS) return noiseModel(inBases[k], WHITE_START)
     const noise = refine(states[l], seedIndex).fit.noise
-    return noiseModel(inBases[k], noise.fit, noise.varianceSlope, cornerDeficit(inBases[k].rec, 'flow-lag', chosen.flowScale))
+    return noiseModel(inBases[k], noise.fit, noise.varianceSlope, states[l].h0.deficit)
   })
+  // The time constant starts at its best value at the seed over the joint-fit lines alone (golden
+  // section on a log scale), never at the detection's, which a line excluded by the screening
+  // still moves.
+  const cache = new Map<number, NullDesign[]>()
+  const tauStart = minimizeOverLogTau(
+    (tauS) => sumOfSquares(stackedResidual(inBases, noiseAtSeed, seed.frequencyHz, seed.dampingRatio, tauS, cache)),
+    estBounds[0],
+    estBounds[1],
+  )
   const first = varproFit(
     inBases,
     noiseAtSeed,
-    [seed.frequencyHz, seed.dampingRatio, Math.log(chosen.flowScale)],
+    [seed.frequencyHz, seed.dampingRatio, Math.log(tauStart)],
     [true, true, true],
     estBounds,
   )
@@ -1389,11 +1406,9 @@ function jointFit(
     return rawFullResidual(b, noiseAtSeed[k], design, first.frequencyHz, first.dampingRatio, ring, ringScratch(b.m))
   })
   const ar1 = inBases.map((b, k) => fitNoise(b, residuals1[k]))
-  const slope1 = axisVarianceSlope(inBases, ar1, residuals1, first.tauS)
-  const noise1 =
-    slope1 === 0
-      ? ar1
-      : inBases.map((b, k) => noiseModel(b, ar1[k].fit, slope1, cornerDeficit(b.rec, b.cornerModel, first.tauS)))
+  const covariates = inBases.map((b) => varianceCovariate(b.rec, chosen, first.tauS))
+  const slope1 = axisVarianceSlope(inBases, ar1, residuals1, first.tauS, covariates)
+  const noise1 = slope1 === 0 ? ar1 : inBases.map((b, k) => noiseModel(b, ar1[k].fit, slope1, covariates[k]))
   const joint = varproFit(
     inBases,
     noise1,
@@ -1414,7 +1429,7 @@ function jointRefit(detection: AxisDetection, included: number[], depositTimeS: 
   const inBases = jointBases(detection, included, depositTimeS)
   const tauS = held.joint.tauS
   const noise1 = inBases.map((b, k) =>
-    noiseModel(b, held.noise1[k].fit, held.noise1[k].varianceSlope, cornerDeficit(b.rec, b.cornerModel, tauS)),
+    noiseModel(b, held.noise1[k].fit, held.noise1[k].varianceSlope, varianceCovariate(b.rec, detection.chosen, tauS)),
   )
   const joint = varproFit(
     inBases,
@@ -1424,6 +1439,22 @@ function jointRefit(detection: AxisDetection, included: number[], depositTimeS: 
     held.estBounds,
   )
   return { inBases, estBounds: held.estBounds, noise1, joint, rings: jointRings(inBases, noise1, joint) }
+}
+
+/**
+ * The covariate of a joint fit's variance function: the deficit of the corner model the detection
+ * chose, the flow-lag deficit at the joint time constant or the bead-drag lobe at its null-fit
+ * length, so the estimation's variance function is the one the pooled AICc selected.
+ */
+function varianceCovariate(rec: LineRecord, chosen: AxisDetection['chosen'], tauS: number): Float64Array {
+  return chosen.kind === 'flow-lag' ? cornerDeficit(rec, 'flow-lag', tauS) : cornerDeficit(rec, 'bead-drag', chosen.beadScale)
+}
+
+/** The sum of squares of a vector. */
+function sumOfSquares(r: Float64Array): number {
+  let s = 0
+  for (const v of r) s += v * v
+  return s
 }
 
 /** Each line's ring at a joint fit, aligned with the bases. */

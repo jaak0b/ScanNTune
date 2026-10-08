@@ -234,9 +234,10 @@ describe('poolAxisFits estimation', () => {
     expect(p.lines[3].exclusion).toBe('out-of-band')
     expect(p.lines[3].usedInJointFit).toBe(false)
     expect(p.accepted).toBe(true)
-    // The nine remaining lines' joint frequency has a standard error of about 0.11 Hz (the
-    // profile-likelihood interval in the encompassing corner model), so 0.4 Hz is 3.6 of them.
-    expect(Math.abs(p.frequencyHz! - 60)).toBeLessThan(0.4)
+    // The nine remaining lines' joint frequency has a standard error of about 0.10 Hz (the
+    // profile-likelihood interval in the encompassing corner model), so 0.3 Hz is 3 of them. The
+    // excluded line must not move the estimate: the same nine lines without it read 59.789 Hz.
+    expect(Math.abs(p.frequencyHz! - 60)).toBeLessThan(0.3)
   })
 })
 
