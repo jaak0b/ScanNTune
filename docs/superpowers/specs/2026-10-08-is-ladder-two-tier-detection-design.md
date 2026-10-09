@@ -129,7 +129,8 @@ bottom (`ladderCornerSpeeds` in `couponGeometry.ts`): its lowest three rungs (`M
 spaced geometrically from 20 mm/s up to the fastest followable corner (section 1.4), which the fitted
 spec carries as `followableCornerMmS`, and the remaining rungs geometrically from there up to the ladder
 top. When the followable corner does not split the ladder (every rung follows, not even the bottom rung
-does, or three lines leave no rung above it) the rungs are spaced geometrically over the whole range.
+does, or three lines leave no rung above it) the rungs are spaced geometrically over the whole range. A
+followable corner equal to the bottom rung gives three replicate lines at 20 mm/s.
 The default rungs are 20, 24.17, 29.2, 42.49, 61.84 and 90 mm/s on the 90 mm/s tier and 20, 24.17, 29.2,
 44.01, 66.34 and 100 mm/s on the 150 mm/s tier. The
 run-up cruises at the rung straight into the corner, which the raised corner limit (section 1.5) passes
@@ -150,8 +151,8 @@ The followable corner and the number of lines per speed are derived (`fastestFol
 `types.ts`). The bead edges are the path's offset curves at plus and minus half
 the bead width, and an offset curve stays regular only while the path's radius of curvature exceeds the
 offset (Farouki and Neff, "Analytic properties of plane offset curves", CAGD 7, 1990); below that the edge
-folds and the traced centreline stops following the nozzle. For a ring at F_MAX = 200 Hz the radius at
-the crests is R(s) = u^2 / (A omega^2), evaluated every 0.1 mm from the first traced sample (1 mm past the
+folds and the traced centreline stops following the nozzle. For a ring at frequency f the radius at the
+crests is R(s) = u^2 / (A omega^2), evaluated every 0.1 mm from the first traced sample (1 mm past the
 corner) to the end of the protected span, with
 
 - A(t) = (c / omega) e^(-zeta omega t), the ring the corner's velocity step c leaves;
@@ -162,24 +163,84 @@ corner) to the end of the protected span, with
   Voron 2.4) measured 0.041 to 0.069 on both axes, by accelerometer and by this flow's scans; Klipper's
   0.075 to 0.15 is the range its shapers are made robust over, not a floor on printers.
 
-The window starts at the first traced sample, 1 mm past the corner, the honest worst case. A rung is
-followable when the smallest R exceeds half the nominal bead width (nozzle times 1.05). The slowest tier
-binds. The fastest followable corner is found by bisection on a 0.1 mm/s grid between 20 mm/s and the
-slowest tier's ladder top: 29.2 mm/s for the default profile (an independent scratch implementation
-gives the same value; R is 0.2104 mm at 29.2 and 0.2090 mm at 29.3 mm/s against the 0.21 mm half
-width), 23.4 mm/s for a 0.6 mm nozzle, 28.1 mm/s at 20000 mm/s^2.
+The window starts at the first traced sample, 1 mm past the corner, the honest worst case. A rung follows
+a ring at f when the smallest R exceeds half the nominal bead width (nozzle times 1.05). The slowest tier
+binds. Followability is not monotone in frequency: a higher frequency curves the path more sharply per
+unit of amplitude, but its ring also decays faster in time, so a corner can fold inside the band and
+follow again at its top (0.4 mm nozzle, 1500 mm/s^2: a 21.2 mm/s corner follows at 200 Hz but folds from
+129 to 193 Hz). A rung therefore counts as followable up to f only when it follows at every 1 Hz point of
+the detection grid's frequency axis (`FREQUENCY_GRID_HZ`, now defined beside `F_MIN_HZ` and `F_MAX_HZ`)
+from 20 Hz up to f, found by scanning upward to the first failure.
 
-When the followable corner splits the ladder, the line count is 6: three followable rungs, so the band
-top stays readable at the analysis' line floor, plus three faster rungs, so a stiff frame whose ring is
-too small to detect on the slow corners still reaches the line floor from the strong excitation of the
-fast ones. Otherwise every rung follows (or none does) and the count is the followable line floor: the
-fewest lines from 3 to 15 that keep at least 3 followable rungs (`MIN_ACCEPTED_LINES`), or 3 when no
-count can. In that last case (1200 mm/s^2 or less with the default speeds; 1500 mm/s^2 still splits) the
-coupon cannot keep three followable lines at 200 Hz, and `bandTopWarning` names the reduced band top
-the coupon still reads (`guaranteedBandTopHz`, the highest whole hertz at which three rungs follow) and
-asks for a higher line speed or acceleration. With the worst-case along-track term the upper rungs
-(about 40 mm/s and faster) fold in the first millimetres after the corner at every frequency of the
-band, so at 1000 mm/s^2 the reduced band top falls to the bottom of the band.
+The coupon is designed for the band up to its design band top (`designBandTopHz`): the highest grid
+frequency up to which the 20 mm/s bottom rung of the slowest tier follows. It is 200 Hz on most printers.
+At a low acceleration the along-track speed right after the corner stays low while the ring does not
+shrink, so the bottom rung folds inside the band, and the ladder is designed at that lower top: the coupon
+keeps a usable but honestly reduced band. The fastest followable corner is the fastest corner on a
+0.1 mm/s grid that follows at every grid frequency up to the design band top, found by bisection between
+20 mm/s and the slowest tier's ladder top. Bisection is valid in the corner speed because a rung's
+followed band top falls with its corner speed (checked for 0.25, 0.4 and 0.6 mm nozzles at 600 to
+6000 mm/s^2 on both tiers in 0.5 mm/s steps: no exception). It is 29.2 mm/s for the default profile (an
+independent scratch implementation gives the same value; R is 0.2104 mm at 29.2 and 0.2090 mm at
+29.3 mm/s against the 0.21 mm half width), 23.4 mm/s for a 0.6 mm nozzle, 28.1 mm/s at 20000 mm/s^2.
+
+When the followable corner splits the ladder (at or above 20 mm/s and below the ladder top), the line
+count is 6: three rungs that follow up to the design band top, so that band stays readable at the
+analysis' line floor, plus three faster rungs, so a stiff frame whose ring is too small to detect on the
+slow corners still reaches the line floor from the strong excitation of the fast ones. Otherwise every
+rung follows and the count is the followable line floor: the fewest lines from 3 to 15 that keep at least
+3 rungs (`MIN_ACCEPTED_LINES`) following up to the design band top, or 3 when there is no design band top.
+`guaranteedBandTopHz` is the highest whole hertz up to which at least three rungs follow at every grid
+frequency (the third highest of the rungs' own followed band tops), and null when the coupon reads
+nothing. `bandTopWarning` shows it whenever it is below 200 Hz and names the acceleration as the cause: a
+faster line speed does not help, because the binding stretch is the acceleration ramp right after the
+corner, whose along-track speed depends on the corner speed and the acceleration only.
+
+| Profile (default speeds) | Design band top |
+|---|---|
+| 0.4 mm nozzle, 500 mm/s^2 or less | none: the coupon reads nothing, three plain rungs |
+| 0.4 mm nozzle, 600 / 800 / 1000 / 1200 / 1250 mm/s^2 | 24 / 39 / 58 / 86 / 97 Hz |
+| 0.4 mm nozzle, 1500 mm/s^2 and more | 200 Hz |
+| 0.6 mm nozzle, 700 mm/s^2 or less | none |
+| 0.6 mm nozzle, 1000 / 1500 / 2000 mm/s^2 | 32 / 62 / 118 Hz; 200 Hz at 3000 mm/s^2 |
+
+Where the followable corner rounds to the bottom rung itself (20.0 mm/s, for example at 1000 and
+1200 mm/s^2 with a 0.4 mm nozzle), the three bottom rungs are three replicate lines at 20 mm/s. With the
+worst-case along-track term the upper rungs (about 40 mm/s and faster) fold in the first millimetres after
+the corner at most or all frequencies of the band (section 1.4.1).
+
+#### 1.4.1 Check of the along-track term (2026-10-09)
+
+The term u lowers the along-track speed by the full corner speed c, decaying at the slowest decay the
+band allows (20 Hz, damping 0.04, a time constant of about 200 ms). It was checked against Klipper's
+motion and an exact model. With the input shaper off (`SET_INPUT_SHAPER SHAPER_FREQ_X=0 SHAPER_FREQ_Y=0`)
+and the square corner velocity raised to the rung, Klipper's junction model (toolhead.py, for 90 degrees
+v^2 = square_corner_velocity^2; the planner oracle `plannerReplay.ts` reproduces it) passes the corner at
+the rung with the velocity vector turning at once, so the along-track axis takes a velocity step of the
+full c from rest, followed by the acceleration step to the tier speed. The exact check replaced the
+envelope with the damped second-order response of the along axis to that velocity step, the acceleration
+step and its end at the tier speed (damping relative to the command), used the full plane-curve curvature
+|x'y'' - y'x''| / (x'^2 + y'^2)^(3/2), and took the worst along-axis frequency on the 1 Hz grid from 20 to
+200 Hz. Grid frequencies (of 181) at which each default rung follows:
+
+| Rung | Envelope (code) | Exact, worst along-axis frequency | No along-track term |
+|---|---|---|---|
+| 90 mm/s tier: 20, 24.2, 29.2 | 181 | 181 | 181 |
+| 42.5 | 33 | 17 | 181 |
+| 61.8 | 0 | 0 | 175 |
+| 90 | 0 | 0 | 80 |
+| 150 mm/s tier: 20, 24.2, 29.2 | 181 | 181 | 181 |
+| 44.0 | 29 | 74 | 181 |
+| 66.3 | 0 | 29 (20 to 48 Hz) | 181 |
+| 100 | 0 | 4 | 174 |
+
+The along-track ring is what folds the upper rungs, and the exact model confirms it: on the slow tier,
+which binds, it is stricter than the envelope. The term is not too pessimistic as a design bound, so the
+line count stays at 6. On a given printer the fold depends on the other axis's frequency: the 61.8 mm/s
+rung folds a 60 Hz ring for 111 of the 181 along-axis frequencies, the 90 mm/s rung a 30 Hz ring for 118,
+so the upper rungs are readable on some printers but guaranteed on none. Dropping the two rungs per tier
+that fold at every band frequency (61.8 and 90, 66.3 and 100 mm/s) would give 4 lines per speed: a
+104.283 mm square coupon with about 13.0 minutes of motion, against 124.283 mm and 16.6 minutes.
 
 Changed from the redesign of 2026-10-08: the band was 20 to 150 Hz, the damping 0.1 and the ladder
 geometric over the whole range, which gave 5 lines by default. Raising the band to 200 Hz with the
@@ -287,7 +348,7 @@ read length, down to 20 mm, that fits; if none fits it reduces the lines per spe
 followable line floor (4 with the bottom-dense ladder), taking the longest read length at each count;
 if that fails it drops the slower tier (with the note "With one tier, the analysis cannot tell print and
 scan patterns apart from ringing.") and repeats both reductions. Removing a line removes an upper rung;
-the three followable rungs stay, so the bed fit never lowers the band top. The followable corner is found
+the three followable rungs stay, so the bed fit never lowers the design band top. The followable corner is found
 at the requested read length; a shorter read only shortens the window it is judged over. Each reduction
 is described in a worded note; a bed too small for even the smallest coupon throws (below about 77 mm).
 
@@ -312,9 +373,9 @@ code:
 | 80 x 80 bed | 150 | 4 | 23 mm | 100 mm/s | 79.683 mm square |
 | 0.6 mm nozzle | 90, 150 | 6 | 30 mm | 100 mm/s | 124.283 mm square |
 | Klipper, 20000 mm/s^2, 300 mm bed | 90, 150 | 6 | 30 mm | 100 mm/s | 123.192 mm square |
-| Klipper, 1000 mm/s^2 (band top reduced) | 90, 150 | 3 | 30 mm | 90.1 mm/s | 106.050 mm square |
+| Klipper, 1000 mm/s^2 (band top reduced to 58 Hz) | 90, 150 | 6 | 30 mm | 90.1 mm/s | 136.050 mm square |
 
-Every case above except the last keeps three followable lines at 200 Hz. The motion time of the default
+Every case above except the last keeps three followable lines over the whole band. The motion time of the default
 coupon, replayed through the planner oracle, is about 16.6 minutes (15.9 minutes on the 120 mm bed),
 against 15.0 minutes for the previous 114.806 mm coupon. The old single-tier default (8 lines at
 150 mm/s, 4000 mm/s^2 floor) was 105.76 mm square. The pinned snapshot
@@ -853,6 +914,16 @@ timeout. The build and unit test job is capped at 15 minutes. The earlier sharde
   firmware dropdowns list Klipper as the only option.
 
 ## 5. Known limitations and open items
+
+- **The analysis does not know a reduced design band top.** At a low acceleration the coupon is designed
+  for a band ending below 200 Hz (section 1.4), but the frequency search, the detection grid and the
+  shaper recommendation still span 20 to 200 Hz. A ring above the reduced top is still searched on beads
+  the model says fold. Limiting the search would change the detection grid and its Bonferroni count and
+  needs the render-recovery tests and the statistics suite; it is an owner decision.
+- **Replicate bottom rungs at a reduced band top.** Where the followable corner rounds to 20.0 mm/s, the
+  three followable lines share one corner speed. The proportionality check then has no corner-speed
+  spread among those lines and returns not assessed when only they are accepted, so a forced tone is not
+  refused by that check there.
 
 - **S3 coverage under iid noise is expected to stay red** (`s3-iid.stats.spec.ts`): the wild seed is
   fixed (9153a65, 87c7e3d), but the spread to SE ratio on seeds 1 to 200 was about 1.17 to 1.18 locally

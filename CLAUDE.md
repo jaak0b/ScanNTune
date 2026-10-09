@@ -227,12 +227,17 @@ tiers, the line speed and a slower tier whose ratio is derived from the two-side
 speed check's power and the confidence gate (`speedTiersFor`, ratio 1.6547; 90 and 150 mm/s by default;
 both tiers need a line speed of at least 34 mm/s). Each tier has a bottom-dense corner-speed ladder, one
 rung per line, with the fastest corners printed last in every layer: three rungs spaced geometrically from
-20 mm/s up to the fastest corner whose bead still follows a 200 Hz ring (`fastestFollowableCornerMmS`,
-29.2 mm/s by default, carried on the fitted spec as `followableCornerMmS`), the rest geometrically from
-there up to the corner speed (100 mm/s by default). Followability is judged at an assumed damping ratio of
-0.04 from the first traced millimetre. The line count per speed is derived (`ladderLinesPerSpeed`), 6 by
-default: three followable rungs plus three faster ones; the bed fit removes only upper rungs and never goes
-below the followable floor of 4, so a smaller bed never lowers the band top. Each line
+20 mm/s up to the fastest corner whose bead still follows a ring at every 1 Hz grid frequency of the band
+(`fastestFollowableCornerMmS`, 29.2 mm/s by default, carried on the fitted spec as `followableCornerMmS`),
+the rest geometrically from there up to the corner speed (100 mm/s by default). Followability is judged at
+an assumed damping ratio of 0.04 from the first traced millimetre, at every grid frequency, because it is
+not monotone in frequency. At a low acceleration the 20 mm/s bottom rung itself folds inside the band; the
+ladder is then designed up to the highest frequency that rung still follows (58 Hz at 1000 mm/s^2, 86 Hz
+at 1200 with a 0.4 mm nozzle), and `bandTopWarning` names that reduced band top and the acceleration, or
+says the coupon reads nothing when even that rung folds at 20 Hz. The line count per speed is derived
+(`ladderLinesPerSpeed`), 6 by default: three followable rungs plus three faster ones; the bed fit removes
+only upper rungs and never goes below the followable floor of 4, so a smaller bed never lowers the band
+top. Each line
 raises the firmware's corner limit to its own rung only for its run-up, measured segment, tail and coast,
 then sets the profile's own value back (`junctionLimitCommands`), with planner stops (`G4 P0`) between
 lines. The test runs at the profile's print acceleration and resets the speed factor with `M220 S100`,
