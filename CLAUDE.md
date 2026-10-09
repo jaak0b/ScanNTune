@@ -229,8 +229,10 @@ both tiers need a line speed of at least 34 mm/s). Each tier has a bottom-dense 
 rung per line, with the fastest corners printed last in every layer: three rungs spaced geometrically from
 20 mm/s up to the fastest corner whose bead still follows a ring at every 1 Hz grid frequency of the band
 (`fastestFollowableCornerMmS`, 25.5 mm/s by default, carried on the fitted spec as `followableCornerMmS`),
-then an upper ladder spaced in three geometric steps from there towards the corner speed (100 mm/s by
-default), of which only the rungs whose bead follows a ring at one band frequency at least are printed.
+then one upper rung at the fastest corner whose bead still follows a ring at one band frequency at
+least (`fastestReadableCornerMmS`, carried as `topCornerMmS`, 55.4 mm/s by default, never above Klipper's
+centripetal corner cap or the slower tier's speed). There is no corner speed setting: every corner is
+derived.
 Followability is judged from the first traced millimetre, at every grid frequency, at the damping ratio
 the request carries as `followabilityDampingRatio` (`FOLLOWABILITY_DAMPING_RATIO`, 0.03: a well-built
 CoreXY X axis measured 0.033 by accelerometer, and a lighter damping is the safe side). At a low
@@ -238,9 +240,11 @@ acceleration the 20 mm/s bottom rung itself folds inside the band; the ladder is
 highest frequency that rung still follows (47 Hz at 1000 mm/s^2, 64 Hz at 1200, 97 Hz at 1500 with a
 0.4 mm nozzle), and `bandTopWarning` names that reduced band top and the acceleration. When even that rung
 folds at 20 Hz (below 567 mm/s^2 for a 0.4 mm nozzle at the default speeds, and for a
-line speed of 60 mm/s or less at 1500 to 20000 mm/s^2), `fitSpecToPrinter` refuses the coupon, so no G-code is offered. The line
+line speed of 66 mm/s or less at 1000 to 20000 mm/s^2), `fitSpecToPrinter` refuses the coupon, so no G-code is offered;
+the refusal names the line speed when the slower tier's ramp from the bottom rung ends before the read
+window starts (a higher acceleration cannot help then), and the acceleration otherwise. The line
 count per speed is derived (`ladderLinesPerSpeed`), 4 by default: three followable rungs plus the one
-upper rung that follows at the low end of the band; the bed fit removes only upper rungs and never goes
+upper rung at the top corner; the bed fit removes only upper rungs and never goes
 below the followable floor of 3, so a smaller bed never lowers the band top. Each line
 raises the firmware's corner limit to its own rung only for its run-up, measured segment, tail and coast,
 then sets the profile's own value back (`junctionLimitCommands`), with planner stops (`G4 P0`) between
