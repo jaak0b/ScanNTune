@@ -48,12 +48,12 @@ export interface IsTestSpec {
   axes: IsAxis[]
   accelMmS2: number
   /**
-   * TOP rung of the corner-speed excitation ladder, and the size of the strongest
-   * ringing excitation. Each tier's lines take their corner at geometrically spaced
-   * run-up speeds from MIN_CORNER_SPEED_MM_S up to this value (or up to the tier's own
+   * TOP of the corner-speed excitation ladder. Each tier's lines take their corner at run-up
+   * speeds spaced from MIN_CORNER_SPEED_MM_S towards this value (or towards the tier's own
    * speed when that is slower), one rung per line (the step-excitation idea of Klipper's
    * ringing tower: the print self-ranges, so some lines ring visibly regardless of frame
-   * stiffness). The emitted motion limits set the firmware's corner limit to the line's
+   * stiffness); only the rungs whose bead can follow a ring are printed (ladderCornerSpeeds,
+   * ladderLinesPerSpeed), so the fastest printed corner usually lies below it. The emitted motion limits set the firmware's corner limit to the line's
    * own rung, so the planner takes every 90 degree corner at that line's full run-up speed
    * with zero deceleration: the pressure dump K * (v_in - v_corner) is zero by construction
    * and the bead stays continuous. The excitation is the per-axis velocity step at the
@@ -70,6 +70,12 @@ export interface IsTestSpec {
    * simulators all read the same rungs from this one value.
    */
   followableCornerMmS: number
+  /**
+   * The damping ratio the bead followability is judged at (ringPathMinRadiusMm): the coupon is
+   * generated before the printer's damping is measured, so it is designed for a lightly damped
+   * frame. defaultIsTestRequest sets FOLLOWABILITY_DAMPING_RATIO.
+   */
+  followabilityDampingRatio: number
   /** How far each measured segment extends into the frame band at both ends. */
   weldMm: number
   /** Where the coupon sits on the bed: centered, or pushed to the front/back edge. */
@@ -213,6 +219,7 @@ export function defaultIsTestRequest(profile: PrinterProfile): IsTestRequest {
     // velocity step at the corner, which the acceleration does not set.
     accelMmS2: profile.printAccelMmS2,
     cornerSpeedMmS: DEFAULT_CORNER_SPEED_MM_S,
+    followabilityDampingRatio: FOLLOWABILITY_DAMPING_RATIO,
     weldMm: 1,
     placement: 'center',
     contrastBase: false,
@@ -272,20 +279,23 @@ export function rampWarnings(spec: IsTestSpec): string[] {
 }
 
 /**
- * Damping ratio the bead followability is evaluated at. The coupon is generated before the
- * damping is known, so it is designed for a lightly damped frame: a well-built CoreXY printer
- * measured 0.041 to 0.069 (both axes, by an accelerometer and by this flow's scans). Klipper's
- * 0.075 to 0.15 (shaper_calibrate.py TEST_DAMPING_RATIOS) is the range its shapers are made
- * robust over, not a floor on printers, and a lighter damping keeps the ring larger for longer,
- * so assuming it is the safe side.
+ * Damping ratio the bead followability is evaluated at, carried on the request as
+ * followabilityDampingRatio. The coupon is generated before the damping is known, so it is
+ * designed for a lightly damped frame: a well-built CoreXY printer measured a damping ratio of
+ * 0.033 on its X axis by an accelerometer, so 0.03 lies on the safe side of it. Klipper's 0.075 to 0.15 (shaper_calibrate.py
+ * TEST_DAMPING_RATIOS) is the range its shapers are made robust over, not a floor on printers, and
+ * a lighter damping keeps the ring larger for longer, so assuming it is the safe side.
  */
-export const FOLLOWABILITY_DAMPING_RATIO = 0.04
+export const FOLLOWABILITY_DAMPING_RATIO = 0.03
 /** Sampling step of the followability evaluation along the read window. */
 const FOLLOWABILITY_STEP_MM = 0.1
 /** Resolution of the followable corner speed. */
 const FOLLOWABLE_CORNER_STEP_MM_S = 0.1
 /** What a line's ring path depends on besides its tier and corner speeds. */
-type RingPathInputs = Pick<IsTestSpec, 'accelMmS2' | 'cornerSpeedMmS' | 'measuredLineMm'>
+type RingPathInputs = Pick<
+  IsTestSpec,
+  'accelMmS2' | 'cornerSpeedMmS' | 'measuredLineMm' | 'followabilityDampingRatio'
+>
 
 /**
  * The smallest radius of curvature of a ring path over a line's read window, from the first
@@ -307,7 +317,7 @@ export function ringPathMinRadiusMm(
 ): number {
   const omega = 2 * Math.PI * frequencyHz
   const omegaAlong = 2 * Math.PI * F_MIN_HZ
-  const zeta = FOLLOWABILITY_DAMPING_RATIO
+  const zeta = spec.followabilityDampingRatio
   const a = spec.accelMmS2
   const c = cornerSpeedMmS
   const endMm = protectedSpanMm(spec, tierSpeedMmS, cornerSpeedMmS)
@@ -448,8 +458,8 @@ export function followableRungCount(
  * MIN_ACCEPTED_LINES rungs on the slowest tier that follow up to the design band top
  * (designBandTopHz), so the analysis can reach its line floor across the band the coupon is
  * designed for; MIN_LINES_PER_SPEED when there is no design band top. The bed fit never removes
- * lines below it. With a bottom-dense ladder this is MIN_ACCEPTED_LINES + 1: the followable rungs
- * plus the ladder top.
+ * lines below it. With a bottom-dense ladder this is MIN_ACCEPTED_LINES: the followable rungs
+ * alone.
  */
 function followableLineFloor(request: LadderRequest, profile: PrinterProfile): number {
   const topHz = designBandTopHz(request, profile)
@@ -461,22 +471,46 @@ function followableLineFloor(request: LadderRequest, profile: PrinterProfile): n
   return MIN_LINES_PER_SPEED
 }
 
+/** Whether a corner's bead follows a ring at one grid frequency of the band at least. */
+function followsSomewhereInBand(
+  spec: RingPathInputs,
+  profile: PrinterProfile,
+  tierSpeedMmS: number,
+  cornerSpeedMmS: number,
+): boolean {
+  for (let f = F_MIN_HZ; f <= F_MAX_HZ; f += FREQUENCY_GRID_HZ) {
+    if (followsRing(spec, profile, tierSpeedMmS, cornerSpeedMmS, f)) return true
+  }
+  return false
+}
+
 /**
  * The derived lines per speed. When the fastest followable corner splits the slowest tier's
  * ladder (it lies at or above the bottom rung and below the ladder top), the ladder takes
  * MIN_ACCEPTED_LINES rungs at or below it, so the design band (up to designBandTopHz) stays
- * readable at the analysis' line floor, and MIN_ACCEPTED_LINES rungs above it, so a stiff frame whose ring is too small to
- * detect on the slow corners still reaches the line floor from the strong excitation of the
- * fast ones: 6 lines. Otherwise every rung follows (or none does), and the followable line
- * floor is the count.
+ * readable at the analysis' line floor, and above them the upper rungs of ladderCornerSpeeds,
+ * lowest first, as long as the rung of every tier follows a ring at one grid frequency of the
+ * band at least. An upper rung that folds at every band frequency reads on no printer, whatever
+ * its resonance, so it is not printed; at most MIN_ACCEPTED_LINES upper rungs are taken. With the
+ * default profile one upper rung follows at the low end of the band: 4 lines. Otherwise every
+ * rung follows (or none does), and the followable line floor is the count.
  */
 export function ladderLinesPerSpeed(request: LadderRequest, profile: PrinterProfile): number {
   const slowest = Math.min(...request.speedsMmS)
   const c = request.followableCornerMmS
-  if (c >= MIN_CORNER_SPEED_MM_S && c < tierLadderTopMmS(request, slowest)) {
-    return 2 * MIN_ACCEPTED_LINES
+  if (c < MIN_CORNER_SPEED_MM_S || c >= tierLadderTopMmS(request, slowest)) {
+    return followableLineFloor(request, profile)
   }
-  return followableLineFloor(request, profile)
+  const full: IsTestSpec = { ...request, linesPerSpeed: 2 * MIN_ACCEPTED_LINES }
+  const ladders = request.speedsMmS.map((v) => ({ v, rungs: ladderCornerSpeeds(full, v) }))
+  let n = MIN_ACCEPTED_LINES
+  while (
+    n < full.linesPerSpeed &&
+    ladders.every(({ v, rungs }) => followsSomewhereInBand(request, profile, v, rungs[n]))
+  ) {
+    n++
+  }
+  return n
 }
 
 /**
@@ -497,8 +531,21 @@ export function guaranteedBandTopHz(spec: IsTestSpec, profile: PrinterProfile): 
 }
 
 /**
+ * The text a coupon whose lines follow ringing at no band frequency (guaranteedBandTopHz null) is
+ * refused with: fitSpecToPrinter throws it, so no G-code is offered.
+ */
+function readsNothingMessage(accelMmS2: number): string {
+  return (
+    'Raise the print acceleration before printing this coupon. ' +
+    `At ${accelMmS2} mm/s^2, the lines cannot follow ringing at any frequency from ` +
+    `${F_MIN_HZ} to ${F_MAX_HZ} Hz.`
+  )
+}
+
+/**
  * The warning shown when the coupon cannot keep MIN_ACCEPTED_LINES followable lines over the
- * whole band (guaranteedBandTopHz below F_MAX_HZ, or null when it reads nothing), or null. The
+ * whole band (guaranteedBandTopHz below F_MAX_HZ), or null. A coupon that reads nothing is
+ * refused by fitSpecToPrinter instead; for such a spec this returns the refusal's text. The
  * bed fit never removes the followable rungs (followableLineFloor), and a faster line speed does
  * not help either: the binding stretch is the acceleration ramp right after the corner, whose
  * along-track speed depends on the corner speed and the acceleration only. The cause the user can
@@ -506,13 +553,7 @@ export function guaranteedBandTopHz(spec: IsTestSpec, profile: PrinterProfile): 
  */
 export function bandTopWarning(spec: IsTestSpec, profile: PrinterProfile): string | null {
   const topHz = guaranteedBandTopHz(spec, profile)
-  if (topHz === null) {
-    return (
-      'Raise the print acceleration before printing this coupon. ' +
-      `At ${spec.accelMmS2} mm/s^2, the lines cannot follow ringing at any frequency from ` +
-      `${F_MIN_HZ} to ${F_MAX_HZ} Hz.`
-    )
-  }
+  if (topHz === null) return readsNothingMessage(spec.accelMmS2)
   if (topHz >= F_MAX_HZ) return null
   return (
     `Raise the print acceleration to measure resonances up to ${F_MAX_HZ} Hz. ` +
@@ -526,7 +567,9 @@ export function bandTopWarning(spec: IsTestSpec, profile: PrinterProfile): strin
  * corner and the lines per speed and fits the bed. This is the single place a spec is fitted and the only place a tier
  * is dropped; the generator and the analysis both read its result, so the coupon is analyzed
  * exactly as it was printed. Every change is described in a user-worded note; a request the
- * printer cannot host throws.
+ * printer cannot host throws, and so does a coupon whose lines follow ringing at no frequency of
+ * the band (guaranteedBandTopHz null). That limit is the bead followability of the printer's own
+ * nozzle, acceleration and speeds, not a fixed acceleration.
  */
 export function fitSpecToPrinter(
   request: IsTestRequest,
@@ -535,6 +578,9 @@ export function fitSpecToPrinter(
   const tiers = fitTiersToLadder(request)
   const firmware = fitSpecToFirmware(tiers.request)
   const bed = fitSpecToBed(firmware.request, profile)
+  if (guaranteedBandTopHz(bed.spec, profile) === null) {
+    throw new Error(readsNothingMessage(bed.spec.accelMmS2))
+  }
   return { spec: bed.spec, notes: [...tiers.notes, ...firmware.notes, ...bed.notes] }
 }
 

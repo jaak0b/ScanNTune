@@ -205,6 +205,11 @@ function emitIsGcode(profile: PrinterProfile, filament: FilamentProfile, spec: I
   // (or on the bed) also leave the window open.
   const e = newEmitter(holes)
   const L = e.lines
+  // The ladder's top printed rung: the derived line count prints only the rungs a bead can
+  // follow, so it usually lies below the spec's corner speed.
+  const fastestCornerMmS = Number(
+    Math.max(...g.groups.flatMap((grp) => grp.lines.map((l) => l.cornerSpeedMmS))).toFixed(2),
+  )
   L.push(
     ...setupPreamble(
       profile,
@@ -213,7 +218,7 @@ function emitIsGcode(profile: PrinterProfile, filament: FilamentProfile, spec: I
         '; ScanNTune input shaper resonance test',
         `; speed tiers ${spec.speedsMmS.join(', ')} mm/s, acceleration ${spec.accelMmS2} mm/s^2`,
         `; corner-speed excitation ladder ${MIN_CORNER_SPEED_MM_S} to ` +
-          `${spec.cornerSpeedMmS} mm/s across the ${spec.linesPerSpeed} lines of each tier, ` +
+          `${fastestCornerMmS} mm/s across the ${spec.linesPerSpeed} lines of each tier, ` +
           'fastest corners printed last',
       ],
       // The test runs at the profile's acceleration and corner limit; only each test line

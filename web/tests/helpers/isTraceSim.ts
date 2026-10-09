@@ -14,7 +14,7 @@ import type { TracedLine } from '../../src/engine/is/lineTracer'
 //   acceleration from the corner speed to the tier speed, then cruise), which is also the traced
 //   time base the analyzer receives, exactly as the tracer computes it.
 // - Ring: the free response to the corner's velocity step, amplitude proportional to the line's
-//   rung (the top rung carries ampMm), one phase for the whole axis (fixed by the corner).
+//   rung (the top printed rung carries ampMm), one phase for the whole axis (fixed by the corner).
 // - Noise models (per traced sample, in scan pixels): iid; bilinear (iid pixel noise read by the
 //   tracer's bilinear interpolation at the line's sub-pixel phase); Gaussian blur of 1 or 2 px
 //   along the line, then the bilinear read; red AR(2) noise with its spectral peak inside the ring
@@ -370,7 +370,7 @@ export function simulateAxis(options: TraceSimOptions): SimLine[] {
   const offsets = group.lines.map((_, i) => perpendicular(i))
   const minOffset = Math.min(...offsets)
   const meanOffset = offsets.reduce((s, o) => s + o, 0) / offsets.length - minOffset
-  const cTop = spec.cornerSpeedMmS
+  const cTop = Math.max(...geometry.groups.flatMap((g) => g.lines.map((l) => l.cornerSpeedMmS)))
   const a = spec.accelMmS2
   const rand = prng(options.seed)
   const jpeg = options.artifacts?.jpegBlock

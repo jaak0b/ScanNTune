@@ -19,7 +19,7 @@ import {
 const profile = defaultPrinterProfile()
 const filament = defaultFilamentProfile()
 const spec = defaultIsTestRequest(profile)
-// The fitted default the generator prints: tiers 90 / 150 mm/s, six lines per speed.
+// The fitted default the generator prints: tiers 90 / 150 mm/s, four lines per speed.
 const fitted = fitSpecToPrinter(spec, profile).spec
 const nominal = profile.nozzleDiameterMm * NOMINAL_WIDTH_FACTOR
 const g = isCouponGeometry(fitted)
@@ -238,18 +238,18 @@ describe('generateIsGcodeWithReport (Klipper)', () => {
 
   it('names the corner-speed excitation ladder in the header', () => {
     expect(lines[2]).toBe(
-      '; corner-speed excitation ladder 20 to 100 mm/s across the 6 lines of each tier, ' +
+      '; corner-speed excitation ladder 20 to 40.21 mm/s across the 4 lines of each tier, ' +
         'fastest corners printed last',
     )
   })
 
   it('cruises each run-up at its own ladder rung (hand-pinned bottom-dense feeds)', () => {
     // Hand-derived once, times 60 and rounded: both tiers share the bottom rungs
-    // 20 * (29.2 / 20)^(j/2) mm/s for j = 0..2; above them the 90 mm/s tier climbs as
-    // 29.2 * (90 / 29.2)^(k/3) and the 150 mm/s tier as 29.2 * (100 / 29.2)^(k/3), k = 1..3.
+    // 20 * (25.5 / 20)^(j/2) mm/s for j = 0..2; above them the 90 mm/s tier prints
+    // 25.5 * (90 / 25.5)^(1/3) and the 150 mm/s tier 25.5 * (100 / 25.5)^(1/3).
     const expectedFeeds: Record<number, number[]> = {
-      90: [1200, 1450, 1752, 2550, 3711, 5400],
-      150: [1200, 1450, 1752, 2641, 3981, 6000],
+      90: [1200, 1355, 1530, 2329],
+      150: [1200, 1355, 1530, 2413],
     }
     const chunk = measuredChunk(lines)
     for (const group of g.groups) {
@@ -264,24 +264,24 @@ describe('generateIsGcodeWithReport (Klipper)', () => {
 
   it('prints the lines rung by rung, so the corner feeds never fall within a layer', () => {
     // The run-up cruise into each corner is the move ending on the corner; its feed is the
-    // rung. In print order the feeds rise from F1200 to F6000 and never fall: the 90 mm/s
-    // tier's F5400 top rungs come just before the line speed tier's F6000 ones.
+    // rung. In print order the feeds rise from F1200 to F2413 and never fall: the 90 mm/s
+    // tier's F2329 top rungs come just before the line speed tier's F2413 ones.
     const chunk = measuredChunk(lines)
     const cornerFeeds = chunk
       .map((l, i) => ({ l, i }))
       .filter(({ l }) => allLines.some((line) => l === cornerMoveStr(line)))
       .map(({ l }) => Number(l.match(/F(\d+)$/)![1]))
-    expect(cornerFeeds).toHaveLength(24)
+    expect(cornerFeeds).toHaveLength(16)
     expect(cornerFeeds).toEqual([...cornerFeeds].sort((a, b) => a - b))
-    expect(cornerFeeds.slice(-4)).toEqual([5400, 5400, 6000, 6000])
+    expect(cornerFeeds.slice(-4)).toEqual([2329, 2329, 2413, 2413])
   })
 
   it("raises the corner limit to each line's own corner speed after its first stretch, and lowers it before the wipe", () => {
     // Raise values: each tier's rung feeds (see the run-up feed test) as mm/s, rounded up to
     // 3 decimals (hand-derived); lower value: the profile's 5 mm/s.
     const raise: Record<number, string[]> = {
-      90: ['20', '24.167', '29.2', '42.5', '61.85', '90'],
-      150: ['20', '24.167', '29.2', '44.017', '66.35', '100'],
+      90: ['20', '22.584', '25.5', '38.817'],
+      150: ['20', '22.584', '25.5', '40.217'],
     }
     const chunk = measuredChunk(lines)
     for (const line of allLines) {
@@ -301,7 +301,7 @@ describe('generateIsGcodeWithReport (Klipper)', () => {
 
   it('brings the planner to rest three times per line: before the travel, the first stretch and the wipe', () => {
     const chunk = measuredChunk(lines)
-    expect(chunk.filter((l) => l === 'G4 P0')).toHaveLength(72)
+    expect(chunk.filter((l) => l === 'G4 P0')).toHaveLength(48)
     for (const line of allLines) {
       const idx = chunk.indexOf(cornerMoveStr(line))
       // Backwards from the corner: raise, first stretch, stop, un-retract, travel, stop.
@@ -340,8 +340,8 @@ describe('generateIsGcodeWithReport (Klipper)', () => {
       chunk.flatMap((l, i) =>
         firstStretchEnds.some((p) => l.startsWith(p)) ? [[chunk[i - 2], chunk[i - 1], l.split(' E')[1]]] : [],
       )
-    expect(lineStarts(pedestal)).toEqual(Array(24).fill(['G1 E0.800 F2100', 'G4 P0', '0.06473 F1800']))
-    expect(lineStarts(measured)).toEqual(Array(24).fill(['G1 E0.800 F2100', 'G4 P0', '0.09406 F1800']))
+    expect(lineStarts(pedestal)).toEqual(Array(16).fill(['G1 E0.800 F2100', 'G4 P0', '0.06473 F1800']))
+    expect(lineStarts(measured)).toEqual(Array(16).fill(['G1 E0.800 F2100', 'G4 P0', '0.09406 F1800']))
   })
 
   it('runs each measured segment at its tier feedrate with full flow across the whole protected span', () => {
@@ -761,16 +761,16 @@ describe('bed fitting', () => {
     expect(r.gcode).toMatch(/^G1 X.* E[\d.]+ F9000$/m)
   })
 
-  it('generates a front-placed coupon that ends inside the far edge of a 120 mm bed', () => {
-    const bed120: PrinterProfile = { ...profile, bedWidthMm: 120, bedDepthMm: 120 }
-    const r = generateIsGcodeWithReport(bed120, filament, { ...spec, placement: 'front' })
+  it('generates a front-placed coupon that ends inside the far edge of a 110 mm bed', () => {
+    const bed110: PrinterProfile = { ...profile, bedWidthMm: 110, bedDepthMm: 110 }
+    const r = generateIsGcodeWithReport(bed110, filament, { ...spec, placement: 'front' })
     expect(r.warnings).toContain(
       'The measured lines were shortened from 30 mm to 25 mm so the coupon fits the configured bed.',
     )
     const ys = [...r.gcode.matchAll(/^G[01] X(-?[\d.]+) Y(-?[\d.]+)/gm)].map((m) => Number(m[2]))
-    // The five-line 109.283 mm coupon starts at the 10 mm front margin and ends at 119.283 mm.
+    // The four-line 99.283 mm coupon starts at the 10 mm front margin and ends at 109.283 mm.
     expect(Math.min(...ys)).toBeGreaterThanOrEqual(10)
-    expect(Math.max(...ys)).toBeLessThanOrEqual(119.283 + 0.001)
+    expect(Math.max(...ys)).toBeLessThanOrEqual(109.283 + 0.001)
   })
 
   it('throws when even the smallest coupon overflows the bed', () => {
@@ -791,9 +791,12 @@ describe('validation and reporting', () => {
 
   it('prints one tier, with the note, when the line speed is too slow for two', () => {
     // The tiers of a 33 mm/s line speed are 19 and 33 mm/s; the 19 mm/s tier is below the
-    // 20 mm/s bottom rung, so the coupon prints the 33 mm/s tier alone.
+    // 20 mm/s bottom rung, so the coupon prints the 33 mm/s tier alone. Lines this slow follow
+    // ringing only on a well damped frame, here 0.2; at the 0.03 design damping the request is
+    // refused.
     const r = generateIsGcodeWithReport(profile, filament, {
       ...spec,
+      followabilityDampingRatio: 0.2,
       cornerSpeedMmS: 20,
       speedsMmS: [19, 33],
     })
@@ -934,9 +937,9 @@ describe('first layer speed', () => {
         .map((l) => Number(l.match(/ F(\d+)$/)![1]))
     const pedestalPrimes = primeFeeds(chunks[0])
     const measuredPrimes = primeFeeds(chunks[chunks.length - 1])
-    // One first stretch per test line on each layer: twelve lines per axis, both axes.
-    expect(pedestalPrimes).toEqual(Array(24).fill(1200))
-    expect(measuredPrimes).toEqual(Array(24).fill(1800))
+    // One first stretch per test line on each layer: eight lines per axis, both axes.
+    expect(pedestalPrimes).toEqual(Array(16).fill(1200))
+    expect(measuredPrimes).toEqual(Array(16).fill(1800))
   })
 
   it('caps only the base first layer when a contrast base is printed', () => {

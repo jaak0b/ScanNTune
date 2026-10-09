@@ -75,14 +75,16 @@ function geometricRungs(from: number, to: number, count: number): number[] {
  * a ring whose bead the traced centreline cannot follow at the top of the band (see
  * ringPathMinRadiusMm), so the ladder is dense at the bottom: its lowest MIN_ACCEPTED_LINES
  * rungs are spaced geometrically from MIN_CORNER_SPEED_MM_S up to the spec's fastest followable
- * corner, and the remaining rungs geometrically from there up to the tier's ladder top. The
- * analysis can then reach its line floor from the followable rungs alone at the band top, while
- * the faster rungs carry the strong excitation. When the followable corner lies outside the
- * ladder's range (every rung follows, or it sits below the bottom rung because not even that rung
- * follows), or the tier has no rung left above the followable ones, the rungs are spaced
- * geometrically over the whole range. A followable corner equal to the bottom rung gives three
- * bottom rungs at that one speed: three replicate lines that still follow.
- * `tierSpeedMmS` defaults to the fastest tier, whose ladder top is the spec's corner speed.
+ * corner. Above them the ladder continues geometrically from the followable corner to the tier's
+ * ladder top in MIN_ACCEPTED_LINES steps (in more when more upper rungs are asked for), and the
+ * line count decides how many of these upper rungs are printed, lowest first: the derived count
+ * keeps those whose bead follows a ring at one band frequency at least (ladderLinesPerSpeed), and
+ * the bed fit removes them from the top. When the followable corner lies outside the ladder's
+ * range (every rung follows, or it sits below the bottom rung because not even that rung
+ * follows), the rungs are spaced geometrically over the whole range. A followable corner equal
+ * to the bottom rung gives three bottom rungs at that one speed: three replicate lines that
+ * still follow. `tierSpeedMmS` defaults to the fastest tier, whose ladder top is the spec's
+ * corner speed.
  */
 export function ladderCornerSpeeds(
   spec: IsTestSpec,
@@ -91,11 +93,13 @@ export function ladderCornerSpeeds(
   const n = spec.linesPerSpeed
   const top = tierLadderTopMmS(spec, tierSpeedMmS)
   const followable = spec.followableCornerMmS
-  if (n <= MIN_ACCEPTED_LINES || followable < MIN_CORNER_SPEED_MM_S || followable >= top) {
+  if (followable < MIN_CORNER_SPEED_MM_S || followable >= top) {
     return geometricRungs(MIN_CORNER_SPEED_MM_S, top, n)
   }
-  const bottom = geometricRungs(MIN_CORNER_SPEED_MM_S, followable, MIN_ACCEPTED_LINES)
-  const upper = geometricRungs(followable, top, n - MIN_ACCEPTED_LINES + 1).slice(1)
+  const bottom = geometricRungs(MIN_CORNER_SPEED_MM_S, followable, Math.min(n, MIN_ACCEPTED_LINES))
+  const upperCount = n - bottom.length
+  const steps = Math.max(MIN_ACCEPTED_LINES, upperCount)
+  const upper = geometricRungs(followable, top, steps + 1).slice(1, 1 + upperCount)
   return [...bottom, ...upper]
 }
 

@@ -63,18 +63,18 @@ const PROFILE_LIMIT = 5
 /**
  * The corner speed of each ladder rung as the default coupon commands it on the measured layer,
  * mm/s, per tier, lowest rung first. Hand-derived once: the bottom-dense rungs
- * 20 * (29.2 / 20)^(j / 2) mm/s for j = 0..2, then 29.2 * (top / 29.2)^(k / 3) for k = 1..3 up to
- * the tier's top (90 mm/s on the 90 mm/s tier, 100 mm/s on the 150 mm/s tier), rounded to the
- * whole mm/min the G-code prints (F1200, F1450, F1752, then F2550, F3711, F5400 and F2641,
- * F3981, F6000).
+ * 20 * (25.5 / 20)^(j / 2) mm/s for j = 0..2, then the one printed upper rung
+ * 25.5 * (top / 25.5)^(1 / 3) towards the tier's top (90 mm/s on the 90 mm/s tier, 100 mm/s on
+ * the 150 mm/s tier), rounded to the whole mm/min the G-code prints (F1200, F1355, F1530, then
+ * F2329 and F2413).
  */
 const MEASURED_RUNG_MM_S: Record<number, number[]> = {
-  90: [20, 24.166667, 29.2, 42.5, 61.85, 90],
-  150: [20, 24.166667, 29.2, 44.016667, 66.35, 100],
+  90: [20, 22.583333, 25.5, 38.816667],
+  150: [20, 22.583333, 25.5, 40.216667],
 }
 /** The same rungs on the pedestal layer, where the profile's 30 mm/s first layer speed (F1800)
  *  caps every line. */
-const PEDESTAL_RUNG_MM_S = [20, 24.166667, 29.2, 30, 30, 30]
+const PEDESTAL_RUNG_MM_S = [20, 22.583333, 25.5, 30]
 /** The pedestal layer's line speed: the profile's 30 mm/s first layer speed. */
 const PEDESTAL_LINE_SPEED_MM_S = 30
 

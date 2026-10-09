@@ -147,71 +147,78 @@ describe('bottom-dense ladder and derived lines per speed (bead followability on
   // The fastest followable corner was re-derived once by an independent scratch implementation
   // of the rule (Farouki and Neff offset regularity, R > w/2 = 0.21 mm, along the commanded
   // profile from the first traced sample, 200 Hz lateral ring, 20 Hz along-track ring, damping
-  // 0.04): 29.2 mm/s leaves a smallest radius of 0.2104 mm, 29.3 mm/s 0.2090 mm.
-  it('derives six lines per speed for the defaults, three of whose rungs stay followable', () => {
+  // 0.03): 25.5 mm/s leaves a smallest radius of 0.2107 mm, 25.6 mm/s 0.2093 mm.
+  it('derives four lines per speed for the defaults, three of whose rungs stay followable', () => {
+    // The upper rungs of the 90 mm/s tier, 38.82, 59.11 and 90 mm/s, follow a ring at 39, 0 and 0
+    // grid frequencies of the band (counted once by a scratch script), so only the first is
+    // printed.
     const spec = fitted(request)
-    expect(spec.followableCornerMmS).toBe(29.2)
-    expect(spec.linesPerSpeed).toBe(6)
+    expect(spec.followabilityDampingRatio).toBe(0.03)
+    expect(spec.followableCornerMmS).toBe(25.5)
+    expect(spec.linesPerSpeed).toBe(4)
     expect(followableRungCount(spec, profile)).toBe(3)
     expect(guaranteedBandTopHz(spec, profile)).toBe(200)
   })
-  it('spaces three rungs up to the followable corner and the rest up to the ladder top', () => {
-    // Slow tier: 20 * (29.2 / 20)^(j / 2), then 29.2 * (90 / 29.2)^(k / 3) (hand-derived).
+  it('spaces three rungs up to the followable corner and prints the lowest upper rung', () => {
+    // Slow tier: 20 * (25.5 / 20)^(j / 2), then 25.5 * (90 / 25.5)^(1 / 3) (hand-derived).
     const spec = fitted(request)
     const slow = ladderCornerSpeeds(spec, 90)
-    ;[20, 24.16609, 29.2, 42.49483, 61.84282, 90].forEach((r, j) => expect(slow[j]).toBeCloseTo(r, 4))
-    // Fast tier: the same bottom rungs, then 29.2 * (100 / 29.2)^(k / 3).
+    expect(slow).toHaveLength(4)
+    ;[20, 22.58318, 25.5, 38.82466].forEach((r, j) => expect(slow[j]).toBeCloseTo(r, 4))
+    // Fast tier: the same bottom rungs, then 25.5 * (100 / 25.5)^(1 / 3).
     const fast = ladderCornerSpeeds(spec, 150)
-    ;[20, 24.16609, 29.2, 44.01377, 66.34287, 100].forEach((r, j) => expect(fast[j]).toBeCloseTo(r, 4))
+    ;[20, 22.58318, 25.5, 40.21241].forEach((r, j) => expect(fast[j]).toBeCloseTo(r, 4))
   })
-  it('keeps the three followable rungs at every line count of four or more', () => {
-    for (let n = 4; n <= 7; n++) {
+  it('keeps the three followable rungs at every line count of three or more', () => {
+    for (let n = 3; n <= 7; n++) {
       const spec = { ...fitted(request), linesPerSpeed: n }
       expect(ladderCornerSpeeds(spec, 90).slice(0, 3)).toEqual(ladderCornerSpeeds(fitted(request), 90).slice(0, 3))
       expect(followableRungCount(spec, profile)).toBe(3)
     }
   })
-  it('derives six lines for a wider bead, whose followable corner is lower', () => {
+  it('derives four lines for a wider bead, whose followable corner is lower', () => {
     const wide = { ...profile, nozzleDiameterMm: 0.6 }
     const spec = fitted(request, wide)
-    expect(spec.followableCornerMmS).toBe(23.4)
-    expect(spec.linesPerSpeed).toBe(6)
+    expect(spec.followableCornerMmS).toBe(20.1)
+    expect(spec.linesPerSpeed).toBe(4)
     expect(followableRungCount(spec, wide)).toBe(3)
   })
   it('never reports a corner that folds inside the band as followable up to 200 Hz', () => {
-    // 0.4 mm nozzle at 1500 mm/s^2, 90 mm/s tier: a 21.2 mm/s corner follows a ring at 200 Hz but
-    // folds from 129 to 193 Hz (checked once at every 1 Hz grid point by a scratch script), while
-    // the 20 and 20.6 mm/s rungs follow the whole band.
+    // 0.4 mm nozzle at 1500 mm/s^2 and a damping ratio of 0.04, 90 mm/s tier: a 21.2 mm/s corner
+    // follows a ring at 200 Hz but folds from 129 to 193 Hz (checked once at every 1 Hz grid point
+    // by a scratch script), while the 20 and 20.6 mm/s rungs follow the whole band. The damping
+    // is a request parameter, so the fold shows here at 0.04; a sweep at 0.03 found none.
     const p = { ...profile, printAccelMmS2: 1500 }
-    const spec = fitted(defaultIsTestRequest(p), p)
+    const spec = fitted({ ...defaultIsTestRequest(p), followabilityDampingRatio: 0.04 }, p)
     expect(guaranteedBandTopHz({ ...spec, followableCornerMmS: 21.2 }, p)).toBe(128)
     expect(spec.followableCornerMmS).toBeLessThan(21.2)
     expect(guaranteedBandTopHz(spec, p)).toBe(200)
   })
   it('designs the ladder at the reduced band top a low acceleration still reads, and names the acceleration', () => {
     // 1200 mm/s^2, 90 mm/s tier: the 20 mm/s bottom rung follows a ring at every 1 Hz grid point
-    // up to 86 Hz and folds at 87 Hz (checked once by a scratch script), so the six-line ladder is
-    // designed for a band ending at 86 Hz.
+    // up to 64 Hz and folds at 65 Hz (checked once by a scratch script), so the ladder is designed
+    // for a band ending at 64 Hz.
     const slow = { ...profile, printAccelMmS2: 1200 }
     const spec = fitted(defaultIsTestRequest(slow), slow)
-    expect(spec.linesPerSpeed).toBe(6)
-    expect(guaranteedBandTopHz(spec, slow)).toBe(86)
+    expect(spec.linesPerSpeed).toBe(4)
+    expect(guaranteedBandTopHz(spec, slow)).toBe(64)
     expect(bandTopWarning(spec, slow)).toBe(
       'Raise the print acceleration to measure resonances up to 200 Hz. At 1200 mm/s^2, the ' +
-        'lines follow ringing only up to 86 Hz.',
+        'lines follow ringing only up to 64 Hz.',
     )
     expect(bandTopWarning(fitted(request), profile)).toBeNull()
   })
-  it('reports a coupon whose bottom rung folds already at 20 Hz as reading nothing', () => {
-    // 500 mm/s^2: even the 20 mm/s bottom rung of the 90 mm/s tier folds at 20 Hz (checked once
-    // by a scratch script).
+  it('refuses to fit a coupon whose bottom rung folds already at 20 Hz, judged per printer', () => {
+    // 500 mm/s^2: even the 20 mm/s bottom rung of the 90 mm/s tier folds at 20 Hz with the 0.21 mm
+    // half bead of a 0.4 mm nozzle (checked once by a scratch script), so no G-code is offered.
+    // The 0.13125 mm half bead of a 0.25 mm nozzle still follows at that acceleration.
     const slow = { ...profile, printAccelMmS2: 500 }
-    const spec = fitted(defaultIsTestRequest(slow), slow)
-    expect(guaranteedBandTopHz(spec, slow)).toBeNull()
-    expect(bandTopWarning(spec, slow)).toBe(
+    expect(() => fitSpecToPrinter(defaultIsTestRequest(slow), slow)).toThrow(
       'Raise the print acceleration before printing this coupon. At 500 mm/s^2, the lines ' +
         'cannot follow ringing at any frequency from 20 to 200 Hz.',
     )
+    const fine = { ...slow, nozzleDiameterMm: 0.25 }
+    expect(guaranteedBandTopHz(fitted(defaultIsTestRequest(fine), fine), fine)).not.toBeNull()
   })
 })
 
@@ -220,6 +227,10 @@ describe('fitSpecToPrinter speed tiers', () => {
     'The 19 mm/s speed tier was removed because it is slower than the 20 mm/s lowest corner ' +
     'speed. With one speed tier, the analysis cannot tell print and scan patterns apart from ' +
     'ringing. Raise the line speed to at least 34 mm/s to keep both speed tiers.'
+  // Lines this slow follow ringing at no band frequency at the 0.03 design damping ratio, so
+  // such a request is refused; a frame damped at 0.2 keeps them readable, which shows the tier
+  // rules on their own.
+  const request = { ...defaultIsTestRequest(profile), followabilityDampingRatio: 0.2 }
 
   it('drops the slower tier of a 33 mm/s line speed, below the 20 mm/s bottom rung, and says so', () => {
     // 33 / 1.6547 = 19.94 -> 19 mm/s; the smallest line speed with a 20 mm/s slower tier
@@ -282,84 +293,86 @@ describe('fitSpecToPrinter firmware fit', () => {
 describe('fitSpecToPrinter bed fit', () => {
   const bed = (mm: number) => ({ ...profile, bedWidthMm: mm, bedDepthMm: mm })
 
-  it('leaves the default request unchanged on the default 220 mm bed and on a 150 mm bed', () => {
-    // The default coupon is 124.283 mm square (see the couponGeometry footprint test).
-    for (const mm of [220, 150]) {
+  it('leaves the default request unchanged on the default 220 mm bed and on a 120 mm bed', () => {
+    // The default coupon is 104.283 mm square (see the couponGeometry footprint test).
+    for (const mm of [220, 120]) {
       const { spec, notes } = fitSpecToPrinter(request, bed(mm))
       expect(spec.speedsMmS).toEqual([90, 150])
-      expect(spec.linesPerSpeed).toBe(6)
+      expect(spec.linesPerSpeed).toBe(4)
       expect(spec.measuredLineMm).toBe(30)
       expect(notes).toEqual([])
     }
   })
   it('shortens the measured lines first, to the longest length that fits', () => {
-    // 120 mm bed: 124.283 - 30 + L <= 120 gives L <= 25.717, so 25 mm; both tiers and all
-    // six lines stay, three of them followable.
-    const { spec, notes } = fitSpecToPrinter(request, bed(120))
+    // 100 mm bed: 104.283 - 30 + L <= 100 gives L <= 25.717, so 25 mm; both tiers and all
+    // four lines stay, three of them followable.
+    const { spec, notes } = fitSpecToPrinter(request, bed(100))
     expect(spec.speedsMmS).toEqual([90, 150])
-    expect(spec.linesPerSpeed).toBe(6)
+    expect(spec.linesPerSpeed).toBe(4)
     expect(spec.measuredLineMm).toBe(25)
-    expect(followableRungCount(spec, bed(120))).toBe(3)
+    expect(followableRungCount(spec, bed(100))).toBe(3)
     expect(notes).toEqual([
       'The measured lines were shortened from 30 mm to 25 mm so the coupon fits the configured bed.',
     ])
   })
   it('fits a front or back placement into the depth its edge margin leaves', () => {
-    // Scan with the plate (front placement) on a 120 mm bed: 110 mm of depth remain. Six lines
-    // need 114.283 mm even at 20 mm; five lines (field 22.5 mm) fit at
-    // L = 110 - (114.283 - 30) = 25.717, so 25 mm.
+    // Scan with the plate (front placement) on a 110 mm bed: 100 mm of depth remain, so
+    // L = 100 - (104.283 - 30) = 25.717, 25 mm, where the centred coupon fits unchanged.
     for (const placement of ['front', 'back'] as const) {
-      const { spec, notes } = fitSpecToPrinter({ ...request, placement }, bed(120))
-      expect(spec.linesPerSpeed).toBe(5)
+      const { spec, notes } = fitSpecToPrinter({ ...request, placement }, bed(110))
+      expect(spec.linesPerSpeed).toBe(4)
       expect(spec.measuredLineMm).toBe(25)
       expect(notes).toEqual([
-        'The lines per speed tier were reduced from 6 to 5 so the coupon fits the configured bed.',
         'The measured lines were shortened from 30 mm to 25 mm so the coupon fits the configured bed.',
       ])
     }
+    expect(fitSpecToPrinter(request, bed(110)).notes).toEqual([])
   })
-  it('reduces the lines per speed once the shortest lines still overflow, removing upper rungs only', () => {
-    // 100 mm bed: four lines (field 17.5 mm) fit at L = 25 mm. The removed lines are upper rungs:
-    // the three followable bottom rungs stay, so the band top stays 200 Hz.
-    const { spec, notes } = fitSpecToPrinter(request, bed(100))
+  it('reduces the lines per speed once the shortest lines still overflow, removing the upper rung only', () => {
+    // 90 mm bed: four lines need 94.283 mm even at 20 mm; three lines (field 12.5 mm) fit at
+    // L = 25 mm. The removed line is the upper rung: the three followable bottom rungs stay, so
+    // the band top stays 200 Hz.
+    const { spec, notes } = fitSpecToPrinter(request, bed(90))
     expect(spec.speedsMmS).toEqual([90, 150])
-    expect(spec.linesPerSpeed).toBe(4)
+    expect(spec.linesPerSpeed).toBe(3)
     expect(spec.measuredLineMm).toBe(25)
-    expect(ladderCornerSpeeds(spec, 90).slice(0, 3)).toEqual(ladderCornerSpeeds(fitted(request), 90).slice(0, 3))
-    expect(followableRungCount(spec, bed(100))).toBe(3)
-    expect(bandTopWarning(spec, bed(100))).toBeNull()
+    expect(ladderCornerSpeeds(spec, 90)).toEqual(ladderCornerSpeeds(fitted(request), 90).slice(0, 3))
+    expect(followableRungCount(spec, bed(90))).toBe(3)
+    expect(bandTopWarning(spec, bed(90))).toBeNull()
     expect(notes).toEqual([
-      'The lines per speed tier were reduced from 6 to 4 so the coupon fits the configured bed.',
+      'The lines per speed tier were reduced from 4 to 3 so the coupon fits the configured bed.',
       'The measured lines were shortened from 30 mm to 25 mm so the coupon fits the configured bed.',
     ])
   })
-  it('never reduces below the four-line followable floor: it drops the slower tier instead', () => {
-    // 90 mm bed: two tiers at four lines need 94.283 mm even at 20 mm, and three lines would
-    // lose the followable rungs, so the slower tier goes and the single tier keeps six lines.
-    const { spec } = fitSpecToPrinter(request, bed(90))
-    expect(spec.speedsMmS).toEqual([150])
-    expect(spec.linesPerSpeed).toBe(6)
-    expect(followableRungCount(spec, bed(90))).toBe(3)
-  })
-  it('drops the derived slower tier last, then reduces the single tier the same way', () => {
-    // 80 mm bed: one 150 mm/s tier derives six lines and fits at four lines at L = 23 mm.
-    const { spec, notes } = fitSpecToPrinter(request, bed(80))
+  it('never reduces below the three-line followable floor: it drops the slower tier instead', () => {
+    // 80 mm bed: two tiers at three lines need 84.283 mm even at 20 mm, so the slower tier goes
+    // and the single tier keeps four lines at L = 23 mm.
+    const { spec } = fitSpecToPrinter(request, bed(80))
     expect(spec.speedsMmS).toEqual([150])
     expect(spec.linesPerSpeed).toBe(4)
     expect(spec.measuredLineMm).toBe(23)
     expect(followableRungCount(spec, bed(80))).toBe(3)
+  })
+  it('drops the derived slower tier last, then reduces the single tier the same way', () => {
+    // 75 mm bed: one 150 mm/s tier derives four lines (76.683 mm at 20 mm) and fits at three
+    // lines at L = 23 mm.
+    const { spec, notes } = fitSpecToPrinter(request, bed(75))
+    expect(spec.speedsMmS).toEqual([150])
+    expect(spec.linesPerSpeed).toBe(3)
+    expect(spec.measuredLineMm).toBe(23)
+    expect(followableRungCount(spec, bed(75))).toBe(3)
     expect(notes).toEqual([
       'The 90 mm/s speed tier was removed so the coupon fits the configured bed. With one ' +
         'speed tier, the analysis cannot tell print and scan patterns apart from ringing.',
-      'The lines per speed tier were reduced from 6 to 4 so the coupon fits the configured bed.',
+      'The lines per speed tier were reduced from 4 to 3 so the coupon fits the configured bed.',
       'The measured lines were shortened from 30 mm to 23 mm so the coupon fits the configured bed.',
     ])
     const g = isCouponGeometry(spec)
-    expect(g.couponWidthMm).toBeLessThanOrEqual(80)
-    expect(g.couponHeightMm).toBeLessThanOrEqual(80)
+    expect(g.couponWidthMm).toBeLessThanOrEqual(75)
+    expect(g.couponHeightMm).toBeLessThanOrEqual(75)
   })
-  it('throws when the bed is genuinely too small even for one tier of four short lines', () => {
-    // One tier of four lines at 20 mm is 76.683 mm square.
-    expect(() => fitSpecToPrinter(request, bed(75))).toThrow(/does not fit/)
+  it('throws when the bed is genuinely too small even for one tier of three short lines', () => {
+    // One tier of three lines at 20 mm is 71.683 mm square.
+    expect(() => fitSpecToPrinter(request, bed(71))).toThrow(/does not fit/)
   })
 })

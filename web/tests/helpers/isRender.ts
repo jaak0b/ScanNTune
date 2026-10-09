@@ -154,6 +154,11 @@ function towardRunUp(line: IsLine): number {
   return along >= 0 ? 1 : -1
 }
 
+/** The fastest corner the coupon prints, the rung whose ring the truth amplitudes describe. */
+function topRungMmS(g: IsCouponGeometry): number {
+  return Math.max(...g.groups.flatMap((group) => group.lines.map((line) => line.cornerSpeedMmS)))
+}
+
 /**
  * The along-track lag of a line of `lineAxis`'s group with corner speed c, tier speed v and
  * acceleration a: the other axis's ring taken along that axis's own group's run-up, as its
@@ -174,7 +179,7 @@ function lagFunction(
   const truth = o.truth[other.axis]
   if (!truth) return null
   const sign = towardRunUp(other.lines[0])
-  const perStep = truth.ringAmpMm / o.spec.cornerSpeedMmS
+  const perStep = truth.ringAmpMm / topRungMmS(g)
   const omega = 2 * Math.PI * truth.frequencyHz
   const alpha = -omega * truth.dampingRatio
   const omegaD = omega * Math.sqrt(1 - truth.dampingRatio * truth.dampingRatio)
@@ -210,9 +215,9 @@ function buildRingedLines(spec: IsTestSpec, g: IsCouponGeometry, o: Resolved): R
       const zeta = truth.dampingRatio
       // Ladder physics: the ring amplitude scales with the corner's velocity step
       // (delta-v over omega), so a line on a slower rung rings proportionally weaker.
-      // truth.ringAmpMm is the TOP rung's amplitude.
-      const B = truth.ringAmpMm * (line.cornerSpeedMmS / spec.cornerSpeedMmS)
-      const lobeA = (truth.lobeAmpMm ?? 0.08) * (line.cornerSpeedMmS / spec.cornerSpeedMmS)
+      // truth.ringAmpMm is the TOP printed rung's amplitude.
+      const B = truth.ringAmpMm * (line.cornerSpeedMmS / topRungMmS(g))
+      const lobeA = (truth.lobeAmpMm ?? 0.08) * (line.cornerSpeedMmS / topRungMmS(g))
       const lobeTau = truth.lobeTauS ?? 0.008
       const phi = truth.phaseRad ?? 0
       const omega = 2 * Math.PI * f
@@ -228,7 +233,7 @@ function buildRingedLines(spec: IsTestSpec, g: IsCouponGeometry, o: Resolved): R
         // The lag is at most the ring per unit step times the corner's step plus the ramp's
         // velocity change, v, so the deposit time lies between the commanded times of
         // s - bound and s + bound.
-        const bound = Math.abs(o.truth[g.groups.find((other) => other.axis !== group.axis)!.axis]!.ringAmpMm) * (v / spec.cornerSpeedMmS)
+        const bound = Math.abs(o.truth[g.groups.find((other) => other.axis !== group.axis)!.axis]!.ringAmpMm) * (v / topRungMmS(g))
         const depositTime = (sMm: number) => {
           let lo = timeAtDistance(Math.max(0, sMm - bound), c, v, a)
           let hi = timeAtDistance(sMm + bound, c, v, a)
