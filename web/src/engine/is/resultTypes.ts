@@ -122,6 +122,9 @@ export interface IsAxisResult {
   linesDetected: number
   /** Whether the zeta = 0 boundary test found the ring decaying; null when not fitted. */
   decayDemonstrated: boolean | null
+  /** Whether the ring's per-line amplitudes are shown to be locked to the corner (the
+   *  randomization test of their phases); null when not fitted. */
+  cornerLocked: boolean | null
   speedCheck: SpeedCheck
   replicateCheck: CheckState
   /** One-tier check that the detection survives leaving out any one line. */

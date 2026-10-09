@@ -59,6 +59,7 @@ export function isCheckRows(a: IsAxisResult): CheckRow[] {
     { label: 'Lines with ringing detected', value: `${a.linesDetected} of ${a.linesTraced}` },
     { label: 'Detection p-value bound', value: pBoundText(a.detectionPBound) },
     { label: 'Decay demonstrated', value: yesNo(a.decayDemonstrated) },
+    { label: 'Locked to the corner', value: yesNo(a.cornerLocked) },
     { label: 'Speed independence', value: SPEED_CHECK_TEXT[a.speedCheck.state] },
     ...a.speedCheck.tiers.map((t) => ({ label: `Frequency at ${t.speedMmS} mm/s`, value: `${t.frequencyHz.toFixed(1)} Hz` })),
     { label: 'Replicate check', value: CHECK_TEXT[a.replicateCheck] },
@@ -83,6 +84,7 @@ export function isCheckRows(a: IsAxisResult): CheckRow[] {
     rows.push(
       { label: 'Second mode frequency', value: `${a.secondMode.frequencyHz.toFixed(1)} Hz` },
       { label: 'Second mode damping ratio', value: a.secondMode.dampingRatio.toFixed(3) },
+      { label: 'Second mode locked to the corner', value: yesNo(a.secondMode.cornerLocked) },
     )
   }
   a.artifacts.forEach((artifact, i) => {

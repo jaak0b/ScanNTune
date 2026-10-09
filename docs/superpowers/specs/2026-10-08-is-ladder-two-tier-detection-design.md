@@ -684,7 +684,8 @@ Checks, each at alpha = 0.001:
   coefficients, the weighted least squares response per unit corner speed through the origin), and the
   length of the sum is tested by the randomization test of independent uniform phases conditional on
   the magnitudes, computed as a Monte Carlo test (Barnard 1963; Hope 1968) with 99,999 replicates from
-  a fixed seed, so the same scan always gives the same decision. At alpha / 2 = 0.0005, (N + 1) alpha / 2
+  a fixed seed, so the same scan always gives the same decision; it is reported as "Locked to the
+  corner: yes/no". At alpha / 2 = 0.0005, (N + 1) alpha / 2
   = 50 is an integer, so the Monte Carlo test is exact at that level, and the power lost against the
   exact randomization test is negligible (Marriott 1979). Decay: the boundary likelihood ratio test of
   zeta = 0 (Self and Liang, JASA 82, 1987), null law 0.5 chi2_0 + 0.5 chi2_1, at alpha / 2, critical
@@ -839,9 +840,10 @@ an axis.
 ### 2.13 Results shown
 
 Per axis, raw rows (`web/src/components/isCheckRows.ts`): lines with ringing detected (k of n), detection
-p-value bound, decay demonstrated, speed independence (confirmed, changed with speed, not confirmed, not
+p-value bound, decay demonstrated, locked to the corner, speed independence (confirmed, changed with speed, not confirmed, not
 assessed), the frequency at each tier speed, replicate check, detection without any single line (one
-tier), layer shift detected, the second mode's p-value bound, frequency and damping ratio, each detected
+tier), layer shift detected, the second mode's p-value bound, frequency, damping ratio and whether it is
+locked to the corner, each detected
 pattern's period and source,
 and the corner model with its time constant or drag length. The line table shows each line's speed and
 whether ringing was detected on it.

@@ -14,6 +14,7 @@ function axis(overrides: Partial<IsAxisResult>): IsAxisResult {
     detectionPBound: 2.1e-14,
     linesDetected: 7,
     decayDemonstrated: true,
+    cornerLocked: false,
     speedCheck: {
       state: 'confirmed',
       tiers: [
@@ -46,6 +47,7 @@ describe('isCheckRows', () => {
       { label: 'Lines with ringing detected', value: '7 of 10' },
       { label: 'Detection p-value bound', value: '2.1e-14' },
       { label: 'Decay demonstrated', value: 'yes' },
+      { label: 'Locked to the corner', value: 'no' },
       { label: 'Speed independence', value: 'confirmed' },
       { label: 'Frequency at 90 mm/s', value: '60.8 Hz' },
       { label: 'Frequency at 150 mm/s', value: '61.1 Hz' },
@@ -85,6 +87,7 @@ describe('isCheckRows', () => {
     expect(rows).toContainEqual({ label: 'Second mode p-value bound', value: '3.2e-9' })
     expect(rows).toContainEqual({ label: 'Second mode frequency', value: '62.0 Hz' })
     expect(rows).toContainEqual({ label: 'Second mode damping ratio', value: '0.047' })
+    expect(rows).toContainEqual({ label: 'Second mode locked to the corner', value: 'yes' })
     expect(rows).toContainEqual({ label: 'Print or scan pattern 1 period', value: '2.00 mm' })
     expect(rows).toContainEqual({ label: 'Print or scan pattern 1 source', value: 'GT2 belt pitch' })
     expect(rows).toContainEqual({ label: 'Print or scan pattern 1 harmonic', value: '1' })
@@ -140,9 +143,10 @@ describe('isCheckRows', () => {
   })
 
   it('shows a bound above 0.001 in plain digits and an unassessed axis as not assessed', () => {
-    const rows = isCheckRows(axis({ detectionPBound: 0.068, decayDemonstrated: null, layerShiftDetected: null }))
+    const rows = isCheckRows(axis({ detectionPBound: 0.068, decayDemonstrated: null, cornerLocked: null, layerShiftDetected: null }))
     expect(rows).toContainEqual({ label: 'Detection p-value bound', value: '0.068' })
     expect(rows).toContainEqual({ label: 'Decay demonstrated', value: 'not assessed' })
+    expect(rows).toContainEqual({ label: 'Locked to the corner', value: 'not assessed' })
     expect(rows).toContainEqual({ label: 'Layer shift detected', value: 'not assessed' })
   })
 })
