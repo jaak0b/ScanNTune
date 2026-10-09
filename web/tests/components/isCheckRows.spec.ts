@@ -74,7 +74,7 @@ describe('isCheckRows', () => {
     const rows = isCheckRows(
       axis({
         secondModePBound: 3.2e-9,
-        secondMode: { frequencyHz: 62.04, dampingRatio: 0.047, frequencySeHz: 0.4, amplitudeMm: 0.004, cornerLocked: true },
+        secondMode: { frequencyHz: 62.04, dampingRatio: 0.047, frequencySeHz: 0.4, amplitudeMm: 0.004, cornerLocked: true, decayDemonstrated: true },
         artifacts: [
           { periodMm: 2, known: true, detectionPBound: 1e-20 },
           { periodMm: 1.7051, known: false, detectionPBound: 1e-12 },

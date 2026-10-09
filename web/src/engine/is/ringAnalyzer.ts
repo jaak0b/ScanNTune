@@ -52,7 +52,7 @@ import {
 } from './ringLikelihood'
 import type { NullFit, RingPoint, RingRatio } from './ringLikelihood'
 import { gridCandidates, knownCandidates, searchStage } from './artifactSearch'
-import { cornerLockingShown, decayShown } from './cornerTransient'
+import { cornerLockingShown, cornerTransientShown, decayShown } from './cornerTransient'
 import type { CornerPhasor } from './cornerTransient'
 import type { DetectedArtifact } from './artifactSearch'
 import type { CornerModelKind, VarianceCovariate } from './ringRegressors'
@@ -207,9 +207,12 @@ export interface SecondMode {
   frequencySeHz: number | null
   /** Median over the lines of the mode's amplitude at the fit-window start, mm. */
   amplitudeMm: number
-  /** True when this mode's amplitudes are shown to be locked to the corner (cornerTransient.ts);
-   *  false marks a steady tone, not a mode. */
+  /** True when this mode's amplitudes are shown to be locked to the corner (cornerTransient.ts). */
   cornerLocked: boolean
+  /** True when the boundary test of zero damping in the two-mode fit, this mode's damping held
+   *  at zero, shows it decaying (cornerTransient.ts). A mode shown neither locked nor decaying
+   *  is a steady tone, not a mode. */
+  decayDemonstrated: boolean
 }
 
 export interface AxisPool {
@@ -1367,8 +1370,8 @@ function completeAxis(
   replicate.frequencies.forEach((f, j) => (verdicts[windowed[included[detectedK[j]]]].frequencyHz = f))
 
   // A second mode, searched before the verdict: an unmodeled second mode distorts the single-mode
-  // fit's per-line amplitudes, so with one the dominant mode's corner locking comes from the
-  // two-mode fit.
+  // fit's per-line amplitudes and damping, so with one the dominant mode's corner locking and
+  // decay test come from the two-mode fit, for the mode the axis reports.
   Object.assign(base, withSecondMode(base, secondMode))
   return verdict(base)
 }
@@ -1565,7 +1568,7 @@ function verdict(result: AxisPool): AxisPool {
         `least ${MIN_TWO_TIER_LINE_SPEED_MM_S} mm/s on a bed large enough for both speed tiers.`,
     )
   }
-  if (!result.cornerLocked && !result.decayDemonstrated) {
+  if (!cornerTransientShown(result)) {
     return refusal(
       result,
       'The pattern on this axis neither starts in step with the corner nor fades the way ringing ' +
@@ -1598,8 +1601,8 @@ function verdict(result: AxisPool): AxisPool {
  * Bonferroni bound over the grid test for a further ring at DETECTION_ALPHA. On detection both
  * modes are fitted jointly by variable projection over (f1, zeta1, f2, zeta2, log tau) with each
  * line's linear terms, polished by Levenberg-Marquardt; covariance sigma^2 (J'J)^-1. The axis then
- * reports the dominant mode (the larger median amplitude) and the other as its second mode, with
- * the corner-locking test of that mode.
+ * reports the dominant mode (the larger median amplitude) and the other as its second mode, each
+ * with its own corner-locking test and its own decay test.
  */
 function searchSecondMode(fit: JointFitResult): SecondModeSearch {
   const { inBases: bases, noise1: noises, joint, estBounds: tauBounds } = fit
@@ -1643,10 +1646,12 @@ export interface SecondModeSearch {
   modes: { dominant: FittedMode; other: FittedMode; swapped: boolean } | null
 }
 
-/** A mode of the two-mode fit with each line's ring of it, aligned with the fit's bases. */
+/** A mode of the two-mode fit with each line's ring of it, aligned with the fit's bases, and the
+ *  boundary likelihood ratio statistic of its damping at zero in the two-mode fit. */
 export interface FittedMode {
   mode: SecondMode
   rings: RingProjection[]
+  decayStatistic: number
 }
 
 /** The pool fields of a second-mode search: the dominant mode's figures and the second mode. When
@@ -1665,13 +1670,17 @@ export function withSecondMode(pool: AxisPool, search: SecondModeSearch): Partia
     frequencyCi95Hz: m1.frequencySeHz !== null ? normalQuantile(0.975) * m1.frequencySeHz : fallbackCi95,
     amplitudeMm: m1.amplitudeMm,
     cornerLocked: m1.cornerLocked,
+    decayStatistic: search.modes.dominant.decayStatistic,
+    decayDemonstrated: m1.decayDemonstrated,
     secondModePBound: pBound,
     secondMode: m2,
   }
 }
 
-/** The joint fit of two modes, each with its lines' rings; null when the fit degenerates (both
- *  modes on one frequency). */
+/** The joint fit of two modes, each with its lines' rings and its decay test (the boundary
+ *  likelihood ratio test of its damping at zero, Self and Liang 1987, as in decayStatistic: the
+ *  two-mode fit refitted with that mode's damping held at zero, every other parameter free); null
+ *  when the fit degenerates (both modes on one frequency). */
 function twoModeFit(
   bases: LineBasis[],
   noises: LineNoise[],
@@ -1705,21 +1714,42 @@ function twoModeFit(
   if (rings1.every((r) => r.D === 0) || rings2.every((r) => r.D === 0)) return null
   const linear = bases.reduce((s, b, k) => s + nullDesign(b, noises[k], Math.exp(theta[4])).k + 4, 0)
   const dof = total - linear - 5
-  const variances = dof > 0 ? parameterVariances(lm, lm.ssr / dof) : null
+  const sigma2 = dof > 0 ? lm.ssr / dof : NaN
+  const variances = dof > 0 ? parameterVariances(lm, sigma2) : null
+  // The decay statistic of the mode whose damping ratio is theta[held].
+  const decay = (held: 1 | 3) => {
+    if (!(theta[held] > 0) || !(sigma2 > 0)) return 0
+    const free = [0, 1, 2, 3, 4].filter((j) => j !== held)
+    const full = (sub: number[]) => {
+      const t = theta.slice()
+      t[held] = 0
+      free.forEach((j, k) => (t[j] = sub[k]))
+      return t
+    }
+    const undamped = levenbergMarquardt(
+      free.map((j) => theta[j]),
+      free.map((j) => lower[j]),
+      free.map((j) => upper[j]),
+      (sub) => residual(full(sub)),
+    )
+    return Math.max(0, (undamped.ssr - lm.ssr) / sigma2)
+  }
   const se = (j: number) => (variances && variances[j] !== null && variances[j]! > 0 ? Math.sqrt(variances[j]!) : null)
   const amplitude = (rings: RingProjection[], f: number, zeta: number) =>
     median(rings.map((r, k) => Math.hypot(r.a, r.b) * Math.exp(-zeta * 2 * Math.PI * f * depositTimes(bases[k].rec)[0])))
-  const mode = (rings: RingProjection[], f: number, zeta: number, seIndex: number): FittedMode => ({
+  const mode = (rings: RingProjection[], f: number, zeta: number, seIndex: number, decayStatistic: number): FittedMode => ({
     mode: {
       frequencyHz: f,
       dampingRatio: zeta,
       frequencySeHz: se(seIndex),
       amplitudeMm: amplitude(rings, f, zeta),
       cornerLocked: cornerLockingShown(cornerPhasors(bases, rings)),
+      decayDemonstrated: decayShown(decayStatistic),
     },
     rings,
+    decayStatistic,
   })
-  return { modes: [mode(rings1, theta[0], theta[1], 0), mode(rings2, theta[2], theta[3], 2)] }
+  return { modes: [mode(rings1, theta[0], theta[1], 0, decay(1)), mode(rings2, theta[2], theta[3], 2, decay(3))] }
 }
 
 /**

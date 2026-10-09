@@ -691,8 +691,11 @@ Checks, each at alpha = 0.001:
   value z_0.9995^2 = 10.83, with f and tau re-optimized under zeta = 0; it is reported as "Decay
   demonstrated: yes/no". A ring at zeta 0.03 decays little over a line and is shown by its locking; a
   weak ring whose phases scatter is often shown by its decay. A forced tone is neither, and the axis is
-  refused. The second mode's check is the corner-locking test alone (no decay test in the two-mode
-  fit); a second mode not shown locked counts as a steady tone.
+  refused. With a second mode (section 2.10) both tests judge the mode the axis reports, in the
+  two-mode fit: its corner locking from its own rings, its decay from the two-mode fit refitted with
+  its damping held at zero (every other parameter free), with the same boundary law and critical
+  value. The second mode passes the same gate, locked OR decaying, each at alpha / 2; a second mode
+  shown neither counts as a steady tone.
 - **Speed check** (two tiers; 2026-10-10, replacing the per-tier fits and their delta-method d test): a
   nested likelihood ratio test (Wilks, Ann. Math. Stat. 9, 1938) inside the joint fit. The unrestricted
   fit has one parameter more, d = ln(f_slow / f_fast), bounded by the widest ratio of two band
@@ -748,7 +751,8 @@ Estimation and Tracking of Frequency", 2001, ch. 5): the first mode's ring colum
 design and the same likelihood ratio field and Bonferroni bound test for a further ring at alpha. On
 detection both modes are fitted jointly by variable projection over (f1, zeta1, f2, zeta2, log tau) with
 a Levenberg-Marquardt polish. The axis reports the dominant mode (the larger median amplitude) and the
-other as its second mode, each with its own corner-locking test; the dominant mode's confidence
+other as its second mode, each with its own corner-locking test and its own decay test (the two-mode
+fit refitted with that mode's damping held at zero); the dominant mode's confidence
 halfwidth then is 1.96 times its linearized standard error from the two-mode fit. When the two-mode fit
 gives the dominant mode no standard error, the joint fit's interval stands in only when the dominant
 mode is the joint fit's own; a dominant mode the search found then has no interval, and the confidence
@@ -761,8 +765,9 @@ Shaper choice (`shaperRecommender.ts`): with one mode, every shaper (ZV, MZV, EI
 Singer and Seering 1990; Singhose, Seering and Singer) is tuned to the measured frequency and judged by
 its worst residual vibration over a band of max(5%, the relative 95% halfwidth); among those within the
 5% tolerance the one allowing the highest acceleration under Klipper's 0.12 mm smoothing target wins
-(when none qualifies, the lowest worst residual). With a second mode shown locked to the corner (a
-steady tone next to the ring does not shape the spectrum the shaper must cover), the choice
+(when none qualifies, the lowest worst residual). With a second mode shown to be the corner's
+transient, locked to the corner or decaying (a steady tone next to the ring does not shape the
+spectrum the shaper must cover), the choice
 follows Klipper's `shaper_calibrate.py` (`fit_shaper`, `find_best_shaper`) on a spectrum synthesized from
 the fitted modes (Lorentzian lines in acceleration, added incoherently). Its shaper search reaches the
 200 Hz band top (Klipper's own search stops at 150 Hz, while `input_shaper.py` and `SET_INPUT_SHAPER`

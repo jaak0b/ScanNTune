@@ -10,6 +10,7 @@ import type {
 import { isCheckRows } from './isCheckRows'
 import { F_MIN_HZ, F_MAX_HZ } from '../engine/is/types'
 import { formatKlipperShaper } from '../engine/is/shaperRecommender'
+import { cornerTransientShown } from '../engine/is/cornerTransient'
 import CodeBlock from './CodeBlock.vue'
 import MetricTile from './MetricTile.vue'
 
@@ -34,11 +35,11 @@ function percent(v: number): string {
   return `${(100 * v).toFixed(1)}%`
 }
 
-// With a second mode locked to the corner, the shapers are scored by the share of the
-// two modes' spectrum they leave above the reduction floor, not by the residual across one mode's
-// tolerance band.
+// With a second mode shown to be the corner's transient (locked to the corner or decaying), the
+// shapers are scored by the share of the two modes' spectrum they leave above the reduction floor,
+// not by the residual across one mode's tolerance band.
 function residualHeader(a: IsAxisResult): string {
-  return a.secondMode !== null && a.secondMode.cornerLocked
+  return a.secondMode !== null && cornerTransientShown(a.secondMode)
     ? 'Remaining vibration over both modes'
     : 'Residual vibration across the tolerance band'
 }

@@ -10,6 +10,7 @@ import { imageDirection, measuredDirection, traceGroup, tracedSpanPx } from './l
 import { analyzeTracedLine, poolCouponAxes } from './ringAnalyzer'
 import type { AxisPool, LineFit } from './ringAnalyzer'
 import { layerShiftDetected } from './layerShift'
+import { cornerTransientShown } from './cornerTransient'
 import { recommendShapers, recommendShapersForModes } from './shaperRecommender'
 import type { IsAxisResult, IsLineOutcome, IsResult, IsScanInfo } from './resultTypes'
 import { sampleBgrTriples, selectMeasurementChannel } from '../cvUtils'
@@ -535,10 +536,10 @@ function axisResult(group: IsLineGroup, traced: TracedAxisGroup, pool: AxisPool,
     return r
   }
 
-  // A second mode locked to the corner shapes the spectrum the shaper must cover; a steady tone
-  // next to the ring does not.
+  // A second mode shown to be the corner's transient (locked to the corner or decaying) shapes the
+  // spectrum the shaper must cover; a steady tone next to the ring does not.
   const dominant = { frequencyHz: pool.frequencyHz!, dampingRatio: pool.dampingRatio!, amplitudeMm: pool.amplitudeMm ?? 0 }
-  const second = pool.secondMode !== null && pool.secondMode.cornerLocked ? pool.secondMode : null
+  const second = pool.secondMode !== null && cornerTransientShown(pool.secondMode) ? pool.secondMode : null
   const recommendation =
     second !== null
       ? recommendShapersForModes([dominant, second])

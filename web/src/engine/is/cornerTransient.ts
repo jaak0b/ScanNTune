@@ -100,3 +100,9 @@ export function cornerLockingShown(phasors: CornerPhasor[], level = CORNER_TRANS
 export function decayShown(decayStatistic: number): boolean {
   return decayStatistic > DECAY_CRITICAL
 }
+
+/** The gate itself: a mode is the corner's transient when its corner locking OR its decay is
+ *  shown, each at CORNER_TRANSIENT_ALPHA. */
+export function cornerTransientShown(mode: { cornerLocked: boolean | null; decayDemonstrated: boolean | null }): boolean {
+  return mode.cornerLocked === true || mode.decayDemonstrated === true
+}

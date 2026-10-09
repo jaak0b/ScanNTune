@@ -466,12 +466,12 @@ describe('withSecondMode', () => {
     // The search found a larger mode than the joint fit's, so the axis now reports that mode. The
     // pool's interval belongs to the joint fit's mode at another frequency, so it must not stand
     // in for the reported one: the confidence gate then has no interval and refuses the axis.
-    const found: SecondMode = { frequencyHz: 62, dampingRatio: 0.05, frequencySeHz: null, amplitudeMm: 0.03, cornerLocked: true }
-    const joint: SecondMode = { frequencyHz: 45, dampingRatio: 0.05, frequencySeHz: 0.2, amplitudeMm: 0.02, cornerLocked: true }
+    const found: SecondMode = { frequencyHz: 62, dampingRatio: 0.05, frequencySeHz: null, amplitudeMm: 0.03, cornerLocked: true, decayDemonstrated: true }
+    const joint: SecondMode = { frequencyHz: 45, dampingRatio: 0.05, frequencySeHz: 0.2, amplitudeMm: 0.02, cornerLocked: true, decayDemonstrated: true }
     const pool = { frequencyHz: 45, frequencyCi95Hz: 0.4 } as AxisPool
     const fields = withSecondMode(pool, {
       pBound: 1e-6,
-      modes: { dominant: { mode: found, rings: [] }, other: { mode: joint, rings: [] }, swapped: true },
+      modes: { dominant: { mode: found, rings: [], decayStatistic: 20 }, other: { mode: joint, rings: [], decayStatistic: 20 }, swapped: true },
     })
     expect(fields.frequencyHz).toBe(62)
     expect(fields.frequencyCi95Hz).toBeNull()
@@ -479,15 +479,15 @@ describe('withSecondMode', () => {
 })
 
 describe('secondModeOutcome', () => {
-  const joint: SecondMode = { frequencyHz: 60.46, dampingRatio: 0.044, frequencySeHz: 0.1, amplitudeMm: 0.007, cornerLocked: true }
+  const joint: SecondMode = { frequencyHz: 60.46, dampingRatio: 0.044, frequencySeHz: 0.1, amplitudeMm: 0.007, cornerLocked: true, decayDemonstrated: true }
 
   it('reports no second mode when the found mode sits at the damping bound', () => {
     // A damping ratio at the 0.4 bound is the fit's limit, where frequency and damping are not
     // identified: such a mode is no measurement, so it neither replaces the joint fit's mode
     // (even with the larger amplitude) nor stands as a second mode.
-    const found: SecondMode = { frequencyHz: 101.69, dampingRatio: 0.4, frequencySeHz: 9.39, amplitudeMm: 0.011, cornerLocked: true }
+    const found: SecondMode = { frequencyHz: 101.69, dampingRatio: 0.4, frequencySeHz: 9.39, amplitudeMm: 0.011, cornerLocked: true, decayDemonstrated: true }
 
-    const search = secondModeOutcome(3.3e-24, [{ mode: joint, rings: [] }, { mode: found, rings: [] }])
+    const search = secondModeOutcome(3.3e-24, [{ mode: joint, rings: [], decayStatistic: 20 }, { mode: found, rings: [], decayStatistic: 20 }])
 
     expect(search).toEqual({ pBound: 3.3e-24, modes: null })
   })
@@ -495,18 +495,18 @@ describe('secondModeOutcome', () => {
   it('reports no second mode when the joint fit mode sits at the damping bound and the found mode would swap in', () => {
     // The refitted joint mode is the other mode of a swap; at the 0.4 bound it is no measurement
     // either, so it must not be reported as a second mode or shape the recommended shaper.
-    const boundJoint: SecondMode = { frequencyHz: 60.46, dampingRatio: 0.4, frequencySeHz: 9.1, amplitudeMm: 0.007, cornerLocked: true }
-    const found: SecondMode = { frequencyHz: 45, dampingRatio: 0.05, frequencySeHz: 0.13, amplitudeMm: 0.03, cornerLocked: true }
+    const boundJoint: SecondMode = { frequencyHz: 60.46, dampingRatio: 0.4, frequencySeHz: 9.1, amplitudeMm: 0.007, cornerLocked: true, decayDemonstrated: true }
+    const found: SecondMode = { frequencyHz: 45, dampingRatio: 0.05, frequencySeHz: 0.13, amplitudeMm: 0.03, cornerLocked: true, decayDemonstrated: true }
 
-    const search = secondModeOutcome(1e-6, [{ mode: boundJoint, rings: [] }, { mode: found, rings: [] }])
+    const search = secondModeOutcome(1e-6, [{ mode: boundJoint, rings: [], decayStatistic: 20 }, { mode: found, rings: [], decayStatistic: 20 }])
 
     expect(search).toEqual({ pBound: 1e-6, modes: null })
   })
 
   it('makes a larger found mode below the damping bound the dominant mode', () => {
-    const found: SecondMode = { frequencyHz: 45, dampingRatio: 0.05, frequencySeHz: 0.13, amplitudeMm: 0.03, cornerLocked: true }
+    const found: SecondMode = { frequencyHz: 45, dampingRatio: 0.05, frequencySeHz: 0.13, amplitudeMm: 0.03, cornerLocked: true, decayDemonstrated: true }
 
-    const search = secondModeOutcome(1e-6, [{ mode: joint, rings: [] }, { mode: found, rings: [] }])
+    const search = secondModeOutcome(1e-6, [{ mode: joint, rings: [], decayStatistic: 20 }, { mode: found, rings: [], decayStatistic: 20 }])
 
     expect(search.modes!.swapped).toBe(true)
     expect(search.modes!.dominant.mode.frequencyHz).toBe(45)

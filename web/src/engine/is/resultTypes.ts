@@ -136,8 +136,8 @@ export interface IsAxisResult {
    *  null when the axis was refused. */
   secondModePBound: number | null
   /** The axis's second mode when the search detected one; the axis's own frequency and damping
-   *  are then the dominant mode's. A second mode not locked to the corner is a steady tone, which
-   *  the shaper selection ignores. */
+   *  are then the dominant mode's. A second mode shown neither locked to the corner nor decaying
+   *  is a steady tone, which the shaper selection ignores. */
   secondMode: SecondMode | null
   /** Arc-length artifacts (belt teeth, JPEG blocks, other stationary patterns of the print or the
    *  scan) the analysis detected and carried in its model; empty without a search. */
