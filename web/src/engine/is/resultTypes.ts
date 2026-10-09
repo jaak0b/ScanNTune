@@ -22,10 +22,10 @@ export type IsLineExclusion = LineJointExclusion | 'not-traced'
 export type CheckState = 'passed' | 'failed' | 'not-assessed'
 
 /**
- * The two-tier speed check: 'confirmed' when the frequency is demonstrably the same at both
- * speeds (the arc-length pattern hypothesis rejected, no change detected), 'changed' when it
- * demonstrably changed with the speed, 'not-confirmed' when a tier showed no ringing or the
- * precision decides neither, 'not-assessed' with one tier.
+ * The two-tier speed check: 'changed' when the frequency demonstrably changed with the speed,
+ * 'confirmed' when no change is shown and the arc-length pattern hypothesis is rejected,
+ * 'not-confirmed' when the precision decides neither or the joint fit lacks a tier, 'not-assessed'
+ * with one tier.
  */
 export type SpeedCheckState = 'confirmed' | 'changed' | 'not-confirmed' | 'not-assessed'
 
@@ -38,21 +38,16 @@ export type SpeedCheckState = 'confirmed' | 'changed' | 'not-confirmed' | 'not-a
  */
 export type AlongTrackLagState = 'corrected' | 'other-axis-not-measured' | 'joint-fit-failed'
 
-/** One speed tier's part of the speed check. */
-export interface TierCheck {
+/** One speed tier's frequency in the speed check's fit with a frequency per tier. */
+export interface TierFrequency {
   speedMmS: number
-  /** True when the tier's own lines show the ringing near the axis estimate. */
-  detected: boolean
-  /** Bonferroni bound of the tier's local detection; null when the tier had no lines. */
-  detectionPBound: number | null
-  frequencyHz: number | null
-  frequencySeHz: number | null
+  frequencyHz: number
 }
 
 export interface SpeedCheck {
   state: SpeedCheckState
-  /** Slowest tier first; empty when not assessed. */
-  tiers: TierCheck[]
+  /** Slowest tier first; empty when not assessed or without lines of both tiers. */
+  tiers: TierFrequency[]
 }
 
 /** A point in scan-image pixels. Plain data so it survives the worker boundary. */

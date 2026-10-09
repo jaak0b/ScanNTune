@@ -63,10 +63,7 @@ export function isCheckRows(a: IsAxisResult): CheckRow[] {
     { label: 'Detection p-value bound', value: pBoundText(a.detectionPBound) },
     { label: 'Decay demonstrated', value: yesNo(a.decayDemonstrated) },
     { label: 'Speed independence', value: SPEED_CHECK_TEXT[a.speedCheck.state] },
-    ...a.speedCheck.tiers.map((t) => ({
-      label: `Frequency at ${t.speedMmS} mm/s`,
-      value: t.frequencyHz !== null ? `${t.frequencyHz.toFixed(1)} Hz` : 'no ringing detected',
-    })),
+    ...a.speedCheck.tiers.map((t) => ({ label: `Frequency at ${t.speedMmS} mm/s`, value: `${t.frequencyHz.toFixed(1)} Hz` })),
     { label: 'Replicate check', value: CHECK_TEXT[a.replicateCheck] },
   ]
   // Only a one-tier coupon assesses the leave-one-line-out check.

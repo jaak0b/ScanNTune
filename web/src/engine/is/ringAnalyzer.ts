@@ -1,5 +1,5 @@
 import type { TracedLine } from './lineTracer'
-import type { AlongTrackLagState, CheckState, SpeedCheck, TierCheck } from './resultTypes'
+import type { AlongTrackLagState, CheckState, SpeedCheck, TierFrequency } from './resultTypes'
 import {
   DETECTION_ALPHA,
   F_MAX_HZ,
@@ -155,8 +155,6 @@ const AGREEMENT_REL = 0.05
 const AGREEMENT_MIN_HZ = 2
 /** z_(1-alpha): one-sided critical value at the detection level. */
 const Z_ONE_SIDED = normalQuantile(1 - DETECTION_ALPHA)
-/** z_(1-alpha/2): two-sided critical value at the detection level. */
-const Z_TWO_SIDED = normalQuantile(1 - DETECTION_ALPHA / 2)
 /** Critical value of a chi2_1 likelihood ratio test at the detection level, 10.83: the test of a
  *  constant innovation variance and the speed check's test of the tiers' frequency ratio. */
 const CHI2_1_CRITICAL = normalQuantile(1 - DETECTION_ALPHA / 2) ** 2
@@ -627,17 +625,11 @@ function refine(state: LineState, g: number): RingRatio {
   return ratio
 }
 
-/** Index and value of the maximum of sum over `lines` of their fields, over `points`. */
-function fieldMaximum(
-  states: LineState[],
-  lines: number[],
-  points: ArrayLike<number> | null = null,
-): { index: number; value: number } {
+/** Index and value of the maximum of sum over `lines` of their fields over the grid. */
+function fieldMaximum(states: LineState[], lines: number[]): { index: number; value: number } {
   let best = -1
   let bestValue = -Infinity
-  const count = points ? points.length : DETECTION_GRID.length
-  for (let q = 0; q < count; q++) {
-    const g = points ? points[q] : q
+  for (let g = 0; g < DETECTION_GRID.length; g++) {
     let s = 0
     for (const l of lines) s += states[l].field[g]
     if (s > bestValue) {
@@ -649,17 +641,13 @@ function fieldMaximum(
 }
 
 /**
- * The maximum of the summed field over `points`, evaluated with the refitted noise models: the
+ * The maximum of the summed field over the grid, evaluated with the refitted noise models: the
  * running maximum is refitted on every line until the maximum sits at a refitted point. Refits
  * only raise the field, so this ends, and every point left unrefitted is below the result.
  */
-function refittedMaximum(
-  states: LineState[],
-  lines: number[],
-  points: ArrayLike<number> | null = null,
-): { index: number; value: number } {
+function refittedMaximum(states: LineState[], lines: number[]): { index: number; value: number } {
   for (;;) {
-    const top = fieldMaximum(states, lines, points)
+    const top = fieldMaximum(states, lines)
     const pending = lines.filter((l) => !states[l].refitted.has(top.index))
     if (pending.length === 0) return top
     for (const l of pending) refine(states[l], top.index)
@@ -690,11 +678,18 @@ interface JointFit {
   frequencyHz: number
   dampingRatio: number
   tauS: number
+  /** The log ratio of the slower tier's frequency to the faster tier's (frequencyHz); 0 when the
+   *  fit has no such parameter. */
+  tierLogRatio: number
   sigma2: number
   dof: number
 }
 
-/** The stacked projected residual of `lines` at (f, zeta, tau), null designs rebuilt per tau. */
+/**
+ * The stacked projected residual of `lines` at (f, zeta, tau), null designs rebuilt per tau. With
+ * `slowTier` (aligned with the bases) the lines of the slower tier ring at f e^tierLogRatio; a
+ * frequency outside the search band carries no ring there, as on the detection grid.
+ */
 function stackedResidual(
   bases: LineBasis[],
   noises: LineNoise[],
@@ -702,6 +697,8 @@ function stackedResidual(
   dampingRatio: number,
   tauS: number,
   designCache: Map<number, NullDesign[]>,
+  tierLogRatio = 0,
+  slowTier: readonly boolean[] | null = null,
 ): Float64Array {
   let designs = designCache.get(tauS)
   if (!designs) {
@@ -715,7 +712,9 @@ function stackedResidual(
   bases.forEach((b, i) => {
     const r = new Float64Array(b.m)
     const d = designs![i]
-    projectRing(b, noises[i], d, frequencyHz, dampingRatio, ringScratch(b.m), new Float64Array(d.k), new Float64Array(d.k), r)
+    const f = slowTier?.[i] ? frequencyHz * Math.exp(tierLogRatio) : frequencyHz
+    if (f < F_MIN_HZ || f > F_MAX_HZ) r.set(d.yr)
+    else projectRing(b, noises[i], d, f, dampingRatio, ringScratch(b.m), new Float64Array(d.k), new Float64Array(d.k), r)
     out.set(r, at)
     at += b.m
   })
@@ -723,8 +722,11 @@ function stackedResidual(
 }
 
 /**
- * Variable projection fit over the free parameters among (f, zeta, log tau); `fixed` pins the
- * others. Parameters: index 0 frequency, 1 damping ratio, 2 log tau.
+ * Variable projection fit over the free parameters among (f, zeta, log tau); `free` marks them,
+ * the others stay at `start`. Parameters: index 0 frequency, 1 damping ratio, 2 log tau. With
+ * `slowTier` (the lines of the slower speed tier, aligned with the bases) a fourth parameter is
+ * the log ratio of the slower tier's frequency to the faster tier's, bounded by the widest ratio
+ * of two frequencies in the band.
  */
 function varproFit(
   bases: LineBasis[],
@@ -732,9 +734,11 @@ function varproFit(
   start: number[],
   free: boolean[],
   tauBounds: [number, number],
+  slowTier: readonly boolean[] | null = null,
 ): JointFit {
-  const lower = [F_MIN_HZ, 0, Math.log(tauBounds[0])]
-  const upper = [F_MAX_HZ, ZETA_MAX, Math.log(tauBounds[1])]
+  const widestLogRatio = Math.log(F_MAX_HZ / F_MIN_HZ)
+  const lower = [F_MIN_HZ, 0, Math.log(tauBounds[0]), -widestLogRatio].slice(0, start.length)
+  const upper = [F_MAX_HZ, ZETA_MAX, Math.log(tauBounds[1]), widestLogRatio].slice(0, start.length)
   const freeIdx = free.map((f, i) => (f ? i : -1)).filter((i) => i >= 0)
   const full = (sub: number[]) => {
     const t = start.slice()
@@ -744,7 +748,7 @@ function varproFit(
   const cache = new Map<number, NullDesign[]>()
   const residual = (sub: number[]) => {
     const t = full(sub)
-    return stackedResidual(bases, noises, t[0], t[1], Math.exp(t[2]), cache)
+    return stackedResidual(bases, noises, t[0], t[1], Math.exp(t[2]), cache, t[3] ?? 0, slowTier)
   }
   const lm = levenbergMarquardt(
     freeIdx.map((j) => start[j]),
@@ -762,6 +766,7 @@ function varproFit(
     frequencyHz: theta[0],
     dampingRatio: theta[1],
     tauS: Math.exp(theta[2]),
+    tierLogRatio: theta[3] ?? 0,
     sigma2: dof > 0 ? lm.ssr / dof : NaN,
     dof,
   }
@@ -909,7 +914,7 @@ export function poolCouponAxes(axes: LineFit[][], speedsMmS: number[], maxPasses
   const corrected = detections.map((d, i) => {
     const point = { frequencyHz: fits[i].joint.frequencyHz, dampingRatio: fits[i].joint.dampingRatio }
     const times = deposit(i)
-    const pool = completeAxis(d!, screenings[i], jointFit(d!, screenings[i].included, times, point), times)
+    const pool = completeAxis(d!, screenings[i], jointFit(d!, screenings[i].included, times, point))
     return { ...pool, alongTrackLag: 'corrected' as const }
   })
   return corrected.map((pool, i) => (corrected[1 - i].accepted ? pool : uncorrectedPool(first[i], 'other-axis-not-measured')))
@@ -986,8 +991,7 @@ function correctedScan(
 
 /**
  * The seed of a fit on the deposit times: the frequency of the largest ring statistic of
- * `lines` on those times (correctedScan) at the grid damping nearest `dampingRatio`, among the
- * frequencies of the grid points `points` (indices into DETECTION_GRID) when given. A fit on the
+ * `lines` on those times (correctedScan) at the grid damping nearest `dampingRatio`. A fit on the
  * commanded time base is no seed: read there, a ring phase modulated by more than about 1.4 rad (a
  * lateral axis twice as fast as the axis along its lines reaches 1.9 rad on the top rung) keeps
  * less amplitude at its own frequency than in the sideband at the sum of the two frequencies, J0
@@ -998,16 +1002,11 @@ function correctedSeed(
   lines: number[],
   depositTimeS: Float64Array[],
   dampingRatio: number,
-  points: number[] | null = null,
 ): RingPoint {
   const zeta = nearestGridZeta(dampingRatio)
   const totals = correctedScan(detection, lines, depositTimeS, zeta)
-  const allowed = points ? new Set(points.map((g) => DETECTION_GRID[g].frequencyHz)) : null
-  let best = -1
-  for (let j = 0; j < totals.length; j++) {
-    if (allowed && !allowed.has(FREQUENCY_GRID_HZ_VALUES[j])) continue
-    if (best < 0 || totals[j] > totals[best]) best = j
-  }
+  let best = 0
+  for (let j = 1; j < totals.length; j++) if (totals[j] > totals[best]) best = j
   return { frequencyHz: FREQUENCY_GRID_HZ_VALUES[best], dampingRatio: zeta }
 }
 
@@ -1090,7 +1089,7 @@ function analyzeAxisUnguarded(fits: LineFit[], speedsMmS: number[], preset: Carr
   let search: SecondModeSearch | null = null
   const secondMode = () => (search ??= searchSecondMode(fit))
   let pool: AxisPool | null = null
-  return { pool: () => (pool ??= completeAxis(detection, screened.screening, fit, null, secondMode())), detection, fit, secondMode }
+  return { pool: () => (pool ??= completeAxis(detection, screened.screening, fit, secondMode())), detection, fit, secondMode }
 }
 
 /** An axis's commanded-time-base pool with the along-track lag state set when the axis has a
@@ -1317,14 +1316,13 @@ function screenLines(
 /**
  * The estimation stage of a screened axis after its joint fit `fit`: the interval, the checks and
  * the verdict, with the fit's second-mode search (`secondMode`, searched here when not given).
- * With `depositTimeS` (one array per window, those the fit was made on) the ring and flow-lag
- * columns sit at the deposit times the along-track lag gives; without, on the commanded time base.
+ * The checks run on the fit's own bases, so on the deposit times the along-track lag gives when
+ * the fit was made on them.
  */
 function completeAxis(
   detection: AxisDetection,
   screening: AxisScreening,
   fit: JointFitResult,
-  depositTimeS: Float64Array[] | null,
   secondMode: SecondModeSearch = searchSecondMode(fit),
 ): AxisPool {
   const { speedsMmS, windowed, chosen, states } = detection
@@ -1355,12 +1353,12 @@ function completeAxis(
   // mode when the second-mode search found one that outgrows the joint fit's mode.
   const dominant = secondMode.modes?.swapped ? secondMode.modes.dominant.mode : null
   const checked: JointFit = dominant ? { ...joint, frequencyHz: dominant.frequencyHz, dampingRatio: dominant.dampingRatio } : joint
-  // On deposit times each tier's fit starts from its own maximum on those times: on the commanded
-  // time base a strongly modulated ring's local maximum can be its sideband.
-  const tierSeed = depositTimeS
-    ? (lines: number[], points: number[]) => correctedSeed(detection, lines, depositTimeS, checked.dampingRatio, points)
-    : null
-  base.speedCheck = speedCheck(states, included, inBases, noise1, checked, speedsMmS, estBounds, tierSeed)
+  // The speed check's restricted fit is the joint fit, refitted at the dominant mode when that is
+  // the mode the second-mode search found.
+  const restricted = dominant
+    ? varproFit(inBases, noise1, [checked.frequencyHz, checked.dampingRatio, Math.log(joint.tauS)], [true, true, true], estBounds)
+    : joint
+  base.speedCheck = speedCheck(inBases, noise1, restricted, speedsMmS, estBounds)
   base.influenceCheck = speedsMmS.length === 1 ? influenceCheck(states) : 'not-assessed'
   const detectedK = included.map((l, k) => (verdicts[windowed[l]].detected ? k : -1)).filter((k) => k >= 0)
   const replicate = replicateCheck(
@@ -1746,61 +1744,54 @@ function decayStatistic(bases: LineBasis[], noises: LineNoise[], joint: JointFit
 }
 
 
-/** Grid indices whose frequency lies within MAX_CI95_REL of any of the centers. */
-function localGrid(centers: number[]): number[] {
-  const out: number[] = []
-  DETECTION_GRID.forEach((p, g) => {
-    if (centers.some((c) => Math.abs(p.frequencyHz - c) <= MAX_CI95_REL * c)) out.push(g)
-  })
-  return out
-}
-
-/** The three-way two-tier speed check (closed testing on local grids, then the d test) on the
- *  joint-fit lines `included`: each tier's detection over its own lines' likelihood ratio fields,
- *  its frequency fitted on the lines' joint-fit windows `inBases` with their full-fit noise models
- *  `noise1` (both aligned with included), from the tier's own maximum over the local grid, or,
- *  given `tierSeed`, from the point it returns for the tier's lines and the local grid. */
+/**
+ * The two-tier speed check on the joint-fit lines `inBases` with their full-fit noise models
+ * `noise1`, a nested likelihood ratio test (S. S. Wilks, "The large-sample distribution of the
+ * likelihood ratio for testing composite hypotheses", Annals of Mathematical Statistics 9, 1938):
+ * the joint fit `restricted` against the same fit with one parameter more, the log ratio
+ * d = ln(f_slow / f_fast) of the slower tier's frequency to the faster tier's. The unrestricted fit
+ * starts from no change and from the two arc-length pattern images (the faster tier at the
+ * estimate and the slower at f / rho, the slower at the estimate and the faster at f rho), so it
+ * cannot stall at the restricted optimum when the data hold a pattern, and keeps the smallest
+ * sum of squares. The statistic (SSR_restricted - SSR) / sigma^2 is chi2_1 under d = 0: changed
+ * with speed above its critical value at DETECTION_ALPHA; confirmed when no change is shown and
+ * the pattern hypothesis d = -ln rho is rejected one-sided by the Wald test of d in the
+ * unrestricted fit; otherwise not confirmed.
+ */
 function speedCheck(
-  states: LineState[],
-  included: number[],
   inBases: LineBasis[],
   noise1: LineNoise[],
-  joint: JointFit,
+  restricted: JointFit,
   speedsMmS: number[],
   tauBounds: [number, number],
-  tierSeed: ((lines: number[], points: number[]) => RingPoint) | null = null,
 ): SpeedCheck {
   if (speedsMmS.length < 2) return NOT_ASSESSED_SPEED
   const slow = Math.min(...speedsMmS)
   const fast = Math.max(...speedsMmS)
-  const rho = fast / slow
-  const points = localGrid([joint.frequencyHz, joint.frequencyHz * rho, joint.frequencyHz / rho])
-  const tiers: TierCheck[] = [slow, fast].map((v) => {
-    const members = included.map((l, k) => (states[l].basis.rec.speedMmS === v ? k : -1)).filter((k) => k >= 0)
-    const blank: TierCheck = { speedMmS: v, detected: false, detectionPBound: null, frequencyHz: null, frequencySeHz: null }
-    if (members.length === 0 || points.length === 0) return blank
-    const local = refittedMaximum(states, members.map((k) => included[k]), points)
-    const pBound = bonferroni(points.length, local.value, 2 * members.length)
-    const detected = pBound <= DETECTION_ALPHA
-    if (!detected) return { ...blank, detectionPBound: pBound }
-    const seed = tierSeed ? tierSeed(members.map((k) => included[k]), points) : DETECTION_GRID[local.index]
-    const fit = varproFit(
-      members.map((k) => inBases[k]),
-      members.map((k) => noise1[k]),
-      [seed.frequencyHz, seed.dampingRatio, Math.log(joint.tauS)],
-      [true, true, false],
-      tauBounds,
-    )
-    return { speedMmS: v, detected, detectionPBound: pBound, frequencyHz: fit.frequencyHz, frequencySeHz: frequencySe(fit) }
-  })
-  const [s, f] = tiers
-  if (!s.detected || !f.detected || s.frequencySeHz === null || f.frequencySeHz === null) {
-    return { state: 'not-confirmed', tiers }
+  const slowTier = inBases.map((b) => b.rec.speedMmS === slow)
+  // Without lines of both tiers in the joint fit the ratio has nothing to measure.
+  if (!slowTier.some((s) => s) || slowTier.every((s) => s)) return { state: 'not-confirmed', tiers: [] }
+  const logRho = Math.log(fast / slow)
+  const { frequencyHz: f, dampingRatio: zeta } = restricted
+  const logTau = Math.log(restricted.tauS)
+  const starts = [
+    [f, zeta, logTau, 0],
+    [f, zeta, logTau, -logRho],
+    [f * Math.exp(logRho), zeta, logTau, -logRho],
+  ]
+  const fits = starts.map((start) => varproFit(inBases, noise1, start, [true, true, true, true], tauBounds, slowTier))
+  const best = fits.reduce((a, b) => (b.lm.ssr < a.lm.ssr ? b : a))
+  if (!(best.sigma2 > 0)) return { state: 'not-confirmed', tiers: [] }
+  const tiers: TierFrequency[] = [
+    { speedMmS: slow, frequencyHz: best.frequencyHz * Math.exp(best.tierLogRatio) },
+    { speedMmS: fast, frequencyHz: best.frequencyHz },
+  ]
+  const statistic = Math.max(0, (restricted.lm.ssr - best.lm.ssr) / best.sigma2)
+  if (statistic > CHI2_1_CRITICAL) return { state: 'changed', tiers }
+  const variance = parameterVariances(best.lm, best.sigma2)?.[3] ?? null
+  if (variance !== null && variance > 0 && (best.tierLogRatio + logRho) / Math.sqrt(variance) > Z_ONE_SIDED) {
+    return { state: 'confirmed', tiers }
   }
-  const d = Math.log(s.frequencyHz! / f.frequencyHz!)
-  const sd = Math.hypot(s.frequencySeHz / s.frequencyHz!, f.frequencySeHz / f.frequencyHz!)
-  if (Math.abs(d) / sd > Z_TWO_SIDED) return { state: 'changed', tiers }
-  if ((d + Math.log(rho)) / sd > Z_ONE_SIDED) return { state: 'confirmed', tiers }
   return { state: 'not-confirmed', tiers }
 }
 

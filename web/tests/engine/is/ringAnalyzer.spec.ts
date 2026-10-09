@@ -358,11 +358,13 @@ describe('poolAxisFits checks', () => {
     ])
   })
 
-  it('accepts a ring that the slower tier alone does not show, with the speed check not confirmed', () => {
+  it('accepts a ring that the slower tier alone does not show, with its speed confirmed in the joint fit', () => {
     // Truth 60 Hz, zeta 0.05, 0.03 mm on the top rung; the 90 mm/s lines (group order 90, 150,
-    // 150, 90, ...) carry eight times the scan noise, so that tier alone detects nothing. The
-    // joint frequency's 95% halfwidth is about 0.28 Hz here, so 0.5 Hz is more than three
-    // standard errors.
+    // 150, 90, ...) carry eight times the scan noise, so that tier alone detects nothing. In the
+    // joint fit the slower tier shares the damping and the time constant, so its frequency is
+    // still precise enough to reject the pattern image at 60 / 1.6547 = 36 Hz, and no change with
+    // the speed is shown. The joint frequency's 95% halfwidth is about 0.28 Hz here, so 0.5 Hz is
+    // more than three standard errors.
     const noisySlowTier = [8, 1, 1, 8, 8, 1, 1, 8, 8, 1, 1, 8]
     const p = pool(
       twoTier,
@@ -372,11 +374,8 @@ describe('poolAxisFits checks', () => {
         2,
       ),
     )
-    expect(p.speedCheck.state).toBe('not-confirmed')
-    expect(p.speedCheck.tiers.map((t) => [t.speedMmS, t.detected])).toEqual([
-      [90, false],
-      [150, true],
-    ])
+    expect(p.lines.filter((l, i) => noisySlowTier[i] === 8 && l.detected)).toEqual([])
+    expect(p.speedCheck.state).toBe('confirmed')
     expect(p.refusals).toEqual([])
     expect(p.accepted).toBe(true)
     expect(Math.abs(p.frequencyHz! - 60)).toBeLessThan(0.5)
