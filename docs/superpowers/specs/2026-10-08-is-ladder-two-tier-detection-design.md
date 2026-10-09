@@ -19,13 +19,14 @@ to 8.
 
 ## Summary for the owner
 
-- **What the coupon prints.** A square frame with an open window, about 115 mm across with the default
+- **What the coupon prints.** A square frame with an open window, about 124 mm across with the default
   settings and a 0.4 mm nozzle. Single test lines cross the window. Each line runs in straight, turns a
   sharp 90 degree corner and runs on straight. The corner jolts the toolhead sideways, the printer's
   frame rings like a struck bell, and the line records that ringing as a fading wiggle. Each axis gets
-  10 lines: 5 at the line speed (150 mm/s) and 5 at a slower speed (106 mm/s). Within each group of 5,
+  12 lines: 6 at the line speed (150 mm/s) and 6 at a slower speed (90 mm/s). Within each group of 6,
   every line takes its corner at a different speed, rising from 20 mm/s to the corner speed (100 mm/s),
-  so some lines ring clearly on any printer, stiff or soft.
+  so some lines ring clearly on any printer, stiff or soft. Three of the six corners are gentle (20 to
+  about 29 mm/s): their lines stay smooth enough to follow ringing up to 200 Hz, the top of the range.
 - **How the scan becomes a frequency.** The app follows the centre of each line in the scan to a
   fraction of a pixel and records how far it wiggles sideways. The printer was told exactly how fast to
   move, so each point's distance from the corner converts into the moment the nozzle passed it, and the
@@ -34,18 +35,17 @@ to 8.
   slightly large or plastic that shrinks no longer shifts the frequency.
 - **How the app decides it is ringing.** Neighbouring points along a scanned line are not independent
   (the scanner blurs them together), so the app first learns each line's own noise pattern and filters
-  it out exactly. It then tries 1,703 combinations of frequency and damping and pays for having tried
+  it out exactly. It then tries 2,353 combinations of frequency and damping and pays for having tried
   that many, so scanner noise and bead roughness alone pass as ringing at most 1 time in 1,000. It also
   checks that the wiggle grows with the corner speed, the way a real ring does and a fan or a scanner
   pattern does not.
 - **Why two speeds.** Real ringing belongs to the machine and keeps its frequency at any line speed.
   Patterns that sit in the print or the scan (belt teeth, scanner compression blocks) are fixed in
   distance, so their apparent frequency changes in step with the speed. The slower speed was chosen so
-  that, at the weakest precision the app accepts, a real ring would be confirmed 95% of the time and a
-  pattern would pass at most 0.1% of the time. Each speed has only half the lines, though, so a real
-  ring at that precision is confirmed only about 60% of the time, an open item (section 5). With two
-  speeds printed, an axis is refused when its frequency changes with the speed; a check that cannot
-  confirm the ring does not refuse it.
+  that, at the weakest precision the app accepts, a pattern is caught as "changed with the speed" 95% of
+  the time while a real ring is wrongly refused at most 0.1% of the time, counting that each speed has
+  only half the lines. With two speeds printed, an axis is refused when its frequency changes with the
+  speed; a check that cannot confirm the ring does not refuse it.
 - **How the motors are protected.** No safe corner speed can be computed, because it depends on motor
   torque, step angle and moving mass, none of which the printer profile records. Instead: 100 mm/s stays
   the default, with a warning above it but no hard limit; the fastest corners print last in every layer,
@@ -85,25 +85,29 @@ still carry the sweep keys load, and the keys drop.
 
 Each axis prints a ladder of lines at two speeds: the line speed v and the derived slower tier
 `speedTiersFor(v) = [floor(v / rho), v]` (`web/src/engine/is/types.ts`). The ratio is derived from the
-detection level and the confidence gate, not chosen:
+detection level, the speed check's power and the confidence gate, not chosen:
 
-    rho = exp((z_0.999 + z_0.95) * sqrt(2) * MAX_CI95_REL / z_0.975) = 1.40728
+    rho = exp((z_0.9995 + z_0.95) * 2 * MAX_CI95_REL / z_0.975)
+        = exp((3.2905 + 1.6449) * 0.10204) = 1.6547
 
-At the weakest measurement the confidence gate accepts (95% halfwidth of 10% of the frequency, so a
-relative standard error of 0.1 / 1.96 per tier), the difference of two independent log frequencies has
-the standard error sqrt(2) * 0.1 / 1.96 (delta method). A one-sided z test separates hypotheses ln(rho)
-apart at level alpha = 0.001 with power 0.95 when ln(rho) = (z_(1-alpha) + z_(1-beta)) times that
-standard error, the standard power relation. With the default 150 mm/s the tiers are [106, 150] (actual
-ratio 1.415, never below rho because of the floor). The second tier is always slower, never faster, so
-it never raises flow or motion demands above what the user entered. Two tiers need a line speed of at
-least ceil(20 * rho) = 29 mm/s; below that the slower tier would fall under the 20 mm/s bottom rung and
-is dropped automatically with a worded note (`fitTiersToLadder`).
+The branch of the speed check that refuses an axis is "frequency changed with speed": d = 0 rejected
+two-sided at alpha = 0.001, critical value z_0.9995 = 3.29. At the weakest measurement the confidence
+gate accepts (95% halfwidth of 10% of the frequency), the axis estimate has the relative standard error
+0.1 / 1.96 = 0.05102. Each tier is fitted from half of the axis's lines, so its standard error is
+sqrt(2) times that, and the difference of the two independent tier log frequencies has sqrt(2) times a
+tier's (delta method): s_d = 2 * 0.05102 = 0.10204. A two-sided z test separates hypotheses ln(rho)
+apart at level alpha with power 0.95 when ln(rho) = (z_(1-alpha/2) + z_(1-beta)) times s_d, the
+standard power relation. With the default 150 mm/s the tiers are [90, 150] (actual ratio 1.667, never
+below rho because of the floor). The second tier is always slower, never faster, so it never raises
+flow or motion demands above what the user entered. Two tiers need a line speed of at least
+ceil(20 * rho) = 34 mm/s; below that the slower tier would fall under the 20 mm/s bottom rung and is
+dropped automatically with a worded note (`fitTiersToLadder`).
 
-The power 0.95 is the design target, not what the check achieves. The derivation takes each tier's
-relative standard error to be the gate's 0.1 / 1.96, but each tier is fitted from half of the axis's
-lines, so its standard error is about sqrt(2) times that of the axis estimate the gate judges. At the
-weakest accepted measurement s_d is then about 0.102 and the power about 0.60. Closing that gap is an
-open item of the coupon redesign (section 5).
+The previous ratio, 1.40728 (106 / 150 mm/s), used the one-sided critical value and the axis's standard
+error for each tier, so its power at the weakest accepted measurement was about 0.60. Whether the check
+reaches the design power on real fits (a tier near the gate can miss its own detection on half the
+lines, and a tier's standard error varies from fit to fit: about 1.9 times the joint one in simulation,
+1.25 to 2.23 over seeds) is a matter of the analysis and stays open (section 5).
 
 The tiers are interleaved, not blocked (amendment I7). Field slot k sits k pitches from offset zero;
 rung j occupies slots 2j and 2j + 1, slower tier first on even rungs and faster tier first on odd rungs
@@ -118,46 +122,73 @@ gap; the interleave removes the gap and makes the default coupon smaller (sectio
 
 ### 1.3 Corner-speed ladder and print order
 
-Each tier's lines take their corner at geometrically spaced rungs from 20 mm/s
-(`MIN_CORNER_SPEED_MM_S`) up to the tier's ladder top, the smaller of the corner speed and the tier
-speed (`tierLadderTopMmS`), one rung per line: the step-excitation idea of Klipper's ringing tower, so
-the print self-ranges. The default rungs are 20, 29.91, 44.72, 66.87 and 100 mm/s on both tiers. The
+Each tier's lines take their corner at rungs from 20 mm/s (`MIN_CORNER_SPEED_MM_S`) up to the tier's
+ladder top, the smaller of the corner speed and the tier speed (`tierLadderTopMmS`), one rung per line:
+the step-excitation idea of Klipper's ringing tower, so the print self-ranges. The ladder is dense at the
+bottom (`ladderCornerSpeeds` in `couponGeometry.ts`): its lowest three rungs (`MIN_ACCEPTED_LINES`) are
+spaced geometrically from 20 mm/s up to the fastest followable corner (section 1.4), which the fitted
+spec carries as `followableCornerMmS`, and the remaining rungs geometrically from there up to the ladder
+top. When the followable corner does not split the ladder (every rung follows, not even the bottom rung
+does, or three lines leave no rung above it) the rungs are spaced geometrically over the whole range.
+The default rungs are 20, 24.17, 29.2, 42.49, 61.84 and 90 mm/s on the 90 mm/s tier and 20, 24.17, 29.2,
+44.01, 66.34 and 100 mm/s on the 150 mm/s tier. The
 run-up cruises at the rung straight into the corner, which the raised corner limit (section 1.5) passes
 with no deceleration, so the corner dumps no nozzle pressure and the bead stays continuous.
 
 Lines print in rung-major order (`linePrintOrder`): corner speed ascending, ties broken by group (Y
 first) and then by tier (slower first). With the default ladders every layer therefore starts with the
-four 20 mm/s lines (Y slow, Y fast, X slow, X fast) and ends with the four top-rung corners, the hardest
-motor kicks, so a step loss there cannot shift any line printed before it. Line positions do not depend
+four 20 mm/s lines (Y slow, Y fast, X slow, X fast) and ends with the two 90 mm/s and the two 100 mm/s
+top-rung corners, the hardest motor kicks, so a step loss there cannot shift any line printed before it. Line positions do not depend
 on the order;
 `crossingsMm` records each line's crossings with earlier-printed lines of the other group, all beyond
 the protected spans.
 
 ### 1.4 Lines per speed from bead followability
 
-The number of lines per speed is derived (`ladderLinesPerSpeed`, `followableRungCount`,
-`ringPathMinRadiusMm` in `types.ts`). The bead edges are the path's offset curves at plus and minus half
+The followable corner and the number of lines per speed are derived (`fastestFollowableCornerMmS`,
+`ladderLinesPerSpeed`, `followableRungCount`, `guaranteedBandTopHz`, `ringPathMinRadiusMm` in
+`types.ts`). The bead edges are the path's offset curves at plus and minus half
 the bead width, and an offset curve stays regular only while the path's radius of curvature exceeds the
 offset (Farouki and Neff, "Analytic properties of plane offset curves", CAGD 7, 1990); below that the edge
-folds and the traced centreline stops following the nozzle. For a ring at F_MAX = 150 Hz the radius at
+folds and the traced centreline stops following the nozzle. For a ring at F_MAX = 200 Hz the radius at
 the crests is R(s) = u^2 / (A omega^2), evaluated every 0.1 mm from the first traced sample (1 mm past the
 corner) to the end of the protected span, with
 
 - A(t) = (c / omega) e^(-zeta omega t), the ring the corner's velocity step c leaves;
 - u = min(v, sqrt(c^2 + 2 a s)) - c e^(-zeta omega_a t), the commanded along-track speed after the
   corner, lowered by the along-track axis' own ring (omega_a at F_MIN = 20 Hz, its slowest decay);
-- zeta = 0.1, Klipper's `DEFAULT_DAMPING_RATIO` (shaper_defs.py), because the coupon is generated before
-  the damping is known and Klipper designs shapers for the same assumed value.
+- zeta = 0.04 (`FOLLOWABILITY_DAMPING_RATIO`), because the coupon is generated before the damping is
+  known and a lighter damping keeps the ring larger for longer. A well-built CoreXY printer (the owner's
+  Voron 2.4) measured 0.041 to 0.069 on both axes, by accelerometer and by this flow's scans; Klipper's
+  0.075 to 0.15 is the range its shapers are made robust over, not a floor on printers.
 
-A rung is followable when the smallest R exceeds half the nominal bead width (nozzle times 1.05). The
-slowest tier binds. The line count is the smallest n from 3 to 15 that leaves at least 3 followable rungs
-(`MIN_ACCEPTED_LINES`) on the slowest tier; when none does, 3 is used and `bandTopWarning` tells the user
-to raise the line speed or the acceleration to read a resonance near 150 Hz. Results: 5 for the default
-profile, 6 for a 0.6 mm nozzle, 7 at 1000 mm/s^2.
+The window starts at the first traced sample, 1 mm past the corner, the honest worst case. A rung is
+followable when the smallest R exceeds half the nominal bead width (nozzle times 1.05). The slowest tier
+binds. The fastest followable corner is found by bisection on a 0.1 mm/s grid between 20 mm/s and the
+slowest tier's ladder top: 29.2 mm/s for the default profile (an independent scratch implementation
+gives the same value; R is 0.2104 mm at 29.2 and 0.2090 mm at 29.3 mm/s against the 0.21 mm half
+width), 23.4 mm/s for a 0.6 mm nozzle, 28.1 mm/s at 20000 mm/s^2.
+
+When the followable corner splits the ladder, the line count is 6: three followable rungs, so the band
+top stays readable at the analysis' line floor, plus three faster rungs, so a stiff frame whose ring is
+too small to detect on the slow corners still reaches the line floor from the strong excitation of the
+fast ones. Otherwise every rung follows (or none does) and the count is the followable line floor: the
+fewest lines from 3 to 15 that keep at least 3 followable rungs (`MIN_ACCEPTED_LINES`), or 3 when no
+count can. In that last case (1200 mm/s^2 or less with the default speeds; 1500 mm/s^2 still splits) the
+coupon cannot keep three followable lines at 200 Hz, and `bandTopWarning` names the reduced band top
+the coupon still reads (`guaranteedBandTopHz`, the highest whole hertz at which three rungs follow) and
+asks for a higher line speed or acceleration. With the worst-case along-track term the upper rungs
+(about 40 mm/s and faster) fold in the first millimetres after the corner at every frequency of the
+band, so at 1000 mm/s^2 the reduced band top falls to the bottom of the band.
+
+Changed from the redesign of 2026-10-08: the band was 20 to 150 Hz, the damping 0.1 and the ladder
+geometric over the whole range, which gave 5 lines by default. Raising the band to 200 Hz with the
+damping 0.04 on a geometric ladder would have needed 10 lines (a 164 mm coupon); the bottom-dense
+ladder keeps the guarantee with 6.
 
 Changed from the plan: the redesign derived the count from the slow tier's cruise speed (a closed form
 that gave 7 for a 0.6 mm nozzle); amendment I9 moved it onto the commanded speed profile after the
-corner, which the code implements with the Klipper design damping above. There is no longer a Lines per
+corner, which the code implements with the damping above. There is no longer a Lines per
 speed setting (section 4), and `IsTestRequest` no longer accepts a fixed count (a0f9ee1): the count is
 always derived.
 
@@ -252,10 +283,13 @@ and the planner oracle (section 1.11) keep stock Klipper's 0.64 mm^2 check only 
 
 `fitSpecToPrinter` is the single place a spec is fitted and the only place a tier is dropped: first the
 tiers against the bottom rung, then the firmware cap, then the line count and the bed. The bed fit keeps the requested (or derived) line count and takes the longest
-read length, down to 20 mm, that fits; if none fits it reduces the lines per speed towards 3, taking the
-longest read length at each count; if that fails it drops the slower tier (with the note "With one tier,
-the analysis cannot tell print and scan patterns apart from ringing.") and repeats both reductions. Each
-reduction is described in a worded note; a bed too small for even the smallest coupon throws.
+read length, down to 20 mm, that fits; if none fits it reduces the lines per speed towards the
+followable line floor (4 with the bottom-dense ladder), taking the longest read length at each count;
+if that fails it drops the slower tier (with the note "With one tier, the analysis cannot tell print and
+scan patterns apart from ringing.") and repeats both reductions. Removing a line removes an upper rung;
+the three followable rungs stay, so the bed fit never lowers the band top. The followable corner is found
+at the requested read length; a shorter read only shortens the window it is judged over. Each reduction
+is described in a worded note; a bed too small for even the smallest coupon throws (below about 77 mm).
 
 The bed depth a placement leaves comes from one shared helper, `availableBedDepthMm` in
 `web/src/engine/gcode/couponShell.ts` (bed depth when centred, minus the edge margin when pushed to the
@@ -271,23 +305,27 @@ code:
 
 | Case | Tiers (mm/s) | Lines per speed | Read length | Corner speed | Coupon |
 |---|---|---|---|---|---|
-| Default | 106, 150 | 5 | 30 mm | 100 mm/s | 114.806 mm square |
-| 120 x 120 bed, centred | 106, 150 | 5 | 30 mm | 100 mm/s | 114.806 mm square |
-| 120 x 120 bed, front (scan with plate) | 106, 150 | 5 | 25 mm | 100 mm/s | 109.806 mm square |
-| Klipper, 1000 mm/s^2 | 106, 150 | 7 | 30 mm | 90.1 mm/s | 146.05 mm square |
-| 0.6 mm nozzle | 106, 150 | 6 | 30 mm | 100 mm/s | 124.806 mm square |
+| Default (also on a 150 x 150 bed) | 90, 150 | 6 | 30 mm | 100 mm/s | 124.283 mm square |
+| 120 x 120 bed, centred | 90, 150 | 6 | 25 mm | 100 mm/s | 119.283 mm square |
+| 120 x 120 bed, front (scan with plate) | 90, 150 | 5 | 25 mm | 100 mm/s | 109.283 mm square |
+| 100 x 100 bed | 90, 150 | 4 | 25 mm | 100 mm/s | 99.283 mm square |
 | 80 x 80 bed | 150 | 4 | 23 mm | 100 mm/s | 79.683 mm square |
-| Line speed 28 mm/s | 28 | 5 | 30 mm | 28 mm/s | 88.064 mm square |
+| 0.6 mm nozzle | 90, 150 | 6 | 30 mm | 100 mm/s | 124.283 mm square |
+| Klipper, 20000 mm/s^2, 300 mm bed | 90, 150 | 6 | 30 mm | 100 mm/s | 123.192 mm square |
+| Klipper, 1000 mm/s^2 (band top reduced) | 90, 150 | 3 | 30 mm | 90.1 mm/s | 106.050 mm square |
 
-The old single-tier default (8 lines at 150 mm/s, 4000 mm/s^2 floor) was 105.76 mm square. The pinned
-snapshot `web/tests/fixtures/is_default.gcode` has 20 lines per layer (2 tiers x 5 lines x 2 axes), 120
-planner stops and 80 per-line raise and lower lines over the two layers, `M220 S100`, and 40 line-start
+Every case above except the last keeps three followable lines at 200 Hz. The motion time of the default
+coupon, replayed through the planner oracle, is about 16.6 minutes (15.9 minutes on the 120 mm bed),
+against 15.0 minutes for the previous 114.806 mm coupon. The old single-tier default (8 lines at
+150 mm/s, 4000 mm/s^2 floor) was 105.76 mm square. The pinned snapshot
+`web/tests/fixtures/is_default.gcode` has 24 lines per layer (2 tiers x 6 lines x 2 axes), 144 planner
+stops and 96 per-line raise and lower lines over the two layers, `M220 S100`, and 48 line-start
 un-retracts of the full 0.8 mm retraction.
 
 Changed from the plan: the redesign expected 118.81 mm by default and a 21 mm read length on a 120 mm bed
-with the front placement; the interleave (section 1.2) gives 114.806 mm and 25 mm. Amendment I6 estimated
-about 15 mm of growth at 1000 mm/s^2; the derived line count rises to 7 there, so the coupon grows by
-31 mm and a 120 mm bed shortens the lines or drops the tier through the bed fit.
+with the front placement; the interleave (section 1.2) gave 114.806 mm and 25 mm with the 150 Hz band.
+The 200 Hz band, the 1.6547 tier ratio and the bottom-dense ladder (sections 1.2 to 1.4) give the sizes
+above.
 
 ### 1.11 Planner oracle
 
@@ -364,7 +402,8 @@ Changed from the plan, implementer change: the tracer samples every 1 px along t
 0.5 px. Under the scanner's optical blur a sample between two pixel columns is almost exactly the mean of
 its neighbours, so half-pixel steps made the noise covariance nearly singular and the whitening amplified
 the ring columns' sub-sample curvature into false detections (12% of noise-only axes on simulated 1 px
-blur). The ring band lies below 0.06 cycles per pixel, so the pixel pitch loses nothing, and tracing is
+blur). The ring band lies below 0.1 cycles per pixel (200 Hz on the 90 mm/s tier at 600 dpi is 0.094),
+so the pixel pitch loses nothing, and tracing is
 about three times faster.
 
 ### 2.2 Fit window
@@ -433,7 +472,8 @@ The refit is costly, so each line's field over the grid holds a valid lower boun
 ratio with the null noise model held fixed at every grid point, and the refitted ratio at the null
 spectrum's in-band peaks and wherever a maximum is taken (every maximum the analysis uses is evaluated
 refitted). The axis statistic is Q(theta) = sum over the K lines, chi2_2K under H0 at a fixed point. The
-grid G is 20 to 150 Hz in 1 Hz steps times 13 damping ratios (0.001 to 0.4), |G| = 1,703, and the
+grid G is 20 to 200 Hz in 1 Hz steps times 13 damping ratios (0.001 to 0.4), |G| = 181 x 13 = 2,353,
+and the
 look-elsewhere effect is paid by the Bonferroni bound (Dunn 1961):
 
     pBound = min(1, |G| P(chi2_2K >= max_G Q))
@@ -618,7 +658,10 @@ its worst residual vibration over a band of max(5%, the relative 95% halfwidth);
 (when none qualifies, the lowest worst residual). With a second mode whose proportionality check does
 not fail (a steady tone next to the ring does not shape the spectrum the shaper must cover), the choice
 follows Klipper's `shaper_calibrate.py` (`fit_shaper`, `find_best_shaper`) on a spectrum synthesized from
-the fitted modes (Lorentzian lines in acceleration, added incoherently). The Marlin ZV output and its
+the fitted modes (Lorentzian lines in acceleration, added incoherently). Its shaper search reaches the
+200 Hz band top (Klipper's own search stops at 150 Hz, while `input_shaper.py` and `SET_INPUT_SHAPER`
+accept any frequency), and the spectrum reaches 220 Hz, 10% past the band top: a mode accepted at the
+band top has its true frequency within the confidence gate's 10% of the estimate. The Marlin ZV output and its
 second-mode residual were removed on 2026-10-08 by owner decision; the app supports Klipper only.
 
 Damping ratio: with one mode the shapers are designed at the fitted damping ratio, or at Klipper's
@@ -638,7 +681,7 @@ from a ring and no search runs.
 
 - **Known stage**: the GT2 pitch of 2 mm and its 1 mm harmonic, the JPEG 8 x 8 px block and the 16 px
   minimum coded unit (ITU-T T.81) through the scan's pixels per millimetre along the line, each kept only
-  when its frequency at the line's speed lies in the 20 to 150 Hz band; plus the tracer's pixel locking
+  when its frequency at the line's speed lies in the 20 to 200 Hz band; plus the tracer's pixel locking
   at harmonics m = 1 and 2.
 - **Grid stage**: spatial frequencies from F_MIN / v_max to F_MAX / v_min cycles per mm, at the step
   1 Hz / v_max.
@@ -795,7 +838,7 @@ timeout. The build and unit test job is capped at 15 minutes. The earlier sharde
 - **Corner speed above 100 mm/s gives a warning, no hard cap.** The owner will try the warning out later.
 - **Coupons with the old single-speed layout are not supported.** The Speed tiers and Lines per speed
   settings were removed (8fb3d4c); one tier happens automatically on small beds (bed fit) and below a
-  29 mm/s line speed, each with a worded note.
+  34 mm/s line speed, each with a worded note.
 - **Red statistics tests stay red** rather than being loosened, unless fixed honestly. Of the two red S1
   files at the end of stage 1 (2 px blur and red AR(2)), stage 2 fixed red AR(2); 2 px blur was still red
   when the S1 files left the suite (section 5).
@@ -815,10 +858,11 @@ timeout. The build and unit test job is capped at 15 minutes. The earlier sharde
   fixed (9153a65, 87c7e3d), but the spread to SE ratio on seeds 1 to 200 was about 1.17 to 1.18 locally
   against the 1.15 criterion. The remaining excess (wrong estimates under heavy damping, the flow-lag
   time constant settling at its lower bound) is under investigation; the CI result is pending.
-- **The speed check's power is about 0.60, not 0.95.** The tier ratio was derived for power 0.95 at the
-  weakest accepted measurement, but each tier is fitted from half of the axis's lines, so its standard
-  error is about sqrt(2) times that of the axis estimate the confidence gate judges (section 1.2). A
-  coupon redesign that restores the design power is open.
+- **The speed check's real power is open.** The 1.6547 tier ratio (section 1.2) prices the half-line
+  tiers and the two-sided refusing branch, so the design power 0.95 holds at the weakest accepted
+  measurement in the delta-method sense. Near the gate a tier can still miss its own detection on half
+  the lines, and a tier's standard error scatters from fit to fit (1.25 to 2.23 times the joint one in
+  simulation), so the achieved power is a matter of the analysis and is not yet measured.
 - **S1 under 2 px blur was red at 67 exceedances of the 95% point** (allowed 68 to 132; 11 above the 99%
   point) when the S1 files left the suite (c4c19a2). The detection was slightly conservative there, the
   safe direction: it costs some sensitivity and never adds false acceptances. Alternatives measured and

@@ -222,17 +222,22 @@ read from the scan whose sensor rows run along its measured lines) and recommend
 `is/gcodeGenerator.ts` and `is/couponGeometry.ts`) is a frame band with the same 3-hole +
 solid-origin-corner fiducial convention around an open window. Single test lines run in, turn a sharp
 90 degree corner, and cross the window as their measured segment, so the corner's velocity step leaves a
-decaying ring in the bead. Each axis prints two interleaved speed tiers, the line speed and a slower tier
-whose ratio is derived from the detection level and the confidence gate (`speedTiersFor`, ratio 1.40728;
-106 and 150 mm/s by default), and in each tier a corner-speed ladder of geometrically spaced rungs from
-20 mm/s up to the corner speed (100 mm/s by default), one rung per line, with the fastest corners
-printed last in every layer. The line
-count per speed is derived from bead followability (`ladderLinesPerSpeed`), 5 by default. Each line
+decaying ring in the bead. The measurable band is 20 to 200 Hz. Each axis prints two interleaved speed
+tiers, the line speed and a slower tier whose ratio is derived from the two-sided detection level, the
+speed check's power and the confidence gate (`speedTiersFor`, ratio 1.6547; 90 and 150 mm/s by default;
+both tiers need a line speed of at least 34 mm/s). Each tier has a bottom-dense corner-speed ladder, one
+rung per line, with the fastest corners printed last in every layer: three rungs spaced geometrically from
+20 mm/s up to the fastest corner whose bead still follows a 200 Hz ring (`fastestFollowableCornerMmS`,
+29.2 mm/s by default, carried on the fitted spec as `followableCornerMmS`), the rest geometrically from
+there up to the corner speed (100 mm/s by default). Followability is judged at an assumed damping ratio of
+0.04 from the first traced millimetre. The line count per speed is derived (`ladderLinesPerSpeed`), 6 by
+default: three followable rungs plus three faster ones; the bed fit removes only upper rungs and never goes
+below the followable floor of 4, so a smaller bed never lowers the band top. Each line
 raises the firmware's corner limit to its own rung only for its run-up, measured segment, tail and coast,
 then sets the profile's own value back (`junctionLimitCommands`), with planner stops (`G4 P0`) between
 lines. The test runs at the profile's print acceleration and resets the speed factor with `M220 S100`,
 because a leftover speed factor would scale the frequency on both tiers alike. The default coupon is
-114.806 mm square. Measurement (`lineTracer`, `ringAnalyzer`, `ringGls`, `ringLikelihood`,
+124.283 mm square (about 16.6 minutes of motion); a 120 mm bed fits it at 119.283 mm with 25 mm lines. Measurement (`lineTracer`, `ringAnalyzer`, `ringGls`, `ringLikelihood`,
 `artifactSearch`, `inputProportionality`, `alongTrackLag`): each line's centre is traced to sub-pixel
 precision and its lateral deviation converts to true mm through the card `ScaleReference`. The time base
 is the deliberate exception: a sample's time since the corner comes from its commanded coupon-frame
@@ -240,12 +245,12 @@ distance (the sample mapped back through the fiducial affine) and the commanded 
 axis scale and plastic shrinkage cannot bias the frequency. Per axis, the lines share one damped ring
 (frequency and damping) over AR noise whitened exactly, fitted by generalized least squares variable
 projection. Detection is the generalized likelihood ratio with the noise model refitted under each
-hypothesis, summed over the lines, with the look-elsewhere effect over the 1,703-point frequency and
+hypothesis, summed over the lines, with the look-elsewhere effect over the 2,353-point frequency and
 damping grid paid by a Bonferroni bound at a 0.1% false-alarm level; the frequency interval is the
 profile-likelihood interval. With two tiers, the two-speed check compares the tiers (a machine resonance
 keeps its frequency at both tiers, a print or scan pattern scales with the speed): an axis whose
 frequency changes with the speed is refused, while a check that cannot confirm the ring does not refuse;
-a coupon left with one tier (a small bed, or a line speed below 29 mm/s) gets a leave-one-line-out
+a coupon left with one tier (a small bed, or a line speed below 34 mm/s) gets a leave-one-line-out
 influence check instead. The ring amplitude must also be proportional to the corner speed through zero
 (which rejects forced tones such as a fan), and the replicate check and the confidence gate must not
 fail. A damping ratio fitted at its 0.4 bound does not refuse the axis: the shaper is then designed at
