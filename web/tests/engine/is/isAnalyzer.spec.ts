@@ -21,7 +21,7 @@ import type { ScaleReference } from '../../../src/engine/scannerCalibration'
 // rendered at the 600 dpi class resolution a real scan is expected to have.
 const PX_PER_MM = 24
 const profile = defaultPrinterProfile()
-// The fitted default coupon: tiers 90 / 150 mm/s interleaved, six lines per speed.
+// The fitted default coupon: tiers 90 / 150 mm/s interleaved, four lines per speed.
 const baseSpec = fitSpecToPrinter(defaultIsTestRequest(profile), profile).spec
 // A single-axis (Y only) spec keeps the coupon, and thus the render time, small for the
 // refusal-gate tests; the flagship recovery test uses the full two-axis default.
@@ -140,9 +140,10 @@ describe('analyzeIsCoupon render recovery', () => {
     'measures an axis whose lower ladder rungs ring near the noise floor (self-ranging)',
     async () => {
       // The corner-speed ladder scales the rendered ring amplitude with each line's rung
-      // (delta-v over omega), so the slowest rungs carry only a fifth of the top rung's
-      // amplitude; the joint fit must still measure the axis from the pooled lines.
-      const truth = { y: { frequencyHz: 62, dampingRatio: 0.07, ringAmpMm: 0.1 } }
+      // (delta-v over omega). The top rung (40.2 mm/s) rings at 0.04 mm, so the slowest rungs
+      // (20 mm/s) carry about 0.02 mm under the 3-level scan noise; the joint fit must still
+      // measure the axis from the pooled lines.
+      const truth = { y: { frequencyHz: 62, dampingRatio: 0.07, ringAmpMm: 0.04 } }
       const r = await analyzePair(
         ySpec,
         { truth, quarterTurns: 0, flipped: true, noiseSigma: 3 },
@@ -153,10 +154,13 @@ describe('analyzeIsCoupon render recovery', () => {
       expect(y.refusals).toEqual([])
       expect(y.accepted).toBe(true)
       expect(Math.abs(y.frequencyHz! - 62)).toBeLessThanOrEqual(1.5)
-      // Per-rung status: every line carries its rung, bottom 20 mm/s to top 100 mm/s, the two
-      // tiers interleaved rung by rung (hand-derived rungs 20 * 5^(j/4)), and the fitted
-      // amplitudes grow with the rung (top at least twice the bottom).
-      const rungs = [20, 20, 29.90698, 29.90698, 44.72136, 44.72136, 66.87403, 66.87403, 100, 100]
+      // Per-rung status: every line carries its rung, the two tiers interleaved rung by rung
+      // (90, 150, 150, 90, ...), and the fitted amplitudes grow with the rung (top at least
+      // twice the bottom). Hand-derived rungs: three from 20 mm/s up to the 25.5 mm/s fastest
+      // followable corner, 20 * (25.5 / 20)^(j/2), then one more step of the geometric ladder
+      // from 25.5 mm/s to the tier's ladder top in three steps, 25.5 * (100 / 25.5)^(1/3) on the
+      // 150 mm/s tier and 25.5 * (90 / 25.5)^(1/3) on the 90 mm/s tier.
+      const rungs = [20, 20, 22.58318, 22.58318, 25.5, 25.5, 40.21241, 38.82466]
       y.lines.forEach((l, i) => expect(l.cornerSpeedMmS).toBeCloseTo(rungs[i], 4))
       const bottom = y.lines[0]
       const top = y.lines[y.lines.length - 1]
@@ -166,8 +170,10 @@ describe('analyzeIsCoupon render recovery', () => {
       expect(top.usedInJointFit).toBe(true)
       expect(bottom.amplitudeMm).not.toBeNull()
       expect(top.amplitudeMm).not.toBeNull()
-      // The rendered amplitudes stand 5 to 1 (100 over 20 mm/s); under the 3-level scan noise
-      // the fitted ratio must keep at least 2 of it.
+      // The rendered amplitudes of these two 90 mm/s lines stand 1.94 to 1 at the corner (38.82
+      // over 20 mm/s); the fitted amplitudes are read at each line's fit-window start and also
+      // carry the slower rung's longer decay before its window, about 3 to 1 on a noise-free
+      // render. Under the 3-level scan noise the fitted ratio must keep at least 2 of it.
       expect(top.amplitudeMm!).toBeGreaterThan(2 * bottom.amplitudeMm!)
     },
     240000,
@@ -230,7 +236,8 @@ describe('analyzeIsCoupon render recovery', () => {
   it(
     'refuses a resonance just outside the search range (fit at the bound)',
     async () => {
-      const truth = { y: { frequencyHz: 152, dampingRatio: 0.05, ringAmpMm: 0.2 } }
+      // 202 Hz, 2 Hz above the 200 Hz band top.
+      const truth = { y: { frequencyHz: 202, dampingRatio: 0.05, ringAmpMm: 0.2 } }
       const r = await analyzePair(
         ySpec,
         { truth, quarterTurns: 0, flipped: true },

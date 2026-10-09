@@ -22,12 +22,20 @@ import type { TraceSimOptions } from '../../helpers/isTraceSim'
 const profile = defaultPrinterProfile()
 const twoTier: IsTestSpec = { ...fitSpecToPrinter(defaultIsTestRequest(profile), profile).spec, axes: ['y'] }
 
+/** Group index of the default coupon's 150 mm/s line on the top rung. */
+const TOP_RUNG_150 = 6
+
 /** One simulated line's basis and null fit at a 30 ms flow-lag time constant. */
 function nullFitOf(options: Omit<TraceSimOptions, 'spec' | 'seed'>, seed: number, line: number) {
   const [sim] = simulateAxis({ seed, spec: twoTier, lineIndices: [line], ...options })
   const basis = lineBasis(analyzeTracedLine(sim.trace).window!)
   const initial = fitNoise(basis, olsNull(basis, 0.03).residual)
-  return { basis, h0: nullHypothesisFit(basis, initial.fit, 0.03) }
+  return { sim, basis, h0: nullHypothesisFit(basis, initial.fit, 0.03) }
+}
+
+/** The fastest corner of the default coupon's Y group, the rung the ring amplitude refers to. */
+function topRungMmS(): number {
+  return Math.max(...simulateAxis({ seed: 1, spec: twoTier, noise: { model: 'iid', sigmaPx: 0 } }).map((l) => l.cornerSpeedMmS))
 }
 
 function heldAt(fit: ReturnType<typeof nullFitOf>, frequencyHz: number, dampingRatio: number): number {
@@ -52,7 +60,8 @@ describe('ringLikelihoodRatio', () => {
     // zeta 0.002 at 60 Hz, 0.03 mm on the top rung: an AR model of the null predicts it almost
     // exactly. 29.35 is the single-line critical value 2 ln(2353 / 0.001) = 29.342 of the detection
     // bound (hand-computed), rounded up: held fixed the line shows nothing, refitted it is detected on its own.
-    const fit = nullFitOf({ noise: { model: 'iid', sigmaPx: 0.1 }, ring: { frequencyHz: 60, dampingRatio: 0.002, ampMm: 0.03 } }, 1, 9)
+    const fit = nullFitOf({ noise: { model: 'iid', sigmaPx: 0.1 }, ring: { frequencyHz: 60, dampingRatio: 0.002, ampMm: 0.03 } }, 1, TOP_RUNG_150)
+    expect([fit.sim.speedMmS, fit.sim.cornerSpeedMmS]).toEqual([150, topRungMmS()])
     expect(heldAt(fit, 60, 0.002)).toBeLessThan(29.35)
     expect(ringLikelihoodRatio(fit.basis, fit.h0, { frequencyHz: 60, dampingRatio: 0.002 }).statistic).toBeGreaterThan(29.35)
   })
@@ -63,7 +72,7 @@ describe('nullHypothesisFit', () => {
     // A slope estimated against the bead-drag lobe (a joint fit's variance function on a basis
     // built in the flow-lag model) must stay on that lobe: weighting the samples by the flow-lag
     // deficit instead is another variance function and another likelihood.
-    const { basis, h0 } = nullFitOf({ noise: { model: 'iid', sigmaPx: 0.1 } }, 3, 9)
+    const { basis, h0 } = nullFitOf({ noise: { model: 'iid', sigmaPx: 0.1 } }, 3, TOP_RUNG_150)
     const lobe = varianceCovariate(basis.rec, 'bead-drag', 0.4)
     const deficit = varianceCovariate(basis.rec, 'flow-lag', 0.03)
 

@@ -23,7 +23,7 @@ import type { SimLine, TraceSimOptions } from '../../helpers/isTraceSim'
 // isAnalyzer.spec.ts; the statistical calibration of every decision in tests/stats.
 
 const profile = defaultPrinterProfile()
-/** The default coupon's Y group: tiers 90 and 150 mm/s, six rungs each. */
+/** The default coupon's Y group: tiers 90 and 150 mm/s, four rungs each. */
 const twoTier: IsTestSpec = { ...fitSpecToPrinter(defaultIsTestRequest(profile), profile).spec, axes: ['y'] }
 /** A one-tier coupon at 150 mm/s. */
 const oneTier: IsTestSpec = {
@@ -160,13 +160,15 @@ describe('poolAxisFits detection', () => {
 describe('poolAxisFits estimation', () => {
   it('recovers a 60 Hz ring at damping 0.05 from both tiers', () => {
     // Truth 60 Hz, zeta 0.05, 0.03 mm on the top rung. The frequency standard error of this
-    // configuration is about 0.085 Hz, so 0.3 Hz is 3.5 standard errors; the damping band is a
-    // tenth of the truth (observed seed-to-seed spread 0.002).
-    const p = pool(twoTier, simulate(twoTier, { noise: IID, ring: { frequencyHz: 60, dampingRatio: 0.05, ampMm: 0.03 } }))
+    // configuration is about 0.13 Hz, so 0.3 Hz is 2.3 standard errors; the damping band is a
+    // tenth of the truth (observed seed-to-seed spread 0.002). Every line of both tiers enters
+    // the joint fit.
+    const lines = simulate(twoTier, { noise: IID, ring: { frequencyHz: 60, dampingRatio: 0.05, ampMm: 0.03 } })
+    const p = pool(twoTier, lines)
     expect(p.accepted).toBe(true)
     expect(Math.abs(p.frequencyHz! - 60)).toBeLessThan(0.3)
     expect(Math.abs(p.dampingRatio! - 0.05)).toBeLessThan(0.005)
-    expect(p.linesUsed).toBe(10)
+    expect(p.linesUsed).toBe(lines.length)
   })
 
   it('moves the joint fit off its grid seed', () => {
@@ -257,30 +259,34 @@ describe('poolAxisFits estimation', () => {
 
   it('keeps a good line whose own damping ratio fit runs to the upper bound', () => {
     // Truth 45.3 Hz at zeta 0.3, 0.15 mm on the top rung. On this seed line 5's own fit stops at
-    // the 0.4 damping bound while its frequency, 48.5 Hz, agrees with the other lines: one line
-    // cannot pin the damping down, so the line must still enter the joint fit. The joint
-    // frequency's standard error is about 1.35 Hz here, so 4 Hz is three of them.
-    const lines = simulate(twoTier, { noise: IID, ring: { frequencyHz: 45.3, dampingRatio: 0.3, ampMm: 0.15 } }, 8_000_032)
+    // the 0.4 damping bound while its frequency, 41.6 Hz, agrees with the other detected lines
+    // (45.0 and 47.2 Hz): one line cannot pin the damping down, so the line must still enter the
+    // joint fit. The joint frequency's standard error is about 1.7 Hz here, so 4 Hz is 2.3 of
+    // them.
+    const lines = simulate(twoTier, { noise: IID, ring: { frequencyHz: 45.3, dampingRatio: 0.3, ampMm: 0.15 } }, 8_000_009)
     const p = pool(twoTier, lines)
     expect(p.lines[5].detected).toBe(true)
     expect(p.lines[5].ownDampingRatio).toBe(ZETA_MAX)
     expect(p.lines[5].exclusion).toBeNull()
     expect(p.lines[5].usedInJointFit).toBe(true)
-    expect(p.linesUsed).toBe(10)
+    expect(p.linesUsed).toBe(lines.length)
     expect(p.accepted).toBe(true)
     expect(Math.abs(p.frequencyHz! - 45.3)).toBeLessThan(4)
   })
 
   it('excludes a line whose own ring sits at the edge of the search range', () => {
+    // A 202 Hz ring on line 3 alone, 2 Hz above the 200 Hz band top: the line's own fit stops
+    // at the edge of the search range.
     const lines = simulate(twoTier, { noise: IID, ring: { frequencyHz: 60, dampingRatio: 0.05, ampMm: 0.03 } })
-    addToLine(lines[3], 0.1, 152, 0.05)
+    addToLine(lines[3], 0.1, 202, 0.05)
     const p = pool(twoTier, lines)
     expect(p.lines[3].exclusion).toBe('out-of-band')
     expect(p.lines[3].usedInJointFit).toBe(false)
     expect(p.accepted).toBe(true)
-    // The nine remaining lines' joint frequency has a standard error of about 0.10 Hz (the
-    // profile-likelihood interval in the encompassing corner model), so 0.3 Hz is 3 of them. The
-    // excluded line must not move the estimate: the same nine lines without it read 59.789 Hz.
+    // The seven remaining lines' joint frequency has a standard error of about 0.14 Hz (the
+    // profile-likelihood interval in the encompassing corner model), so 0.3 Hz is two of them.
+    // The excluded line must not move the estimate: the same seven lines without it read
+    // 59.849 Hz.
     expect(Math.abs(p.frequencyHz! - 60)).toBeLessThan(0.3)
   })
 })
@@ -371,14 +377,17 @@ describe('poolAxisFits checks', () => {
   })
 
   it('accepts a ring whose fitted damping ratio sits at the upper bound of the range', () => {
-    // Truth 70 Hz at zeta 0.42, above the 0.4 bound, 0.8 mm on the top rung: the joint fit stops
-    // at the bound. The frequency's 95% halfwidth is about 3.3 Hz here (a standard error near
-    // 1.7 Hz), so 5 Hz is three standard errors.
-    const p = pool(twoTier, simulate(twoTier, { noise: IID, ring: { frequencyHz: 70, dampingRatio: 0.42, ampMm: 0.8 } }))
+    // Truth 40 Hz at zeta 0.42, above the 0.4 bound, 0.8 mm on the top rung: the joint fit stops
+    // at the bound. The ring has to outlast the corner's first traced millimetre, which the
+    // 20 mm/s bottom rung reaches 20 ms after the corner: a 40 Hz ring at this damping keeps 12%
+    // of its amplitude there (a 70 Hz ring only 2.5%, below detection). The frequency's 95%
+    // halfwidth is about 1.3 Hz here (a standard error near 0.6 Hz), so 1.8 Hz is three
+    // standard errors.
+    const p = pool(twoTier, simulate(twoTier, { noise: IID, ring: { frequencyHz: 40, dampingRatio: 0.42, ampMm: 0.8 } }))
     expect(p.dampingRatio).toBe(0.4)
     expect(p.refusals).toEqual([])
     expect(p.accepted).toBe(true)
-    expect(Math.abs(p.frequencyHz! - 70)).toBeLessThan(5)
+    expect(Math.abs(p.frequencyHz! - 40)).toBeLessThan(1.8)
   })
 
   it('refuses a forced tone because it does not grow with the corner speed', () => {
