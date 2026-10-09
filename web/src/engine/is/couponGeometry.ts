@@ -46,15 +46,15 @@ export function timeAtDistance(
 export const MIN_CORNER_SPEED_MM_S = 20
 
 /**
- * The top rung of one tier's corner-speed ladder: the spec's corner speed, or the tier's own
- * line speed when that is slower. A line's run-up cruises into the corner at its rung, and a
+ * The top rung of one tier's corner-speed ladder: the spec's derived top corner, or the tier's
+ * own line speed when that is slower. A line's run-up cruises into the corner at its rung, and a
  * cruise faster than the line it feeds would brake into the corner instead of passing it.
  */
 export function tierLadderTopMmS(
-  spec: Pick<IsTestSpec, 'cornerSpeedMmS'>,
+  spec: Pick<IsTestSpec, 'topCornerMmS'>,
   tierSpeedMmS: number,
 ): number {
-  return Math.min(spec.cornerSpeedMmS, tierSpeedMmS)
+  return Math.min(spec.topCornerMmS, tierSpeedMmS)
 }
 
 /** Minimum lines entering the joint fit before the axis estimate is meaningful. The ladder
@@ -75,16 +75,14 @@ function geometricRungs(from: number, to: number, count: number): number[] {
  * a ring whose bead the traced centreline cannot follow at the top of the band (see
  * ringPathMinRadiusMm), so the ladder is dense at the bottom: its lowest MIN_ACCEPTED_LINES
  * rungs are spaced geometrically from MIN_CORNER_SPEED_MM_S up to the spec's fastest followable
- * corner. Above them the ladder continues geometrically from the followable corner to the tier's
- * ladder top in MIN_ACCEPTED_LINES steps (in more when more upper rungs are asked for), and the
- * line count decides how many of these upper rungs are printed, lowest first: the derived count
- * keeps those whose bead follows a ring at one band frequency at least (ladderLinesPerSpeed), and
- * the bed fit removes them from the top. When the followable corner lies outside the ladder's
- * range (every rung follows, or it sits below the bottom rung because not even that rung
- * follows), the rungs are spaced geometrically over the whole range. A followable corner equal
- * to the bottom rung gives three bottom rungs at that one speed: three replicate lines that
- * still follow. `tierSpeedMmS` defaults to the fastest tier, whose ladder top is the spec's
- * corner speed.
+ * corner. Above them the upper rungs are spaced geometrically from the followable corner up to
+ * the tier's ladder top (the spec's derived top corner, the fastest corner whose bead still
+ * follows a ring somewhere in the band), ending on it: the derived line count prints one upper
+ * rung, the top itself (ladderLinesPerSpeed), and the bed fit removes it first. When the
+ * followable corner lies outside the ladder's range (every rung follows, or it sits below the
+ * bottom rung because not even that rung follows), the rungs are spaced geometrically over the
+ * whole range. A followable corner equal to the bottom rung gives three bottom rungs at that one
+ * speed: three replicate lines that still follow. `tierSpeedMmS` defaults to the fastest tier.
  */
 export function ladderCornerSpeeds(
   spec: IsTestSpec,
@@ -98,20 +96,18 @@ export function ladderCornerSpeeds(
   }
   const bottom = geometricRungs(MIN_CORNER_SPEED_MM_S, followable, Math.min(n, MIN_ACCEPTED_LINES))
   const upperCount = n - bottom.length
-  const steps = Math.max(MIN_ACCEPTED_LINES, upperCount)
-  const upper = geometricRungs(followable, top, steps + 1).slice(1, 1 + upperCount)
+  const upper = geometricRungs(followable, top, upperCount + 1).slice(1)
   return [...bottom, ...upper]
 }
 
 /**
  * Distance a line needs after the corner to accelerate from its corner speed (the run-up
- * cruise the bend is taken at) to its cruise speed: (v^2 - corner^2) / (2a). The corner
- * speed defaults to the spec's top rung; ladder-aware callers pass the line's own rung.
+ * cruise the bend is taken at, the line's own rung) to its cruise speed: (v^2 - corner^2) / (2a).
  */
 export function tierRampMm(
-  spec: Pick<IsTestSpec, 'accelMmS2' | 'cornerSpeedMmS'>,
+  spec: Pick<IsTestSpec, 'accelMmS2'>,
   speedMmS: number,
-  cornerSpeedMmS: number = spec.cornerSpeedMmS,
+  cornerSpeedMmS: number,
 ): number {
   return accelRampMm(speedMmS, spec.accelMmS2) - accelRampMm(cornerSpeedMmS, spec.accelMmS2)
 }
@@ -126,9 +122,9 @@ export const MIN_MEASURED_LINE_MM = 20
  * crossing, flow change, or speed change is allowed inside it.
  */
 export function protectedSpanMm(
-  spec: Pick<IsTestSpec, 'accelMmS2' | 'cornerSpeedMmS' | 'measuredLineMm'>,
+  spec: Pick<IsTestSpec, 'accelMmS2' | 'measuredLineMm'>,
   speedMmS: number,
-  cornerSpeedMmS: number = spec.cornerSpeedMmS,
+  cornerSpeedMmS: number,
 ): number {
   return tierRampMm(spec, speedMmS, cornerSpeedMmS) + spec.measuredLineMm
 }

@@ -35,7 +35,6 @@ const EM: EmSettings = {
 }
 const IS: IsSettings = {
   lineSpeedMmS: 150,
-  cornerSpeedMmS: 20,
   measuredLineMm: 30,
   linePitchMm: 2.5,
   scanPlace: 'part',
@@ -164,7 +163,6 @@ describe('per-flow settings stores', () => {
     usePrinterProfiles().select(id)
     const reloaded = useIsSettings().settings
     expect(reloaded?.lineSpeedMmS).toBe(150)
-    expect(reloaded?.cornerSpeedMmS).toBe(20)
   })
 
   it('backfills an older stored entry that already carries numeric speeds', () => {
@@ -175,9 +173,10 @@ describe('per-flow settings stores', () => {
     expect(useIsSettings().settings).toEqual(IS)
   })
 
-  it('loads an input shaper entry stored with the retired resonant run-up fields, dropping them', () => {
-    // Earlier versions persisted four run-up sweep fields with every entry. They are no
-    // longer settings: the entry must still load, with only the current fields.
+  it('loads an input shaper entry stored with the retired resonant run-up and corner speed fields, dropping them', () => {
+    // Earlier versions persisted four run-up sweep fields and the corner speed with every
+    // entry. They are no longer settings: the entry must still load, with only the current
+    // fields.
     const id = addProfile()
     const legacy = {
       lineSpeedMmS: 150,
@@ -197,7 +196,6 @@ describe('per-flow settings stores', () => {
     usePrinterProfiles().select(id)
     expect(useIsSettings().settings).toEqual({
       lineSpeedMmS: 150,
-      cornerSpeedMmS: 20,
       measuredLineMm: 30,
       linePitchMm: 2.5,
       scanPlace: 'part',
@@ -225,7 +223,6 @@ describe('per-flow settings stores', () => {
     usePrinterProfiles().select(id)
     expect(useIsSettings().settings).toEqual({
       lineSpeedMmS: 150,
-      cornerSpeedMmS: 100,
       measuredLineMm: 30,
       linePitchMm: 2.5,
       scanPlace: 'plate',
@@ -245,7 +242,7 @@ describe('per-flow settings stores', () => {
 
   it('persists a saved entry whose speeds are still empty (null)', () => {
     const id = addProfile()
-    const emptySpeeds: IsSettings = { ...IS, lineSpeedMmS: null, cornerSpeedMmS: null }
+    const emptySpeeds: IsSettings = { ...IS, lineSpeedMmS: null }
     useIsSettings().save(emptySpeeds)
     setActivePinia(createPinia())
     usePrinterProfiles().select(id)

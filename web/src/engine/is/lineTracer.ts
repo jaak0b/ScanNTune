@@ -72,9 +72,9 @@ export interface TracedGroup {
 
 export { timeAtDistance, TRACE_START_MM }
 /** Perpendicular half-window of the centroid profile. Must exceed the largest expected ring
- *  amplitude (about 0.64 mm at the default corner speed, see DEFAULT_CORNER_SPEED_MM_S) plus
- *  half a bead, and stay under the line pitch minus the same, so a neighbouring trace never
- *  enters the window. */
+ *  amplitude (the corner speed over omega: about 0.44 mm for the default ladder's 55.4 mm/s top
+ *  corner at 20 Hz) plus half a bead, and stay under the line pitch minus the same, so a
+ *  neighbouring trace never enters the window. */
 export const PROFILE_HALF_WINDOW_MM = 1.0
 /**
  * Step along the line in image px: the scan's native pixel pitch. A sample between two pixel

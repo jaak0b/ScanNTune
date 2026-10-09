@@ -27,8 +27,8 @@ import {
 
 const profile = defaultPrinterProfile()
 // The fitted default: tiers 90 / 150 mm/s, four lines per speed on a bottom-dense ladder whose
-// followable corner is 25.5 mm/s, 100 mm/s corner speed, 3000 mm/s^2, 30 mm read, 8 mm run-up,
-// 2.5 mm pitch.
+// followable corner is 25.5 mm/s and whose top corner is 55.4 mm/s, 3000 mm/s^2, 30 mm read,
+// 8 mm run-up, 2.5 mm pitch.
 const spec = fitSpecToPrinter(defaultIsTestRequest(profile), profile).spec
 const g = isCouponGeometry(spec)
 const yGroup = g.groups.find((grp) => grp.axis === 'y')!
@@ -217,11 +217,10 @@ describe('isCouponGeometry print order', () => {
     for (let i = 1; i < corners.length; i++) {
       expect(corners[i]).toBeGreaterThanOrEqual(corners[i - 1])
     }
-    // The two 40.21 mm/s top printed corners of the line-speed tier are the last two lines of
-    // the layer, after the two 38.82 mm/s top printed corners of the slower tier.
-    expect(corners.slice(-2).every((c) => Math.abs(c - 40.21241) < 1e-5)).toBe(true)
-    expect(corners.slice(-4, -2).every((c) => Math.abs(c - 38.82466) < 1e-5)).toBe(true)
-    expect(corners.slice(0, -4).every((c) => c < 38.8)).toBe(true)
+    // The four 55.4 mm/s top corners, one per tier and group, are the last four lines of the
+    // layer.
+    expect(corners.slice(-4).every((c) => Math.abs(c - 55.4) < 1e-9)).toBe(true)
+    expect(corners.slice(0, -4).every((c) => c < 55.4)).toBe(true)
   })
   it('prints equal corners Y slow, Y fast, X slow, X fast', () => {
     const firstRung = g.printOrder.slice(0, 4).map((r) => {
@@ -230,10 +229,10 @@ describe('isCouponGeometry print order', () => {
     })
     expect(firstRung).toEqual(['y90@20', 'y150@20', 'x90@20', 'x150@20'])
   })
-  it('orders by corner speed even when the slower tier tops out below the corner speed', () => {
-    // A 120 mm/s corner speed: the 90 mm/s tier's ladder tops out at 90, the 150 mm/s tier's
+  it('orders by corner speed even when the slower tier tops out below the top corner', () => {
+    // A 120 mm/s top corner: the 90 mm/s tier's ladder tops out at 90, the 150 mm/s tier's
     // at 120, so the upper rungs of the two tiers differ and the order follows the speeds alone.
-    const fast = isCouponGeometry({ ...spec, cornerSpeedMmS: 120 })
+    const fast = isCouponGeometry({ ...spec, topCornerMmS: 120 })
     const corners = fast.printOrder.map((r) => fast.groups[r.groupIndex].lines[r.lineIndex].cornerSpeedMmS)
     for (let i = 1; i < corners.length; i++) {
       expect(corners[i]).toBeGreaterThanOrEqual(corners[i - 1])
@@ -333,7 +332,7 @@ describe('isCouponGeometry footprint', () => {
     expect(g.couponWidthMm).toBeCloseTo(interior + 2 * g.frameBandMm, 9)
     expect(g.couponHeightMm).toBeCloseTo(g.couponWidthMm, 9)
     // Documented derived size of the defaults (tiers 90 / 150 mm/s, four lines per speed,
-    // 30 mm clean read, 8 mm run-up, 3000 mm/s^2, 100 mm/s corner speed): a regression
+    // 30 mm clean read, 8 mm run-up, 3000 mm/s^2, 55.4 mm/s top corner): a regression
     // inflating the layout is caught here. Field extent 7 pitches = 17.5 mm; the binding
     // line is the slow tier's 20 mm/s rung at offset zero, 17.5 + (90^2 - 20^2) / 6000 =
     // 18.783 mm; the interior is 3 + 18.783 + 30 + 3 + 17.5 + 8 = 80.283 mm plus two 12 mm
@@ -366,9 +365,9 @@ describe('isCouponGeometry footprint', () => {
     expect(yOnly.couponHeightMm).toBeCloseTo(xOnly.couponWidthMm, 9)
   })
   it('grows the protected span with the tier speed and shrinks it with acceleration', () => {
-    expect(protectedSpanMm(spec, 300)).toBeGreaterThan(protectedSpanMm(spec, 200))
+    expect(protectedSpanMm(spec, 300, 20)).toBeGreaterThan(protectedSpanMm(spec, 200, 20))
     const stiff: IsTestSpec = { ...spec, accelMmS2: 10000 }
-    expect(protectedSpanMm(stiff, 300)).toBeLessThan(protectedSpanMm(spec, 300))
+    expect(protectedSpanMm(stiff, 300, 20)).toBeLessThan(protectedSpanMm(spec, 300, 20))
   })
 })
 
@@ -432,44 +431,43 @@ describe('isCouponGeometry at the maximum line count', () => {
 })
 
 describe('corner-speed excitation ladder', () => {
-  it('spaces three rungs from 20 mm/s up to the followable corner, then prints the lowest upper rungs', () => {
-    // Hand-derived: 20 * (25.5 / 20)^(j / 2) for j = 0..2, then the upper ladder
-    // 25.5 * (100 / 25.5)^(k / 3) for k = 1..3 towards the 100 mm/s corner speed, of which the
-    // four-line default prints the first and six lines all three.
+  it('spaces three rungs from 20 mm/s up to the followable corner, then the upper rungs up to the top', () => {
+    // Hand-derived: 20 * (25.5 / 20)^(j / 2) for j = 0..2, then the upper rungs
+    // 25.5 * (55.4 / 25.5)^(k / u) for k = 1..u, ending on the 55.4 mm/s top corner: the
+    // four-line default prints the top alone, six lines three upper rungs.
     const rungs = ladderCornerSpeeds(spec)
     expect(rungs).toHaveLength(spec.linesPerSpeed)
-    ;[20, 22.58318, 25.5, 40.21241].forEach((r, j) => expect(rungs[j]).toBeCloseTo(r, 4))
+    ;[20, 22.58318, 25.5, 55.4].forEach((r, j) => expect(rungs[j]).toBeCloseTo(r, 4))
     expect(rungs[0]).toBe(MIN_CORNER_SPEED_MM_S)
     const six = ladderCornerSpeeds({ ...spec, linesPerSpeed: 6 })
-    ;[20, 22.58318, 25.5, 40.21241, 63.41326, 100].forEach((r, j) => expect(six[j]).toBeCloseTo(r, 4))
+    ;[20, 22.58318, 25.5, 33.02656, 42.77466, 55.4].forEach((r, j) => expect(six[j]).toBeCloseTo(r, 4))
     // Three lines are the followable rungs alone.
     expect(ladderCornerSpeeds({ ...spec, linesPerSpeed: 3 })).toEqual(rungs.slice(0, 3))
   })
   it('spaces the rungs geometrically over the whole range when the followable corner does not split it', () => {
     // Every rung follows (the followable corner at the top), or not even the bottom rung does
-    // (below 20 mm/s): 20 * 5^(j / 3) (hand-derived).
-    const plainFour = [20, 34.19952, 58.48035, 100]
+    // (below 20 mm/s): 20 * (55.4 / 20)^(j / 3) (hand-derived).
+    const plainFour = [20, 28.08816, 39.44723, 55.4]
     for (const followableCornerMmS of [100, 19.9]) {
       const rungs = ladderCornerSpeeds({ ...spec, followableCornerMmS })
       expect(rungs).toHaveLength(4)
       rungs.forEach((r, j) => expect(r).toBeCloseTo(plainFour[j], 4))
     }
   })
-  it('tops a slower tier ladder out at its own speed when the corner speed is faster', () => {
-    // 120 mm/s corner speed: both tiers share the bottom rungs 20, 22.583, 25.5; above them the
-    // 90 mm/s tier climbs as 25.5 * (90 / 25.5)^(k / 3), the 150 mm/s tier as
-    // 25.5 * (120 / 25.5)^(k / 3) (hand-derived).
-    const fast = { ...spec, cornerSpeedMmS: 120 }
+  it('tops a slower tier ladder out at its own speed when the top corner is faster', () => {
+    // 120 mm/s top corner: both tiers share the bottom rungs 20, 22.583, 25.5; above them the
+    // 90 mm/s tier's upper rung is its own 90 mm/s speed, the 150 mm/s tier's the 120 mm/s top.
+    const fast = { ...spec, topCornerMmS: 120 }
     const slowRungs = ladderCornerSpeeds(fast, 90)
     const fastRungs = ladderCornerSpeeds(fast, 150)
-    ;[20, 22.58318, 25.5, 38.82466].forEach((r, j) => expect(slowRungs[j]).toBeCloseTo(r, 4))
-    ;[20, 22.58318, 25.5, 42.73206].forEach((r, j) => expect(fastRungs[j]).toBeCloseTo(r, 4))
+    ;[20, 22.58318, 25.5, 90].forEach((r, j) => expect(slowRungs[j]).toBeCloseTo(r, 4))
+    ;[20, 22.58318, 25.5, 120].forEach((r, j) => expect(fastRungs[j]).toBeCloseTo(r, 4))
   })
   it('tags every line with its own tier rung', () => {
-    const fast = isCouponGeometry({ ...spec, cornerSpeedMmS: 120 })
+    const fast = isCouponGeometry({ ...spec, topCornerMmS: 120 })
     const yG = fast.groups.find((grp) => grp.axis === 'y')!
     expect(yG.lines.map((l) => Number(l.cornerSpeedMmS.toFixed(3)))).toEqual([
-      20, 20, 22.583, 22.583, 25.5, 25.5, 42.732, 38.825,
+      20, 20, 22.583, 22.583, 25.5, 25.5, 120, 90,
     ])
   })
   it('gives every line its own ramp from its rung', () => {
@@ -477,10 +475,10 @@ describe('corner-speed excitation ladder', () => {
       const first = group.lines[0]
       const last = group.lines[group.lines.length - 1]
       // First line: the 90 mm/s tier's 20 mm/s rung, ramp (90^2 - 20^2) / 6000 = 1.283333 mm;
-      // last line: the 90 mm/s tier's 38.825 mm/s top printed rung, ramp
-      // (90^2 - 38.825^2) / 6000 = 1.098774 mm; plus the 30 mm read (hand-derived).
+      // last line: the 90 mm/s tier's 55.4 mm/s top rung, ramp
+      // (90^2 - 55.4^2) / 6000 = 0.838473 mm; plus the 30 mm read (hand-derived).
       expect(first.protectedMm).toBeCloseTo(31.283333, 6)
-      expect(last.protectedMm).toBeCloseTo(31.098774, 6)
+      expect(last.protectedMm).toBeCloseTo(30.838473, 6)
     }
   })
 })

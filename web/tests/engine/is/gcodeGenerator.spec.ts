@@ -238,18 +238,17 @@ describe('generateIsGcodeWithReport (Klipper)', () => {
 
   it('names the corner-speed excitation ladder in the header', () => {
     expect(lines[2]).toBe(
-      '; corner-speed excitation ladder 20 to 40.21 mm/s across the 4 lines of each tier, ' +
+      '; corner-speed excitation ladder 20 to 55.4 mm/s across the 4 lines of each tier, ' +
         'fastest corners printed last',
     )
   })
 
   it('cruises each run-up at its own ladder rung (hand-pinned bottom-dense feeds)', () => {
     // Hand-derived once, times 60 and rounded: both tiers share the bottom rungs
-    // 20 * (25.5 / 20)^(j/2) mm/s for j = 0..2; above them the 90 mm/s tier prints
-    // 25.5 * (90 / 25.5)^(1/3) and the 150 mm/s tier 25.5 * (100 / 25.5)^(1/3).
+    // 20 * (25.5 / 20)^(j/2) mm/s for j = 0..2 and the 55.4 mm/s top corner above them.
     const expectedFeeds: Record<number, number[]> = {
-      90: [1200, 1355, 1530, 2329],
-      150: [1200, 1355, 1530, 2413],
+      90: [1200, 1355, 1530, 3324],
+      150: [1200, 1355, 1530, 3324],
     }
     const chunk = measuredChunk(lines)
     for (const group of g.groups) {
@@ -264,8 +263,8 @@ describe('generateIsGcodeWithReport (Klipper)', () => {
 
   it('prints the lines rung by rung, so the corner feeds never fall within a layer', () => {
     // The run-up cruise into each corner is the move ending on the corner; its feed is the
-    // rung. In print order the feeds rise from F1200 to F2413 and never fall: the 90 mm/s
-    // tier's F2329 top rungs come just before the line speed tier's F2413 ones.
+    // rung. In print order the feeds rise from F1200 to F3324 and never fall: the four F3324
+    // top rungs of both tiers come last.
     const chunk = measuredChunk(lines)
     const cornerFeeds = chunk
       .map((l, i) => ({ l, i }))
@@ -273,15 +272,15 @@ describe('generateIsGcodeWithReport (Klipper)', () => {
       .map(({ l }) => Number(l.match(/F(\d+)$/)![1]))
     expect(cornerFeeds).toHaveLength(16)
     expect(cornerFeeds).toEqual([...cornerFeeds].sort((a, b) => a - b))
-    expect(cornerFeeds.slice(-4)).toEqual([2329, 2329, 2413, 2413])
+    expect(cornerFeeds.slice(-4)).toEqual([3324, 3324, 3324, 3324])
   })
 
   it("raises the corner limit to each line's own corner speed after its first stretch, and lowers it before the wipe", () => {
     // Raise values: each tier's rung feeds (see the run-up feed test) as mm/s, rounded up to
     // 3 decimals (hand-derived); lower value: the profile's 5 mm/s.
     const raise: Record<number, string[]> = {
-      90: ['20', '22.584', '25.5', '38.817'],
-      150: ['20', '22.584', '25.5', '40.217'],
+      90: ['20', '22.584', '25.5', '55.4'],
+      150: ['20', '22.584', '25.5', '55.4'],
     }
     const chunk = measuredChunk(lines)
     for (const line of allLines) {
@@ -797,7 +796,6 @@ describe('validation and reporting', () => {
     const r = generateIsGcodeWithReport(profile, filament, {
       ...spec,
       followabilityDampingRatio: 0.2,
-      cornerSpeedMmS: 20,
       speedsMmS: [19, 33],
     })
     expect(r.gcode.split('\n')[1]).toBe('; speed tiers 33 mm/s, acceleration 3000 mm/s^2')

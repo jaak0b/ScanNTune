@@ -27,7 +27,6 @@ import {
 import { unresolvedVariablesWarning } from '../engine/pa/slicerVariables'
 import {
   bandTopWarning,
-  DEFAULT_CORNER_SPEED_MM_S,
   defaultIsTestRequest,
   fitSpecToPrinter,
   MIN_CORNER_SPEED_MM_S,
@@ -66,11 +65,10 @@ const {
 } = useFlowSettingsForm(
   isSettings,
   () => ({
-    // The line and corner speeds are deliberately left empty, unlike the other spec fields:
-    // the generated test overrides the printer's motion limits, so the user must enter values
-    // that are safe for their machine rather than silently inheriting a computed default.
+    // The line speed is deliberately left empty, unlike the other spec fields: the generated
+    // test overrides the printer's motion limits, so the user must enter a value that is safe
+    // for their machine rather than silently inheriting a computed default.
     lineSpeedMmS: null,
-    cornerSpeedMmS: null,
     measuredLineMm: specDefaults.value.measuredLineMm,
     linePitchMm: specDefaults.value.linePitchMm,
     scanPlace: 'part' as ScanPlace,
@@ -86,7 +84,6 @@ const {
 // lie on the glass with the rest overhanging.
 const {
   lineSpeedMmS: tierSpeed,
-  cornerSpeedMmS: cornerSpeed,
   measuredLineMm: measuredLine,
   linePitchMm: linePitch,
   scanPlace,
@@ -112,20 +109,19 @@ const scanPlanNote = computed(() =>
   scanPlanNoteText(scanPlace.value, partColors.value, scanPlanTexts),
 )
 
-// The line and corner speeds must both be entered before a spec can be assembled at all;
-// there is no silent fallback to a computed default. Their bounds (the corner speed floor,
-// and the line speed being no slower than the corner speed) are validateIsSpec's alone: an
-// out-of-bounds pair still assembles, and the validator's own message surfaces below.
-const speedsMissing = computed(() => tierSpeed.value === null || cornerSpeed.value === null)
+// The line speed must be entered before a spec can be assembled at all; there is no silent
+// fallback to a computed default. Its bound (the lowest corner speed of the ladder) is
+// validateIsSpec's alone: an out-of-bounds value still assembles, and the validator's own
+// message surfaces below.
+const lineSpeedMissing = computed(() => tierSpeed.value === null)
 
 const spec = computed<IsTestRequest | null>(() => {
-  if (tierSpeed.value === null || cornerSpeed.value === null) return null
+  if (tierSpeed.value === null) return null
   // Always two tiers and the derived line count; fitSpecToPrinter drops the slower tier when
   // the line speed or the bed is too small for it, with a note.
   return {
     ...specDefaults.value,
     speedsMmS: speedTiersFor(tierSpeed.value),
-    cornerSpeedMmS: cornerSpeed.value,
     measuredLineMm: measuredLine.value ?? specDefaults.value.measuredLineMm,
     linePitchMm: linePitch.value ?? specDefaults.value.linePitchMm,
     axes: ['x', 'y'] as IsAxis[],
@@ -156,11 +152,6 @@ const tiersText = computed(() =>
 )
 const linesText = computed(() =>
   fittedSpec.value ? `${fittedSpec.value.linesPerSpeed} lines per speed tier` : '',
-)
-// Corner speeds above the default are untested, so the page warns above it. It judges the corner
-// speed the coupon prints, which the firmware fit may have lowered below the entered one.
-const fastCornerWarning = computed(
-  () => fittedSpec.value !== null && fittedSpec.value.cornerSpeedMmS > DEFAULT_CORNER_SPEED_MM_S,
 )
 const footprintText = computed(() => {
   if (!fittedSpec.value) return ''
@@ -456,29 +447,7 @@ async function analyze(): Promise<void> {
             :min="MIN_CORNER_SPEED_MM_S"
             data-testid="is-tier-speed"
           />
-          <NumericField
-            v-model="cornerSpeed"
-            label="Corner speed (mm/s)"
-            :step="10"
-            :min="MIN_CORNER_SPEED_MM_S"
-            data-testid="is-corner-speed"
-          />
         </div>
-        <p class="tip mb-0" data-testid="is-layer-shift-note">
-          <strong>Lower the corner speed if the print shows a layer shift.</strong>
-        </p>
-        <v-alert
-          v-if="fastCornerWarning"
-          type="warning"
-          variant="tonal"
-          density="compact"
-          class="mt-2 soft-alert"
-          data-testid="is-fast-corner-warning"
-        >
-          Watch the last lines of the print for a layer shift, because they carry the fastest
-          corners. Corner speeds above {{ DEFAULT_CORNER_SPEED_MM_S }} mm/s are untested and can
-          make the motors skip steps.
-        </v-alert>
         <v-alert
           v-if="highFlowText"
           type="warning"
@@ -570,8 +539,8 @@ async function analyze(): Promise<void> {
         <span v-if="!store.selected || !store.selectedFilament" class="tip mt-0">
           Choose a printer profile first.
         </span>
-        <span v-else-if="speedsMissing" class="tip mt-0">
-          Enter both speeds in step 3 first.
+        <span v-else-if="lineSpeedMissing" class="tip mt-0">
+          Enter the line speed in step 3 first.
         </span>
       </div>
       <div class="alert-stack mt-3">
@@ -711,9 +680,8 @@ async function analyze(): Promise<void> {
       <p v-if="!isCalibrated" class="tip" data-testid="is-scan-needs-calibration">
         Calibrate the scanner in step 1 to enable the analysis.
       </p>
-      <p v-if="speedsMissing" class="tip" data-testid="is-scan-needs-speeds">
-        Enter the line speed and corner speed the coupon was printed with in step 3 to enable
-        the analysis.
+      <p v-if="lineSpeedMissing" class="tip" data-testid="is-scan-needs-speeds">
+        Enter the line speed the coupon was printed with in step 3 to enable the analysis.
       </p>
       <p v-else-if="fitError" class="tip" data-testid="is-scan-fit-error">
         Correct the test settings in step 3 to enable the analysis. {{ fitError }}

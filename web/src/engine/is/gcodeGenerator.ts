@@ -205,8 +205,8 @@ function emitIsGcode(profile: PrinterProfile, filament: FilamentProfile, spec: I
   // (or on the bed) also leave the window open.
   const e = newEmitter(holes)
   const L = e.lines
-  // The ladder's top printed rung: the derived line count prints only the rungs a bead can
-  // follow, so it usually lies below the spec's corner speed.
+  // The ladder's top printed rung: the spec's derived top corner, or the bottom-dense rungs'
+  // own top when the bed fit removed the upper rung.
   const fastestCornerMmS = Number(
     Math.max(...g.groups.flatMap((grp) => grp.lines.map((l) => l.cornerSpeedMmS))).toFixed(2),
   )
@@ -284,7 +284,7 @@ function emitIsGcode(profile: PrinterProfile, filament: FilamentProfile, spec: I
     // measured segment; the corner vertex gets no retract, pause, or E change, so the
     // bead is continuous and the flow constant through the corner. The run-up cruises at
     // the corner speed, so the corner is taken with zero deceleration and the excitation
-    // is the per-axis velocity step at the bend (see cornerSpeedMmS on IsTestSpec); the
+    // is the per-axis velocity step at the bend (see topCornerMmS on IsTestSpec); the
     // measured segment is commanded at the tier speed.
     // The single beads over the open window are bridges; standard bridge practice is
     // maximum part cooling, fixed and identical across tiers so cooling never varies

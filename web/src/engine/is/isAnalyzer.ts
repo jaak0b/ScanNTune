@@ -322,26 +322,6 @@ function refusedAxis(
   }
 }
 
-/**
- * Ladder-specific guidance on a refused axis: when ringing is detected only on lines whose
- * corners are faster than every line without it, the coupon self-ranged and the remedy is a
- * faster ladder, raised in small steps because the fastest corners also load the motors
- * hardest. Null when the detections do not show that split.
- */
-export function ladderAdvice(lines: IsLineOutcome[]): string | null {
-  const traced = lines.filter((l) => l.traced && l.detectionPBound !== null)
-  const detected = traced.filter((l) => l.detected)
-  const silent = traced.filter((l) => !l.detected)
-  if (detected.length === 0 || silent.length === 0) return null
-  const slowestDetected = Math.min(...detected.map((l) => l.cornerSpeedMmS))
-  const fastestSilent = Math.max(...silent.map((l) => l.cornerSpeedMmS))
-  if (slowestDetected <= fastestSilent) return null
-  return (
-    'Only the lines with the fastest corners showed ringing. Raise the corner speed in small ' +
-    'steps and reprint, and lower it again if the print shows a layer shift.'
-  )
-}
-
 const NOT_TRACED_REASON =
   'The line could not be traced in the scan. It may be damaged, incompletely printed, or ' +
   'partly outside the scan area.'
@@ -531,10 +511,7 @@ function axisResult(group: IsLineGroup, traced: TracedAxisGroup, pool: AxisPool,
     const r = refusedAxis(group.axis, [...pool.refusals], tracedIndices.length, scanIndex, lines)
     Object.assign(r, checks)
     r.linesUsed = pool.linesUsed
-    // A remedy specific to the coupon replaces the generic rescan advice instead of
-    // competing with it.
-    const advice = ladderAdvice(lines) ?? pool.rescanAdvice
-    if (advice !== null) r.refusals.push(advice)
+    if (pool.rescanAdvice !== null) r.refusals.push(pool.rescanAdvice)
     return r
   }
 

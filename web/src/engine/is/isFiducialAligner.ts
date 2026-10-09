@@ -284,11 +284,11 @@ function selectCandidateByContent(
     // orientation was solved, but the printed run-up legs are not where the configured
     // geometry places them. The dominant cause is a coupon printed under different test
     // settings than are configured now: the speed tiers, the lines per speed tier and the line
-    // positions all derive from the line speed, the corner speed and the printer profile, so
-    // name those settings and the action.
+    // positions all derive from the line speed and the printer profile, so name those settings
+    // and the action.
     return fail(
       'The coupon in the scan does not match the configured test settings. Select the printer ' +
-        'profile and enter the line speed and corner speed this coupon was printed with, then ' +
+        'profile and enter the line speed this coupon was printed with, then ' +
         'analyze again. The fiducial holes were found, but the lines per speed tier and their ' +
         'positions, which follow from those settings, differ from the print.',
       4,

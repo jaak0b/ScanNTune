@@ -4,8 +4,7 @@ import { getCv } from '../../helpers/cv'
 import { renderIsScan } from '../../helpers/isRender'
 import type { IsRenderOptions } from '../../helpers/isRender'
 import { rgbaToBgrMat } from '../../../src/engine/imageData'
-import { analyzeIsCoupon, ladderAdvice } from '../../../src/engine/is/isAnalyzer'
-import type { IsLineOutcome } from '../../../src/engine/is/resultTypes'
+import { analyzeIsCoupon } from '../../../src/engine/is/isAnalyzer'
 import type { IsResult, IsAxisResult } from '../../../src/engine/is/resultTypes'
 import { defaultIsTestRequest, fitSpecToPrinter } from '../../../src/engine/is/types'
 import type { IsTestSpec } from '../../../src/engine/is/types'
@@ -484,38 +483,6 @@ describe('analyzeIsCoupon render recovery', () => {
     },
     240000,
   )
-
-  it('advises a faster ladder only when ringing shows on the fastest corners alone', () => {
-    const outcome = (cornerSpeedMmS: number, detected: boolean): IsLineOutcome => ({
-      lineIndex: 0,
-      axis: 'y',
-      speedMmS: 150,
-      cornerSpeedMmS,
-      traced: true,
-      accepted: false,
-      usedInJointFit: true,
-      exclusion: null,
-      refusalReason: null,
-      refusalCategory: null,
-      detected,
-      detectionPBound: detected ? 1e-6 : 0.5,
-      frequencyHz: null,
-      amplitudeMm: null,
-      startPx: null,
-      endPx: null,
-    })
-    // Clean split: every line with ringing sits on a faster rung than every line without.
-    const split = [outcome(20, false), outcome(45, false), outcome(70, true), outcome(100, true)]
-    expect(ladderAdvice(split)).toBe(
-      'Only the lines with the fastest corners showed ringing. Raise the corner speed in small ' +
-        'steps and reprint, and lower it again if the print shows a layer shift.',
-    )
-    // No split (a slow rung shows ringing, a faster one does not): no advice.
-    const mixed = [outcome(20, true), outcome(45, false), outcome(70, true), outcome(100, true)]
-    expect(ladderAdvice(mixed)).toBeNull()
-    // Ringing on every line: nothing to advise about the ladder.
-    expect(ladderAdvice([outcome(20, true), outcome(100, true)])).toBeNull()
-  })
 
   it('reports a failed alignment with a reason on a blank image', async () => {
     const cv = await getCv()

@@ -48,21 +48,20 @@ export interface IsTestSpec {
   axes: IsAxis[]
   accelMmS2: number
   /**
-   * TOP of the corner-speed excitation ladder. Each tier's lines take their corner at run-up
-   * speeds spaced from MIN_CORNER_SPEED_MM_S towards this value (or towards the tier's own
-   * speed when that is slower), one rung per line (the step-excitation idea of Klipper's
-   * ringing tower: the print self-ranges, so some lines ring visibly regardless of frame
-   * stiffness); only the rungs whose bead can follow a ring are printed (ladderCornerSpeeds,
-   * ladderLinesPerSpeed), so the fastest printed corner usually lies below it. The emitted motion limits set the firmware's corner limit to the line's
-   * own rung, so the planner takes every 90 degree corner at that line's full run-up speed
-   * with zero deceleration: the pressure dump K * (v_in - v_corner) is zero by construction
-   * and the bead stays continuous. The excitation is the per-axis velocity step at the
-   * corner; the residual ring amplitude is approximately delta-v over omega, so faster
-   * rungs ring the frame proportionally harder. The printer fit (fitSpecToPrinter) lowers
-   * it to the fastest corner the firmware's corner limit can express at the test
-   * acceleration.
+   * TOP of the corner-speed excitation ladder, derived by fitSpecToPrinter
+   * (fastestReadableCornerMmS): the fastest corner whose bead still follows a ring at one grid
+   * frequency of the band at least, on the slowest tier, and never faster than the corner
+   * ceiling (cornerCeilingMmS). Each tier's lines take their corner at run-up speeds spaced from
+   * MIN_CORNER_SPEED_MM_S up to this value, one rung per line (the step-excitation idea of
+   * Klipper's ringing tower: the print self-ranges, so some lines ring visibly regardless of
+   * frame stiffness; see ladderCornerSpeeds). The emitted motion limits set the firmware's
+   * corner limit to the line's own rung, so the planner takes every 90 degree corner at that
+   * line's full run-up speed with zero deceleration: the pressure dump K * (v_in - v_corner) is
+   * zero by construction and the bead stays continuous. The excitation is the per-axis velocity
+   * step at the corner; the residual ring amplitude is approximately delta-v over omega, so
+   * faster rungs ring the frame proportionally harder.
    */
-  cornerSpeedMmS: number
+  topCornerMmS: number
   /**
    * The fastest corner speed whose bead still follows a ring at every grid frequency of the band
    * on the slowest tier (fastestFollowableCornerMmS), derived by fitSpecToPrinter. The ladder places its
@@ -93,13 +92,13 @@ export interface IsTestSpec {
 }
 
 /**
- * What the page asks for: a spec without its line count and its followable corner. Both are
- * always derived by fitSpecToPrinter after the firmware fit (fastestFollowableCornerMmS,
+ * What the page asks for: a spec without its line count and its ladder corners. All three are
+ * always derived by fitSpecToPrinter (fastestFollowableCornerMmS, fastestReadableCornerMmS,
  * ladderLinesPerSpeed), so the generator and the analysis both read one fitted IsTestSpec.
  */
-export type IsTestRequest = Omit<IsTestSpec, 'linesPerSpeed' | 'followableCornerMmS'>
+export type IsTestRequest = Omit<IsTestSpec, 'linesPerSpeed' | 'followableCornerMmS' | 'topCornerMmS'>
 
-/** A request whose followable corner is resolved, its line count still open. */
+/** A request whose ladder corners are resolved, its line count still open. */
 type LadderRequest = Omit<IsTestSpec, 'linesPerSpeed'>
 
 /** Frequency search range of the ringing fit: the flow's measurable resonance band. */
@@ -172,30 +171,6 @@ export const MIN_LINES_PER_SPEED = 3
 /** Extra replicate lines cost little coupon area and raise the chance that at least the
  *  required three lines per axis survive print damage and scan artifacts. */
 export const MAX_LINES_PER_SPEED = 15
-/**
- * Default corner (run-up) speed, the top rung of the ladder: the fastest corner proven to
- * print clean on a tested 300 mm CoreXY printer, where ladders topping out at 145 to 200 mm/s
- * skipped steps. The field is entered by the user, and the page warns above this value. The
- * corner's velocity step leaves a residual ring amplitude of approximately delta-v over omega:
- * at 100 mm/s about 0.64 mm at 25 Hz down to 0.27 mm at 60 Hz, several scanner pixels at
- * 600 dpi even on stiff frames.
- *
- * Why no safe corner speed is computed: at the corner the field of a motor jumps while its
- * rotor and the reflected load keep their velocity. The motor stays in step while the kinetic
- * energy of that velocity step, 0.5 * J_eff * (dv_m / r)^2, stays below the work 2 * T_h / N_r
- * the holding torque does across the stable half of the sinusoidal torque-angle curve (the
- * equal-area criterion, Kundur 1994 section 13.1.2, applied to the torque-angle curve of
- * Acarnley 2002 chapters 2 to 5). The criterion is sufficient, not exact: it ignores damping,
- * and energy conservation in the field frame keeps it valid with belt compliance. The holding
- * torque T_h, the rotor tooth count N_r, the rotor inertia, the pulley radius r and the moving
- * mass are not in the printer profile, so no bound follows from the profile. Qualitatively the
- * risk grows with dv_m^2: on CoreXY one motor reverses by twice the corner speed, which
- * quadruples its rotor energy at the same corner speed, while the load term grows only about
- * 1.5 to 2 times; the other motor carries about a third of the reversing motor's reaction
- * through the mass coupling (m_x - m_y) / 4; 0.9 degree motors have half the well depth; and
- * the acceleration ramp after the corner tilts the well by about 5%.
- */
-export const DEFAULT_CORNER_SPEED_MM_S = 100
 /** The line speed the defaults are built around. */
 const DEFAULT_LINE_SPEED_MM_S = 150
 
@@ -207,18 +182,17 @@ export function defaultIsTestRequest(profile: PrinterProfile): IsTestRequest {
     // Five wavelengths of the lowest resonance of interest at the tier speed:
     // 5 * tierSpeed / 25 Hz, so 30 mm at the 150 mm/s default tier.
     measuredLineMm: 30,
-    // Hosts the ramp to the 100 mm/s default corner speed (about 1.7 mm at 3000 mm/s^2)
-    // with cruise to spare; the through-band leg stretch is extra.
+    // Hosts the ramp to the ladder's top corner (55.4 mm/s by default, a 0.51 mm ramp at
+    // 3000 mm/s^2) with cruise to spare; the through-band leg stretch is extra.
     runUpMm: 8,
     // The pitch must exceed twice the expected residual ring amplitude plus the bead
-    // width; the worst case is about 0.64 mm of amplitude at the default corner speed
-    // (see DEFAULT_CORNER_SPEED_MM_S), so 2.5 mm keeps neighbouring traces apart.
+    // width; the ring amplitude is about the corner speed over omega, 0.44 mm for the default
+    // 55.4 mm/s top corner at 20 Hz, so 2.5 mm keeps neighbouring traces apart.
     linePitchMm: 2.5,
     axes: ['x', 'y'],
     // The test runs at the profile's own print acceleration: the ringing excitation is the
     // velocity step at the corner, which the acceleration does not set.
     accelMmS2: profile.printAccelMmS2,
-    cornerSpeedMmS: DEFAULT_CORNER_SPEED_MM_S,
     followabilityDampingRatio: FOLLOWABILITY_DAMPING_RATIO,
     weldMm: 1,
     placement: 'center',
@@ -238,19 +212,12 @@ export function validateIsSpec(spec: IsTestRequest): void {
   if (spec.runUpMm <= 0) throw new Error('Run-up length must be positive')
   if (spec.linePitchMm <= 0) throw new Error('Line pitch must be positive')
   if (spec.accelMmS2 <= 0) throw new Error('Acceleration must be positive')
-  if (spec.cornerSpeedMmS < MIN_CORNER_SPEED_MM_S) {
+  // The ladder's bottom rung needs a line at least as fast as it. A slower tier below that
+  // floor is not an error: fitSpecToPrinter drops it (fitTiersToLadder).
+  if (Math.max(...spec.speedsMmS) < MIN_CORNER_SPEED_MM_S) {
     throw new Error(
-      `The corner speed must be at least ${MIN_CORNER_SPEED_MM_S} mm/s; below that the ` +
-        'corner excitation is too weak to leave a readable trace.',
-    )
-  }
-  // With the corner speed floor above, this also holds the line speed to at least
-  // MIN_CORNER_SPEED_MM_S. A slower tier below that floor is not an error: fitSpecToPrinter
-  // drops it (fitTiersToLadder).
-  if (Math.max(...spec.speedsMmS) < spec.cornerSpeedMmS) {
-    throw new Error(
-      `The line speed must be at least the ${spec.cornerSpeedMmS} mm/s corner speed. A ` +
-        'slower line caps the corner below the corner speed and weakens the excitation.',
+      `The line speed must be at least the ${MIN_CORNER_SPEED_MM_S} mm/s lowest corner speed. ` +
+        'Below that, the corner excitation is too weak to leave a readable trace.',
     )
   }
   if (spec.weldMm <= 0) throw new Error('Weld length must be positive')
@@ -259,8 +226,8 @@ export function validateIsSpec(spec: IsTestRequest): void {
 
 /**
  * Warns (does not throw) on spec combinations that weaken the ringing signal. The run-up
- * leg only needs to reach the corner speed before the corner: the emitted corner limit
- * equals that speed, so it cruises straight into the bend with no deceleration term. The
+ * leg only needs to reach the ladder's top corner speed before the corner: the emitted corner
+ * limit equals that speed, so it cruises straight into the bend with no deceleration term. The
  * acceleration ramp from the corner to each tier speed is reserved by the layout in
  * front of the clean read length, so a long ramp grows the coupon instead of eating the
  * measured line; no per-tier warning is needed for it.
@@ -268,10 +235,10 @@ export function validateIsSpec(spec: IsTestRequest): void {
 export function rampWarnings(spec: IsTestSpec): string[] {
   const warnings: string[] = []
   // The run-up must reach its cruise speed before the corner: v^2 / 2a from rest.
-  const rampUpMm = accelRampMm(spec.cornerSpeedMmS, spec.accelMmS2)
+  const rampUpMm = accelRampMm(spec.topCornerMmS, spec.accelMmS2)
   if (rampUpMm > spec.runUpMm) {
     warnings.push(
-      `The ${spec.runUpMm} mm run-up is too short to reach the ${spec.cornerSpeedMmS} mm/s ` +
+      `The ${spec.runUpMm} mm run-up is too short to reach the ${spec.topCornerMmS} mm/s ` +
         `corner speed at ${spec.accelMmS2} mm/s^2. Lengthen the run-up.`,
     )
   }
@@ -292,10 +259,7 @@ const FOLLOWABILITY_STEP_MM = 0.1
 /** Resolution of the followable corner speed. */
 const FOLLOWABLE_CORNER_STEP_MM_S = 0.1
 /** What a line's ring path depends on besides its tier and corner speeds. */
-type RingPathInputs = Pick<
-  IsTestSpec,
-  'accelMmS2' | 'cornerSpeedMmS' | 'measuredLineMm' | 'followabilityDampingRatio'
->
+type RingPathInputs = Pick<IsTestSpec, 'accelMmS2' | 'measuredLineMm' | 'followabilityDampingRatio'>
 
 /**
  * The smallest radius of curvature of a ring path over a line's read window, from the first
@@ -406,35 +370,87 @@ function designBandTopHz(
 }
 
 /**
+ * The fastest corner the ladder may print: Klipper's centripetal junction limit over the
+ * shortest run-up move at the test acceleration (klipperCentripetalCornerCapMmS), or the slowest
+ * tier's own speed when that is slower, because a run-up cruising faster than the line it feeds
+ * would brake into the corner instead of passing it.
+ */
+function cornerCeilingMmS(request: IsTestRequest): number {
+  const firmwareCap = klipperCentripetalCornerCapMmS(shortestRunUpMoveMm(request), request.accelMmS2)
+  return Math.min(firmwareCap, Math.min(...request.speedsMmS))
+}
+
+/**
+ * The fastest corner speed on a FOLLOWABLE_CORNER_STEP_MM_S grid from MIN_CORNER_SPEED_MM_S up to
+ * `ceilingMmS` that satisfies `holds`, found by bisection; `holds` must be monotone (true up to
+ * some corner speed, false above it). Returns the ceiling when even it holds; MIN_CORNER_SPEED_MM_S
+ * itself must hold.
+ */
+function fastestCornerOnGrid(ceilingMmS: number, holds: (cornerMmS: number) => boolean): number {
+  const step = FOLLOWABLE_CORNER_STEP_MM_S
+  if (holds(ceilingMmS)) return ceilingMmS
+  // Bisection on the grid index; invariant: lo * step holds, hi * step does not.
+  let lo = Math.round(MIN_CORNER_SPEED_MM_S / step)
+  let hi = Math.ceil(ceilingMmS / step)
+  while (hi - lo > 1) {
+    const mid = Math.floor((lo + hi) / 2)
+    if (holds(mid * step)) lo = mid
+    else hi = mid
+  }
+  return Number((lo * step).toFixed(1))
+}
+
+/**
  * The fastest corner speed, on a FOLLOWABLE_CORNER_STEP_MM_S grid, whose bead follows a ring at
  * every grid frequency up to the design band top (designBandTopHz) on the slowest tier, found by
- * bisection between MIN_CORNER_SPEED_MM_S and the tier's ladder top: at every sample a faster
- * corner rings with a larger amplitude and leaves a smaller along-track gain over its own speed,
- * so its path curves more sharply at every frequency. The slowest tier binds: its along-track
- * speed is the lowest, so every faster tier follows the same corners. The bottom rung follows up
- * to the design band top by its definition. Returns the ladder top when even that rung follows,
+ * bisection between MIN_CORNER_SPEED_MM_S and the corner ceiling (cornerCeilingMmS): at every
+ * sample a faster corner rings with a larger amplitude and leaves a smaller along-track gain over
+ * its own speed, so its path curves more sharply at every frequency. The slowest tier binds: its
+ * along-track speed is the lowest, so every faster tier follows the same corners. The bottom rung
+ * follows up to the design band top by its definition. Returns the ceiling when even it follows,
  * and one step below MIN_CORNER_SPEED_MM_S when there is no design band top.
  */
 export function fastestFollowableCornerMmS(
   request: IsTestRequest,
   profile: PrinterProfile,
 ): number {
-  const step = FOLLOWABLE_CORNER_STEP_MM_S
   const topHz = designBandTopHz(request, profile)
-  if (topHz === null) return MIN_CORNER_SPEED_MM_S - step
+  if (topHz === null) return MIN_CORNER_SPEED_MM_S - FOLLOWABLE_CORNER_STEP_MM_S
   const slowest = Math.min(...request.speedsMmS)
-  const follows = (c: number) => followsBandUpTo(request, profile, slowest, c, topHz)
-  const top = tierLadderTopMmS(request, slowest)
-  if (follows(top)) return top
-  // Bisection on the grid index; invariant: lo * step follows, hi * step does not.
-  let lo = Math.round(MIN_CORNER_SPEED_MM_S / step)
-  let hi = Math.ceil(top / step)
-  while (hi - lo > 1) {
-    const mid = Math.floor((lo + hi) / 2)
-    if (follows(mid * step)) lo = mid
-    else hi = mid
-  }
-  return Number((lo * step).toFixed(1))
+  return fastestCornerOnGrid(cornerCeilingMmS(request), (c) =>
+    followsBandUpTo(request, profile, slowest, c, topHz),
+  )
+}
+
+/**
+ * The top of the ladder: the fastest corner speed, on a FOLLOWABLE_CORNER_STEP_MM_S grid up to the
+ * corner ceiling (cornerCeilingMmS), whose bead on the slowest tier still follows a ring at one
+ * grid frequency of the band at least, at the design damping ratio. A faster corner folds the
+ * bead at every band frequency, so its line reads on no printer, whatever the resonance: this is
+ * the natural end of the excitation ladder, and no chosen speed is needed. The criterion is
+ * monotone in the corner speed, because at every frequency a faster corner curves the path more
+ * sharply (see fastestFollowableCornerMmS), so the corners that follow somewhere in the band are
+ * exactly those below one speed; bisection finds it. The slowest tier binds, as for the followable
+ * corner. Returns MIN_CORNER_SPEED_MM_S when not even the bottom rung follows anywhere in the band;
+ * such a coupon reads nothing and fitSpecToPrinter refuses it.
+ *
+ * No motor stall bound is applied, because none follows from the printer profile: at the corner
+ * the field of a motor jumps while its rotor and the reflected load keep their velocity. The
+ * motor stays in step while the kinetic energy of that velocity step, 0.5 * J_eff * (dv_m / r)^2,
+ * stays below the work 2 * T_h / N_r the holding torque does across the stable half of the
+ * sinusoidal torque-angle curve (the equal-area criterion, Kundur 1994 section 13.1.2, applied to
+ * the torque-angle curve of Acarnley 2002 chapters 2 to 5). The holding torque T_h, the rotor
+ * tooth count N_r, the rotor inertia, the pulley radius r and the moving mass are not in the
+ * printer profile. Qualitatively the risk grows with dv_m^2: on CoreXY one motor reverses by twice
+ * the corner speed, which quadruples its rotor energy at the same corner speed. The lines print
+ * in ascending corner speed, so the fastest corners come last in every layer
+ * (IsCouponGeometry.printOrder).
+ */
+export function fastestReadableCornerMmS(request: IsTestRequest, profile: PrinterProfile): number {
+  const slowest = Math.min(...request.speedsMmS)
+  const reads = (c: number) => followsSomewhereInBand(request, profile, slowest, c)
+  if (!reads(MIN_CORNER_SPEED_MM_S)) return MIN_CORNER_SPEED_MM_S
+  return fastestCornerOnGrid(cornerCeilingMmS(request), reads)
 }
 
 /**
@@ -488,12 +504,11 @@ function followsSomewhereInBand(
  * The derived lines per speed. When the fastest followable corner splits the slowest tier's
  * ladder (it lies at or above the bottom rung and below the ladder top), the ladder takes
  * MIN_ACCEPTED_LINES rungs at or below it, so the design band (up to designBandTopHz) stays
- * readable at the analysis' line floor, and above them the upper rungs of ladderCornerSpeeds,
- * lowest first, as long as the rung of every tier follows a ring at one grid frequency of the
- * band at least. An upper rung that folds at every band frequency reads on no printer, whatever
- * its resonance, so it is not printed; at most MIN_ACCEPTED_LINES upper rungs are taken. With the
- * default profile one upper rung follows at the low end of the band: 4 lines. Otherwise every
- * rung follows (or none does), and the followable line floor is the count.
+ * readable at the analysis' line floor, and one upper rung at the ladder top
+ * (fastestReadableCornerMmS): the hardest excitation whose bead still follows a ring somewhere in
+ * the band, for a stiff frame whose ring the slower rungs leave small. With the default profile
+ * that gives 4 lines. Otherwise every rung follows up to the design band top (or none does), and
+ * the followable line floor is the count.
  */
 export function ladderLinesPerSpeed(request: LadderRequest, profile: PrinterProfile): number {
   const slowest = Math.min(...request.speedsMmS)
@@ -501,16 +516,7 @@ export function ladderLinesPerSpeed(request: LadderRequest, profile: PrinterProf
   if (c < MIN_CORNER_SPEED_MM_S || c >= tierLadderTopMmS(request, slowest)) {
     return followableLineFloor(request, profile)
   }
-  const full: IsTestSpec = { ...request, linesPerSpeed: 2 * MIN_ACCEPTED_LINES }
-  const ladders = request.speedsMmS.map((v) => ({ v, rungs: ladderCornerSpeeds(full, v) }))
-  let n = MIN_ACCEPTED_LINES
-  while (
-    n < full.linesPerSpeed &&
-    ladders.every(({ v, rungs }) => followsSomewhereInBand(request, profile, v, rungs[n]))
-  ) {
-    n++
-  }
-  return n
+  return MIN_ACCEPTED_LINES + 1
 }
 
 /**
@@ -576,12 +582,12 @@ export function fitSpecToPrinter(
   profile: PrinterProfile,
 ): { spec: IsTestSpec; notes: string[] } {
   const tiers = fitTiersToLadder(request)
-  const firmware = fitSpecToFirmware(tiers.request)
-  const bed = fitSpecToBed(firmware.request, profile)
+  checkFirmwareCorner(tiers.request)
+  const bed = fitSpecToBed(tiers.request, profile)
   if (guaranteedBandTopHz(bed.spec, profile) === null) {
     throw new Error(readsNothingMessage(bed.spec.accelMmS2))
   }
-  return { spec: bed.spec, notes: [...tiers.notes, ...firmware.notes, ...bed.notes] }
+  return { spec: bed.spec, notes: [...tiers.notes, ...bed.notes] }
 }
 
 const ONE_TIER_CONSEQUENCE =
@@ -606,7 +612,7 @@ function withoutSlowerTier<R extends Pick<IsTestSpec, 'speedsMmS'>>(
  * Drops the slower tier when it falls below MIN_CORNER_SPEED_MM_S, the bottom rung of every
  * tier's corner-speed ladder: such a tier cannot host its ladder. With the derived tiers of
  * speedTiersFor this happens below MIN_TWO_TIER_LINE_SPEED_MM_S. The line speed itself never
- * falls below the rung, because validateIsSpec holds it to at least the corner speed.
+ * falls below the rung, because validateIsSpec holds it to at least MIN_CORNER_SPEED_MM_S.
  */
 function fitTiersToLadder(request: IsTestRequest): { request: IsTestRequest; notes: string[] } {
   if (request.speedsMmS.length < 2 || Math.min(...request.speedsMmS) >= MIN_CORNER_SPEED_MM_S) {
@@ -625,14 +631,13 @@ function fitTiersToLadder(request: IsTestRequest): { request: IsTestRequest; not
 }
 
 /**
- * Lowers the corner speed to the fastest corner the firmware can take at the test
- * acceleration: Klipper's centripetal junction limit over the shortest run-up move (see
- * klipperCentripetalCornerCapMmS). The lowered value becomes the spec's one corner speed, so
- * the ladder's top rung, the ramps, the packing, the emitted limits, and the analysis time
- * base all agree with the corner the printer actually takes. Throws when the firmware cannot
- * take even the minimum corner speed.
+ * Throws when the firmware cannot take even the ladder's bottom rung at the test acceleration:
+ * Klipper's centripetal junction limit over the shortest run-up move (see
+ * klipperCentripetalCornerCapMmS). Below that the ladder top is bounded by the same limit
+ * (cornerCeilingMmS), so the ladder, the ramps, the packing, the emitted limits, and the analysis
+ * time base all agree with the corners the printer actually takes.
  */
-function fitSpecToFirmware(request: IsTestRequest): { request: IsTestRequest; notes: string[] } {
+function checkFirmwareCorner(request: IsTestRequest): void {
   const legMm = shortestRunUpMoveMm(request)
   const cap = klipperCentripetalCornerCapMmS(legMm, request.accelMmS2)
   if (cap < MIN_CORNER_SPEED_MM_S) {
@@ -643,29 +648,20 @@ function fitSpecToFirmware(request: IsTestRequest): { request: IsTestRequest; no
         'minimum.',
     )
   }
-  if (request.cornerSpeedMmS <= cap) return { request, notes: [] }
-  return {
-    request: { ...request, cornerSpeedMmS: cap },
-    notes: [
-      `The corner speed was limited to ${cap} mm/s because Klipper's centripetal ` +
-        `junction limit allows no faster corner after the ${legMm} mm run-up at ` +
-        `${request.accelMmS2} mm/s^2.`,
-    ],
-  }
 }
 
 const BED_FIT_REASON = 'so the coupon fits the configured bed.'
 
 /**
- * Resolves the followable corner and the derived lines per speed, then shrinks the request
+ * Resolves the ladder corners and the derived lines per speed, then shrinks the request
  * until the coupon fits the configured bed, in this order: the measured lines are shortened
  * toward the minimum length, then the lines per speed are reduced toward the followable line
  * floor (taking the longest read length that fits at each count), then the derived slower tier
  * is dropped and the same two reductions run on the single tier. Removing a line removes an
  * upper rung of the bottom-dense ladder, and the floor keeps MIN_ACCEPTED_LINES followable
- * rungs, so the bed fit never lowers the band top the coupon can read. The followable corner is
- * found at the requested read length; a shorter read only shortens the window it is judged
- * over, so its rungs stay followable. Throws when the bed cannot host even the smallest
+ * rungs, so the bed fit never lowers the band top the coupon can read. The ladder corners are
+ * found at the requested read length; a shorter read only shortens the window they are judged
+ * over, so their rungs stay followable. Throws when the bed cannot host even the smallest
  * coupon. Every reduction is described in a user-worded note; a derived line count that
  * changes with the tiers is no reduction and gets none.
  */
@@ -675,7 +671,11 @@ function fitSpecToBed(
 ): { spec: IsTestSpec; notes: string[] } {
   const attempt = (speedsMmS: number[]): { spec: IsTestSpec; notes: string[] } | null => {
     const tiers = { ...request, speedsMmS }
-    const base = { ...tiers, followableCornerMmS: fastestFollowableCornerMmS(tiers, profile) }
+    const base: LadderRequest = {
+      ...tiers,
+      followableCornerMmS: fastestFollowableCornerMmS(tiers, profile),
+      topCornerMmS: fastestReadableCornerMmS(tiers, profile),
+    }
     const derivedLines = ladderLinesPerSpeed(base, profile)
     const floorLines = followableLineFloor(base, profile)
     for (let n = derivedLines; n >= floorLines; n--) {

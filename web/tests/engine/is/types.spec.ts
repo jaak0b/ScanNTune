@@ -29,7 +29,6 @@ describe('defaultIsTestRequest', () => {
     expect(request.runUpMm).toBe(8)
     expect(request.linePitchMm).toBe(2.5)
     expect(request.axes).toEqual(['x', 'y'])
-    expect(request.cornerSpeedMmS).toBe(100)
     expect(request.weldMm).toBe(1)
     expect(request.placement).toBe('center')
     expect(request.contrastBase).toBe(false)
@@ -74,36 +73,16 @@ describe('validateIsSpec', () => {
     expect(() => validateIsSpec({ ...request, accelMmS2: 0 })).toThrow(/positive/)
     expect(() => validateIsSpec({ ...request, weldMm: 0 })).toThrow(/positive/)
   })
-  it('throws when the corner speed sits below the 20 mm/s floor', () => {
-    expect(() => validateIsSpec({ ...request, cornerSpeedMmS: 19 })).toThrow(/at least 20 mm\/s/)
-    expect(() =>
-      validateIsSpec({ ...request, cornerSpeedMmS: 20, speedsMmS: [20] }),
-    ).not.toThrow()
-  })
-  it('throws when the line speed (the fastest tier) sits below the corner speed', () => {
-    // A slower line caps the planner's corner junction at its cruise speed, so the
-    // configured corner speed would never be reached.
-    expect(() => validateIsSpec({ ...request, speedsMmS: [99] })).toThrow(
-      'The line speed must be at least the 100 mm/s corner speed. A slower line caps the ' +
-        'corner below the corner speed and weakens the excitation.',
+  it('throws when the line speed (the fastest tier) sits below the 20 mm/s bottom rung', () => {
+    expect(() => validateIsSpec({ ...request, speedsMmS: [19] })).toThrow(
+      'The line speed must be at least the 20 mm/s lowest corner speed. Below that, the corner ' +
+        'excitation is too weak to leave a readable trace.',
     )
-    // A slower derived tier is legal: its own ladder tops out at its speed.
-    expect(() => validateIsSpec({ ...request, speedsMmS: [99, 150] })).not.toThrow()
+    expect(() => validateIsSpec({ ...request, speedsMmS: [20] })).not.toThrow()
   })
   it('accepts a slower tier below the 20 mm/s bottom rung, which the printer fit drops', () => {
     // The tiers of a 33 mm/s line speed: 33 / 1.6547 = 19.94 -> 19 mm/s.
-    expect(() =>
-      validateIsSpec({ ...request, cornerSpeedMmS: 20, speedsMmS: [19, 33] }),
-    ).not.toThrow()
-  })
-  it('still refuses a line speed below 20 mm/s', () => {
-    // The line speed is held to the corner speed, and the corner speed to the 20 mm/s floor.
-    expect(() => validateIsSpec({ ...request, cornerSpeedMmS: 20, speedsMmS: [19] })).toThrow(
-      'The line speed must be at least the 20 mm/s corner speed.',
-    )
-    expect(() => validateIsSpec({ ...request, cornerSpeedMmS: 19, speedsMmS: [19] })).toThrow(
-      'The corner speed must be at least 20 mm/s',
-    )
+    expect(() => validateIsSpec({ ...request, speedsMmS: [19, 33] })).not.toThrow()
   })
   it('throws when the clean read length is shorter than the 20 mm floor', () => {
     expect(() => validateIsSpec({ ...request, measuredLineMm: 19 })).toThrow(/at least 20 mm/)
@@ -116,26 +95,26 @@ describe('validateIsSpec', () => {
 
 describe('rampWarnings', () => {
   const spec = fitted(request)
-  it('is silent at a low acceleration whose run-up still reaches the corner speed', () => {
+  it('is silent at a low acceleration whose run-up still reaches the top corner speed', () => {
     // The excitation is the velocity step at the corner, which the acceleration does not
     // set, so a low acceleration alone is no reason to warn: at 1000 mm/s^2 the ramp to
-    // the 100 mm/s corner speed is 100^2 / 2000 = 5 mm, inside the 8 mm run-up.
+    // the 55.4 mm/s top corner is 55.4^2 / 2000 = 1.53 mm, inside the 8 mm run-up.
     expect(rampWarnings({ ...spec, accelMmS2: 1000 })).toEqual([])
   })
-  it('warns when the run-up cannot host the ramp to the 100 mm/s corner speed', () => {
-    // At 4000 mm/s^2 the ramp from rest to 100 mm/s is 100^2 / 8000 = 1.25 mm; there
+  it('warns when the run-up cannot host the ramp to the 55.4 mm/s top corner speed', () => {
+    // At 4000 mm/s^2 the ramp from rest to 55.4 mm/s is 55.4^2 / 8000 = 0.3836 mm; there
     // is no deceleration term because the run-up cruises into the corner at the emitted
     // corner limit.
-    const warnings = rampWarnings({ ...spec, accelMmS2: 4000, runUpMm: 1.2 })
+    const warnings = rampWarnings({ ...spec, accelMmS2: 4000, runUpMm: 0.38 })
     expect(warnings).toHaveLength(1)
     expect(warnings[0]).toContain('run-up')
-    expect(warnings[0]).toContain('100 mm/s')
-    expect(rampWarnings({ ...spec, accelMmS2: 4000, runUpMm: 1.3 })).toEqual([])
+    expect(warnings[0]).toContain('55.4 mm/s')
+    expect(rampWarnings({ ...spec, accelMmS2: 4000, runUpMm: 0.39 })).toEqual([])
   })
   it('does not warn about tier ramps: the layout reserves them before the read window', () => {
     // At 2000 mm/s^2 the 300 mm/s tier needs a long ramp past the corner; the geometry
     // allocates it in front of the clean read length, and the 8 mm run-up still hosts its
-    // 2.5 mm ramp to the corner speed, so nothing warns.
+    // 0.77 mm ramp to the top corner speed, so nothing warns.
     expect(rampWarnings({ ...spec, accelMmS2: 2000, speedsMmS: [150, 300] })).toEqual([])
   })
   it('computes the ramp distance v^2 / (2a)', () => {
@@ -149,25 +128,25 @@ describe('bottom-dense ladder and derived lines per speed (bead followability on
   // profile from the first traced sample, 200 Hz lateral ring, 20 Hz along-track ring, damping
   // 0.03): 25.5 mm/s leaves a smallest radius of 0.2107 mm, 25.6 mm/s 0.2093 mm.
   it('derives four lines per speed for the defaults, three of whose rungs stay followable', () => {
-    // The upper rungs of the 90 mm/s tier, 38.82, 59.11 and 90 mm/s, follow a ring at 39, 0 and 0
-    // grid frequencies of the band (counted once by a scratch script), so only the first is
-    // printed.
+    // The ladder top is the fastest corner whose bead follows a ring at one grid frequency of the
+    // band at least on the 90 mm/s tier: 55.4 mm/s follows at 20 Hz alone (smallest radius
+    // 0.2103 mm against the 0.21 mm half bead), 55.5 mm/s at none (0.2088 mm), counted once by a
+    // scratch script.
     const spec = fitted(request)
     expect(spec.followabilityDampingRatio).toBe(0.03)
     expect(spec.followableCornerMmS).toBe(25.5)
+    expect(spec.topCornerMmS).toBe(55.4)
     expect(spec.linesPerSpeed).toBe(4)
     expect(followableRungCount(spec, profile)).toBe(3)
     expect(guaranteedBandTopHz(spec, profile)).toBe(200)
   })
-  it('spaces three rungs up to the followable corner and prints the lowest upper rung', () => {
-    // Slow tier: 20 * (25.5 / 20)^(j / 2), then 25.5 * (90 / 25.5)^(1 / 3) (hand-derived).
+  it('spaces three rungs up to the followable corner and prints the ladder top as the upper rung', () => {
+    // Both tiers: 20 * (25.5 / 20)^(j / 2), then the 55.4 mm/s top (hand-derived).
     const spec = fitted(request)
     const slow = ladderCornerSpeeds(spec, 90)
     expect(slow).toHaveLength(4)
-    ;[20, 22.58318, 25.5, 38.82466].forEach((r, j) => expect(slow[j]).toBeCloseTo(r, 4))
-    // Fast tier: the same bottom rungs, then 25.5 * (100 / 25.5)^(1 / 3).
-    const fast = ladderCornerSpeeds(spec, 150)
-    ;[20, 22.58318, 25.5, 40.21241].forEach((r, j) => expect(fast[j]).toBeCloseTo(r, 4))
+    ;[20, 22.58318, 25.5, 55.4].forEach((r, j) => expect(slow[j]).toBeCloseTo(r, 4))
+    expect(ladderCornerSpeeds(spec, 150)).toEqual(slow)
   })
   it('keeps the three followable rungs at every line count of three or more', () => {
     for (let n = 3; n <= 7; n++) {
@@ -236,7 +215,7 @@ describe('fitSpecToPrinter speed tiers', () => {
     // 33 / 1.6547 = 19.94 -> 19 mm/s; the smallest line speed with a 20 mm/s slower tier
     // is ceil(20 * 1.6547) = ceil(33.09) = 34 mm/s.
     const { spec, notes } = fitSpecToPrinter(
-      { ...request, cornerSpeedMmS: 20, speedsMmS: [19, 33] },
+      { ...request, speedsMmS: [19, 33] },
       profile,
     )
     expect(spec.speedsMmS).toEqual([33])
@@ -244,7 +223,7 @@ describe('fitSpecToPrinter speed tiers', () => {
   })
   it('keeps both tiers of a 34 mm/s line speed, whose slower tier is the 20 mm/s bottom rung', () => {
     const { spec, notes } = fitSpecToPrinter(
-      { ...request, cornerSpeedMmS: 20, speedsMmS: [20, 34] },
+      { ...request, speedsMmS: [20, 34] },
       profile,
     )
     expect(spec.speedsMmS).toEqual([20, 34])
@@ -252,14 +231,14 @@ describe('fitSpecToPrinter speed tiers', () => {
   })
   it('prints the same coupon as a one-tier request at the line speed', () => {
     // The followable corner and the line count are derived from the tier that remains.
-    const dropped = fitted({ ...request, cornerSpeedMmS: 25, speedsMmS: [19, 33] })
-    const oneTier = fitted({ ...request, cornerSpeedMmS: 25, speedsMmS: [33] })
+    const dropped = fitted({ ...request, speedsMmS: [19, 33] })
+    const oneTier = fitted({ ...request, speedsMmS: [33] })
     expect(dropped).toEqual(oneTier)
   })
   it('drops the tier once, before the bed fit, when the bed is small as well', () => {
     const smallBed = { ...profile, bedWidthMm: 70, bedDepthMm: 70 }
     const { spec, notes } = fitSpecToPrinter(
-      { ...request, cornerSpeedMmS: 25, speedsMmS: [19, 33] },
+      { ...request, speedsMmS: [19, 33] },
       smallBed,
     )
     expect(spec.speedsMmS).toEqual([33])
@@ -269,24 +248,12 @@ describe('fitSpecToPrinter speed tiers', () => {
 })
 
 describe('fitSpecToPrinter firmware fit', () => {
-  it('leaves the default corner speed at 3000 mm/s^2', () => {
-    // Klipper's centripetal cap over the 14 mm shortest run-up is 144.9 mm/s here.
+  it('derives the ladder top below the firmware corner limit at 3000 mm/s^2, without a note', () => {
+    // Klipper's centripetal cap over the 14 mm shortest run-up is 144.9 mm/s here, above the
+    // 55.4 mm/s readable top.
     const { spec, notes } = fitSpecToPrinter(request, profile)
-    expect(spec.cornerSpeedMmS).toBe(100)
+    expect(spec.topCornerMmS).toBe(55.4)
     expect(notes).toEqual([])
-  })
-
-  it("caps a Klipper corner at the planner's centripetal junction limit over the shortest run-up", () => {
-    // 1000 mm/s^2: the 150 mm/s tail widens the band to 1 + 11.25 + 1 + 1 = 14.25 mm, so the
-    // shortest run-up move is 14.25 + 8 - 3 - 3 = 16.25 mm and the corner at most
-    // sqrt(0.5 * 16.25 * 1000) = 90.14 mm/s, rounded down to 90.1 (hand-derived).
-    const slow = { ...profile, printAccelMmS2: 1000 }
-    const { spec, notes } = fitSpecToPrinter(defaultIsTestRequest(slow), slow)
-    expect(spec.cornerSpeedMmS).toBe(90.1)
-    expect(notes).toEqual([
-      "The corner speed was limited to 90.1 mm/s because Klipper's centripetal junction " +
-        'limit allows no faster corner after the 16.25 mm run-up at 1000 mm/s^2.',
-    ])
   })
 })
 
