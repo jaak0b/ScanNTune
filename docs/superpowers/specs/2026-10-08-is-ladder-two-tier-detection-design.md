@@ -680,10 +680,13 @@ Checks, each at alpha = 0.001:
   locking shown OR decay shown, each tested at alpha / 2, so the union keeps a forced tone's acceptance
   at most alpha (the Bonferroni bound of a union, Dunn 1961). Corner locking: each line's ring
   coefficients at the corner, turned toward the line's run-up (the sign convention of
-  `alongTrackLag.ts`), are summed with the weight c_l P_l (corner speed times the precision of the
-  coefficients, the weighted least squares response per unit corner speed through the origin), and the
-  length of the sum is tested by the randomization test of independent uniform phases conditional on
-  the magnitudes, computed as a Monte Carlo test (Barnard 1963; Hope 1968) with 99,999 replicates from
+  `alongTrackLag.ts`), are whitened by the symmetric square root of their own 2 x 2 precision matrix
+  P_l (Kessy, Lewin and Strimmer, Am. Stat. 72, 2018; a short or strongly damped window leaves the
+  noise of the cos and sin coefficients unequal and correlated). The statistic is the weighted least
+  squares score of one response per unit corner speed through the origin, S = sum_l c_l P_l s_l z_l, in
+  the metric of its information F = sum_l c_l^2 P_l, and it is tested by the randomization test of
+  independent uniform directions of the whitened coefficients conditional on their lengths (exact for
+  the lines' noise, whose whitened law is isotropic), computed as a Monte Carlo test (Barnard 1963; Hope 1968) with 99,999 replicates from
   a fixed seed, so the same scan always gives the same decision; it is reported as "Locked to the
   corner: yes/no". At alpha / 2 = 0.0005, (N + 1) alpha / 2
   = 50 is an integer, so the Monte Carlo test is exact at that level, and the power lost against the

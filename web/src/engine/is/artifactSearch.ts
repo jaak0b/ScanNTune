@@ -5,7 +5,7 @@ import { projectPeriodic, ringScratch } from './ringGls'
 import type { LineBasis, RingProjection } from './ringGls'
 import { heldNoiseStatistic, ringLikelihoodRatio } from './ringLikelihood'
 import type { NullFit } from './ringLikelihood'
-import { cornerLockingShown } from './cornerTransient'
+import { cornerLockingShown, ringPhasor } from './cornerTransient'
 import type { CornerPhasor } from './cornerTransient'
 
 // Searches an axis's traced lines for stationary arc-length artifacts: patterns fixed along the
@@ -92,16 +92,10 @@ function heldStatistic(basis: LineBasis, h0: NullFit, candidate: ArtifactCandida
 }
 
 /** A line's refitted amplitude of a candidate for the corner-locking test. The alternative's
- *  noise model has unit innovation variance with the variance profiled out, so the precision of
- *  the coefficients is their Gram matrix over the variance estimate ssr / m. */
+ *  noise model has unit innovation variance with the variance profiled out, so the noise variance
+ *  of the whitened data is the estimate ssr / m. */
 function candidatePhasor(basis: LineBasis, ring: RingProjection | null, ssr: number): CornerPhasor {
-  return {
-    a: ring?.a ?? 0,
-    b: ring?.b ?? 0,
-    precision: ring ? (ring.G11 + ring.G22) / 2 / (ssr / basis.m) : 0,
-    cornerSpeedMmS: basis.rec.cornerSpeedMmS,
-    lateralTowardRunUp: basis.rec.lateralTowardRunUp,
-  }
+  return ringPhasor(basis.rec, ring, ssr / basis.m)
 }
 
 /**

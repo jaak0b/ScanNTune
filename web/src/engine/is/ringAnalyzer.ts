@@ -52,7 +52,7 @@ import {
 } from './ringLikelihood'
 import type { NullFit, RingPoint, RingRatio } from './ringLikelihood'
 import { gridCandidates, knownCandidates, searchStage } from './artifactSearch'
-import { cornerLockingShown, cornerTransientShown, decayShown } from './cornerTransient'
+import { cornerLockingShown, cornerTransientShown, decayShown, ringPhasor } from './cornerTransient'
 import type { CornerPhasor } from './cornerTransient'
 import type { DetectedArtifact } from './artifactSearch'
 import type { CornerModelKind, VarianceCovariate } from './ringRegressors'
@@ -1516,16 +1516,9 @@ function jointRings(inBases: LineBasis[], noises: LineNoise[], joint: JointFit):
 }
 
 /** The lines' rings for the corner-locking test, aligned with `bases`: each ring's precision is
- *  the mean of the diagonal of its Gram matrix, whose columns the line's noise model whitened to
- *  unit innovation variance. */
+ *  its Gram matrix, whose columns the line's noise model whitened to unit innovation variance. */
 function cornerPhasors(bases: LineBasis[], rings: RingProjection[]): CornerPhasor[] {
-  return bases.map((b, k) => ({
-    a: rings[k].a,
-    b: rings[k].b,
-    precision: (rings[k].G11 + rings[k].G22) / 2,
-    cornerSpeedMmS: b.rec.cornerSpeedMmS,
-    lateralTowardRunUp: b.rec.lateralTowardRunUp,
-  }))
+  return bases.map((b, k) => ringPhasor(b.rec, rings[k]))
 }
 
 /** The lines' fitted rings for the along-track response, aligned with `bases`. */
