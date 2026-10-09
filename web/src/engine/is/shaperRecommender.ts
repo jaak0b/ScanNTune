@@ -12,6 +12,7 @@
 // velocity.
 
 import { dampingMeasured } from './ringRegressors'
+import { F_MAX_HZ, MAX_CI95_REL } from './types'
 
 export type ShaperType = 'ZV' | 'MZV' | 'EI' | '2HUMP_EI' | '3HUMP_EI'
 
@@ -268,13 +269,24 @@ export interface ModeComponent {
 const KLIPPER_DESIGN_DAMPING = 0.1
 /** Klipper shaper_calibrate.TEST_DAMPING_RATIOS: the remaining vibration is the worst of these. */
 const KLIPPER_TEST_DAMPING = [0.075, 0.1, 0.15]
-/** Klipper shaper_defs.MAX_SHAPER_FREQ and each shaper's min_freq, Hz. */
-const KLIPPER_MAX_SHAPER_FREQ_HZ = 150
+/**
+ * Upper end of the shaper test frequencies: the band top F_MAX_HZ, so the search reaches every
+ * resonance the analysis can report. Klipper's shaper_calibrate.py stops its own search at
+ * MAX_SHAPER_FREQ = 150 Hz, but input_shaper.py and SET_INPUT_SHAPER accept any shaper
+ * frequency, so a shaper above 150 Hz configures as usual.
+ */
+const MAX_SHAPER_FREQ_HZ = F_MAX_HZ
+/** Klipper shaper_defs: each shaper's min_freq, Hz. */
 const KLIPPER_MIN_FREQ_HZ: Record<ShaperType, number> = { ZV: 21, MZV: 23, EI: 29, '2HUMP_EI': 39, '3HUMP_EI': 48 }
 /** Klipper's test frequency step, Hz. */
 const KLIPPER_FREQ_STEP_HZ = 0.2
-/** Klipper shaper_calibrate.MAX_FREQ: the spectrum is read up to this frequency, Hz. */
-const KLIPPER_MAX_FREQ_HZ = 200
+/**
+ * Upper end of the synthesized spectrum, Hz: 10% past the band top. A mode accepted at the band
+ * top F_MAX_HZ has its true frequency within MAX_CI95_REL of the estimate (the confidence gate),
+ * so the remaining vibration is judged up to the top of that interval; this also covers
+ * Klipper's own spectrum limit (shaper_calibrate.MAX_FREQ, 200 Hz).
+ */
+const SPECTRUM_MAX_FREQ_HZ = F_MAX_HZ * (1 + MAX_CI95_REL)
 /** The acceleration Klipper's score evaluates the smoothing at, mm/s^2 (_get_shaper_smoothing). */
 const KLIPPER_SCORE_ACCEL_MM_S2 = 5000
 /** Spectrum bin width of the synthesized spectrum, Hz. Klipper reads its spectrum through an
@@ -322,13 +334,13 @@ interface FittedShaper {
 
 /** Klipper's fit_shaper for one type: the frequency with the least remaining vibration, then the
  *  one scoring best among those within 10% (plus 0.0005) of it. The test frequencies are
- *  np.arange(min_freq, MAX_SHAPER_FREQ, 0.2), which stops short of MAX_SHAPER_FREQ, visited from
- *  the highest down. */
+ *  Klipper's np.arange(min_freq, max, 0.2) up to MAX_SHAPER_FREQ_HZ, which stops short of it,
+ *  visited from the highest down. */
 function fitShaper(type: ShaperType, freqs: number[], psd: number[]): FittedShaper {
   const results: FittedShaper[] = []
   let best: FittedShaper | null = null
   // np.arange's length, ceil((stop - start) / step).
-  const count = Math.ceil((KLIPPER_MAX_SHAPER_FREQ_HZ - KLIPPER_MIN_FREQ_HZ[type]) / KLIPPER_FREQ_STEP_HZ)
+  const count = Math.ceil((MAX_SHAPER_FREQ_HZ - KLIPPER_MIN_FREQ_HZ[type]) / KLIPPER_FREQ_STEP_HZ)
   for (let s = count - 1; s >= 0; s--) {
     const testFreq = KLIPPER_MIN_FREQ_HZ[type] + s * KLIPPER_FREQ_STEP_HZ
     const impulses = shaperImpulses(type, testFreq, KLIPPER_DESIGN_DAMPING)
@@ -367,7 +379,7 @@ function fitShaper(type: ShaperType, freqs: number[], psd: number[]): FittedShap
  */
 export function recommendShapersForModes(modes: ModeComponent[]): ShaperRecommendation {
   const freqs: number[] = []
-  for (let f = SPECTRUM_BIN_HZ; f <= KLIPPER_MAX_FREQ_HZ + 1e-9; f += SPECTRUM_BIN_HZ) freqs.push(f)
+  for (let f = SPECTRUM_BIN_HZ; f <= SPECTRUM_MAX_FREQ_HZ + 1e-9; f += SPECTRUM_BIN_HZ) freqs.push(f)
   const psd = modeSpectrum(modes, freqs)
   const fitted = SHAPER_TYPES.map((type) => fitShaper(type, freqs, psd))
   let best: FittedShaper | null = null

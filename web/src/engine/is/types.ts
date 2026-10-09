@@ -10,16 +10,18 @@ import {
   isCouponGeometry,
   ladderCornerSpeeds,
   maxPackedRampMm,
+  MIN_ACCEPTED_LINES,
   MIN_CORNER_SPEED_MM_S,
   MIN_MEASURED_LINE_MM,
   protectedSpanMm,
   shortestRunUpMoveMm,
+  tierLadderTopMmS,
   timeAtDistance,
   TRACE_START_MM,
 } from './couponGeometry'
 import { klipperCentripetalCornerCapMmS } from './firmwareMotion'
 
-export { accelRampMm, MIN_CORNER_SPEED_MM_S, MIN_MEASURED_LINE_MM }
+export { accelRampMm, MIN_ACCEPTED_LINES, MIN_CORNER_SPEED_MM_S, MIN_MEASURED_LINE_MM }
 
 export type IsAxis = 'x' | 'y'
 
@@ -61,6 +63,13 @@ export interface IsTestSpec {
    * acceleration.
    */
   cornerSpeedMmS: number
+  /**
+   * The fastest corner speed whose bead still follows a ring at the band top F_MAX_HZ on the
+   * slowest tier (fastestFollowableCornerMmS), derived by fitSpecToPrinter. The ladder places its
+   * lowest rungs at or below it (ladderCornerSpeeds), so the generator, the analysis and the
+   * simulators all read the same rungs from this one value.
+   */
+  followableCornerMmS: number
   /** How far each measured segment extends into the frame band at both ends. */
   weldMm: number
   /** Where the coupon sits on the bed: centered, or pushed to the front/back edge. */
@@ -78,15 +87,18 @@ export interface IsTestSpec {
 }
 
 /**
- * What the page asks for: a spec without its line count. The lines per speed are always
- * derived by fitSpecToPrinter (ladderLinesPerSpeed) after the firmware fit, so the generator
- * and the analysis both read one fitted IsTestSpec.
+ * What the page asks for: a spec without its line count and its followable corner. Both are
+ * always derived by fitSpecToPrinter after the firmware fit (fastestFollowableCornerMmS,
+ * ladderLinesPerSpeed), so the generator and the analysis both read one fitted IsTestSpec.
  */
-export type IsTestRequest = Omit<IsTestSpec, 'linesPerSpeed'>
+export type IsTestRequest = Omit<IsTestSpec, 'linesPerSpeed' | 'followableCornerMmS'>
+
+/** A request whose followable corner is resolved, its line count still open. */
+type LadderRequest = Omit<IsTestSpec, 'linesPerSpeed'>
 
 /** Frequency search range of the ringing fit: the flow's measurable resonance band. */
 export const F_MIN_HZ = 20
-export const F_MAX_HZ = 150
+export const F_MAX_HZ = 200
 
 /** The flow's false-alarm level for every detection decision (0.1%). */
 export const DETECTION_ALPHA = 0.001
@@ -97,8 +109,6 @@ export const DETECTION_ALPHA = 0.001
  * resonance lies inside the configured shaper's stopband.
  */
 export const MAX_CI95_REL = 0.1
-/** Minimum lines entering the joint fit before the axis estimate is meaningful. */
-export const MIN_ACCEPTED_LINES = 3
 /** Power the two-tier speed check is designed for at the weakest accepted measurement. */
 export const SPEED_CHECK_POWER = 0.95
 
@@ -106,22 +116,25 @@ export const SPEED_CHECK_POWER = 0.95
  * Ratio between the two speed tiers. A real resonance keeps its frequency when the line
  * speed changes, so d = ln(f_slow / f_fast) is 0; a pattern fixed in the print or the scan
  * (belt teeth, scanner artifacts) is fixed in arc length, so its frequency scales with the
- * speed and d = -ln(rho). The speed check rejects the pattern hypothesis one-sided at
- * DETECTION_ALPHA. At the weakest measurement the confidence gate accepts (95% halfwidth
- * MAX_CI95_REL of the frequency, so a relative standard error of MAX_CI95_REL / z_0.975 per
- * tier), the difference of two independent log frequencies has the standard error
- * s_d = sqrt(2) * MAX_CI95_REL / z_0.975 (delta method). A one-sided z test separates two
- * hypotheses ln(rho) apart at level alpha with power 1 - beta when
- * ln(rho) = (z_(1-alpha) + z_(1-beta)) * s_d, the standard power relation, so
- * rho = exp((z_0.999 + z_0.95) * sqrt(2) * 0.1 / z_0.975) = 1.40728.
- * The power 0.95 is the design target, not what the check achieves: each tier is fitted from
- * half of the axis's lines, so its standard error is about sqrt(2) times that of the axis
- * estimate the confidence gate judges, and the power at the weakest accepted measurement is
- * about 0.60. Closing that gap is an open item of the coupon redesign.
+ * speed and d = -ln(rho). The branch of the speed check that refuses an axis is "frequency
+ * changed with speed": d = 0 rejected two-sided at DETECTION_ALPHA, critical value
+ * z_(1-alpha/2) = z_0.9995 = 3.2905. The ratio is sized so a pattern is refused with power
+ * SPEED_CHECK_POWER at the weakest measurement the confidence gate accepts: a 95% halfwidth of
+ * MAX_CI95_REL of the frequency, so a relative standard error of MAX_CI95_REL / z_0.975 =
+ * 0.05102 for the axis estimate. Each tier is fitted from half of the axis's lines, so its
+ * standard error is sqrt(2) times that, and the difference of the two independent tier log
+ * frequencies has sqrt(2) times a tier's (delta method): s_d = 2 * MAX_CI95_REL / z_0.975 =
+ * 0.10204. A two-sided z test separates two hypotheses ln(rho) apart at level alpha with power
+ * 1 - beta when ln(rho) = (z_(1-alpha/2) + z_(1-beta)) * s_d, the standard power relation
+ * (the far rejection tail is negligible), so
+ * rho = exp((z_0.9995 + z_0.95) * 2 * 0.1 / z_0.975) = exp((3.2905 + 1.6449) * 0.10204) = 1.6547.
+ * Whether the check reaches this power on real fits (a tier near the gate can miss its own
+ * detection on half the lines, and its standard error varies from fit to fit) is a matter of
+ * the analysis and an open item there.
  */
 export const TIER_SPEED_RATIO = Math.exp(
-  ((normalQuantile(1 - DETECTION_ALPHA) + normalQuantile(SPEED_CHECK_POWER)) *
-    Math.SQRT2 *
+  ((normalQuantile(1 - DETECTION_ALPHA / 2) + normalQuantile(SPEED_CHECK_POWER)) *
+    2 *
     MAX_CI95_REL) /
     normalQuantile(0.975),
 )
@@ -139,7 +152,7 @@ export function speedTiersFor(lineSpeedMmS: number): number[] {
 /**
  * The slowest whole-number line speed that keeps both tiers: its derived slower tier
  * (speedTiersFor) still reaches MIN_CORNER_SPEED_MM_S, the bottom rung of every tier's
- * corner-speed ladder, ceil(MIN_CORNER_SPEED_MM_S * TIER_SPEED_RATIO) = 29 mm/s. Below it
+ * corner-speed ladder, ceil(MIN_CORNER_SPEED_MM_S * TIER_SPEED_RATIO) = 34 mm/s. Below it
  * fitSpecToPrinter drops the slower tier.
  */
 export const MIN_TWO_TIER_LINE_SPEED_MM_S = Math.ceil(MIN_CORNER_SPEED_MM_S * TIER_SPEED_RATIO)
@@ -256,33 +269,40 @@ export function rampWarnings(spec: IsTestSpec): string[] {
 }
 
 /**
- * Damping ratio the bead followability is evaluated at: Klipper's DEFAULT_DAMPING_RATIO
- * (shaper_defs.py, 0.1), the damping Klipper designs input shapers for when none is
- * measured. The coupon is generated before the damping is known, so it is designed for the
- * same assumed value.
+ * Damping ratio the bead followability is evaluated at. The coupon is generated before the
+ * damping is known, so it is designed for a lightly damped frame: a well-built CoreXY printer
+ * measured 0.041 to 0.069 (both axes, by an accelerometer and by this flow's scans). Klipper's
+ * 0.075 to 0.15 (shaper_calibrate.py TEST_DAMPING_RATIOS) is the range its shapers are made
+ * robust over, not a floor on printers, and a lighter damping keeps the ring larger for longer,
+ * so assuming it is the safe side.
  */
-export const FOLLOWABILITY_DAMPING_RATIO = 0.1
+export const FOLLOWABILITY_DAMPING_RATIO = 0.04
 /** Sampling step of the followability evaluation along the read window. */
 const FOLLOWABILITY_STEP_MM = 0.1
+/** Resolution of the followable corner speed. */
+const FOLLOWABLE_CORNER_STEP_MM_S = 0.1
+/** What a line's ring path depends on besides its tier and corner speeds. */
+type RingPathInputs = Pick<IsTestSpec, 'accelMmS2' | 'cornerSpeedMmS' | 'measuredLineMm'>
 
 /**
  * The smallest radius of curvature of a ring path over a line's read window, from the first
  * traced sample (TRACE_START_MM past the corner) to the end of its protected span, for a
- * resonance at F_MAX_HZ. The corner's velocity step c leaves a lateral ring of amplitude
- * A(t) = (c / omega) e^(-zeta omega t); written over the along-track speed u, the path
- * y = A sin(omega t) has the radius of curvature R = u^2 / (A omega^2) at its crests. The
- * along-track speed follows the commanded profile after the corner, sqrt(c^2 + 2 a s) up to
- * the tier speed, lowered by the along-track axis' own ring by up to c e^(-zeta omega_a t)
- * (the along axis takes the same velocity step c at the corner); omega_a is taken at F_MIN_HZ,
- * the slowest decay the band allows. The radius grows along the window, but it is evaluated
- * at every sample rather than assumed monotonic.
+ * resonance at `frequencyHz` (the band top F_MAX_HZ unless stated). The corner's velocity step c
+ * leaves a lateral ring of amplitude A(t) = (c / omega) e^(-zeta omega t); written over the
+ * along-track speed u, the path y = A sin(omega t) has the radius of curvature
+ * R = u^2 / (A omega^2) at its crests. The along-track speed follows the commanded profile after
+ * the corner, sqrt(c^2 + 2 a s) up to the tier speed, lowered by the along-track axis' own ring
+ * by up to c e^(-zeta omega_a t) (the along axis takes the same velocity step c at the corner);
+ * omega_a is taken at F_MIN_HZ, the slowest decay the band allows. The radius grows along the
+ * window, but it is evaluated at every sample rather than assumed monotonic.
  */
 export function ringPathMinRadiusMm(
-  spec: IsTestSpec,
+  spec: RingPathInputs,
   tierSpeedMmS: number,
   cornerSpeedMmS: number,
+  frequencyHz: number = F_MAX_HZ,
 ): number {
-  const omega = 2 * Math.PI * F_MAX_HZ
+  const omega = 2 * Math.PI * frequencyHz
   const omegaAlong = 2 * Math.PI * F_MIN_HZ
   const zeta = FOLLOWABILITY_DAMPING_RATIO
   const a = spec.accelMmS2
@@ -303,32 +323,77 @@ export function ringPathMinRadiusMm(
 }
 
 /**
- * How many rungs of the slowest tier's ladder leave a bead that can follow a ring at
- * F_MAX_HZ over the whole read window. The bead edges are the offset curves of the path at
- * plus and minus half the bead width, and an offset curve stays regular only while the
- * path's radius of curvature exceeds the offset (Farouki and Neff, "Analytic properties of
- * plane offset curves", CAGD 7, 1990); below that the edge folds into a cusp and the traced
- * centreline no longer follows the nozzle. The slowest tier binds: its along-track speed is
- * the lowest. The bead width is the measured layers' nominal width.
+ * Whether a line's bead follows a ring at `frequencyHz` over its whole read window. The bead
+ * edges are the offset curves of the path at plus and minus half the bead width, and an offset
+ * curve stays regular only while the path's radius of curvature exceeds the offset (Farouki and
+ * Neff, "Analytic properties of plane offset curves", CAGD 7, 1990); below that the edge folds
+ * into a cusp and the traced centreline no longer follows the nozzle. The bead width is the
+ * measured layers' nominal width.
  */
-export function followableRungCount(spec: IsTestSpec, profile: PrinterProfile): number {
-  const slowest = Math.min(...spec.speedsMmS)
+function followsRing(
+  spec: RingPathInputs,
+  profile: PrinterProfile,
+  tierSpeedMmS: number,
+  cornerSpeedMmS: number,
+  frequencyHz: number,
+): boolean {
   const halfWidthMm = (profile.nozzleDiameterMm * NOMINAL_WIDTH_FACTOR) / 2
-  return ladderCornerSpeeds(spec, slowest).filter(
-    (c) => ringPathMinRadiusMm(spec, slowest, c) > halfWidthMm,
+  return ringPathMinRadiusMm(spec, tierSpeedMmS, cornerSpeedMmS, frequencyHz) > halfWidthMm
+}
+
+/**
+ * The fastest corner speed, on a FOLLOWABLE_CORNER_STEP_MM_S grid, whose bead follows a ring at
+ * F_MAX_HZ on the slowest tier, found by bisection between MIN_CORNER_SPEED_MM_S and the tier's
+ * ladder top (a faster corner rings with a larger amplitude, so its path curves more sharply).
+ * The slowest tier binds: its along-track speed is the lowest, so every faster tier follows the
+ * same corners. Returns the ladder top when even that rung follows, and one step below
+ * MIN_CORNER_SPEED_MM_S when not even the bottom rung does.
+ */
+export function fastestFollowableCornerMmS(
+  request: IsTestRequest,
+  profile: PrinterProfile,
+): number {
+  const slowest = Math.min(...request.speedsMmS)
+  const step = FOLLOWABLE_CORNER_STEP_MM_S
+  const follows = (c: number) => followsRing(request, profile, slowest, c, F_MAX_HZ)
+  const top = tierLadderTopMmS(request, slowest)
+  if (follows(top)) return top
+  if (!follows(MIN_CORNER_SPEED_MM_S)) return MIN_CORNER_SPEED_MM_S - step
+  // Bisection on the grid index; invariant: lo * step follows, hi * step does not.
+  let lo = Math.round(MIN_CORNER_SPEED_MM_S / step)
+  let hi = Math.ceil(top / step)
+  while (hi - lo > 1) {
+    const mid = Math.floor((lo + hi) / 2)
+    if (follows(mid * step)) lo = mid
+    else hi = mid
+  }
+  return Number((lo * step).toFixed(1))
+}
+
+/**
+ * How many rungs of the slowest tier's ladder leave a bead that follows a ring at
+ * `frequencyHz` (the band top F_MAX_HZ unless stated) over the whole read window (see
+ * followsRing). The slowest tier binds: its along-track speed is the lowest.
+ */
+export function followableRungCount(
+  spec: IsTestSpec,
+  profile: PrinterProfile,
+  frequencyHz: number = F_MAX_HZ,
+): number {
+  const slowest = Math.min(...spec.speedsMmS)
+  return ladderCornerSpeeds(spec, slowest).filter((c) =>
+    followsRing(spec, profile, slowest, c, frequencyHz),
   ).length
 }
 
 /**
- * The derived lines per speed: the fewest rungs (at least MIN_LINES_PER_SPEED) whose ladder
- * keeps at least MIN_ACCEPTED_LINES followable rungs on the slowest tier, so the analysis can
- * reach its line floor at the top of the band. When even the most lines cannot (the bottom
- * rung already folds), the minimum is used and bandTopWarning explains it.
+ * The fewest lines per speed (at least MIN_LINES_PER_SPEED) whose ladder keeps at least
+ * MIN_ACCEPTED_LINES followable rungs on the slowest tier, so the analysis can reach its line
+ * floor at the top of the band; MIN_LINES_PER_SPEED when no line count can (not even the bottom
+ * rung follows). The bed fit never removes lines below it. With a bottom-dense ladder this is
+ * MIN_ACCEPTED_LINES + 1: the followable rungs plus the ladder top.
  */
-export function ladderLinesPerSpeed(
-  request: Omit<IsTestSpec, 'linesPerSpeed'>,
-  profile: PrinterProfile,
-): number {
+function followableLineFloor(request: LadderRequest, profile: PrinterProfile): number {
   for (let n = MIN_LINES_PER_SPEED; n <= MAX_LINES_PER_SPEED; n++) {
     if (followableRungCount({ ...request, linesPerSpeed: n }, profile) >= MIN_ACCEPTED_LINES) {
       return n
@@ -338,24 +403,70 @@ export function ladderLinesPerSpeed(
 }
 
 /**
- * The warning shown when fewer than MIN_ACCEPTED_LINES rungs of the slowest tier leave a
- * followable bead at F_MAX_HZ (see followableRungCount), or null.
+ * The derived lines per speed. When the fastest followable corner splits the slowest tier's
+ * ladder (it lies between the bottom rung and the ladder top), the ladder takes
+ * MIN_ACCEPTED_LINES rungs at or below it, so the band top stays readable at the analysis' line
+ * floor, and MIN_ACCEPTED_LINES rungs above it, so a stiff frame whose ring is too small to
+ * detect on the slow corners still reaches the line floor from the strong excitation of the
+ * fast ones: 6 lines. Otherwise every rung follows (or none does), and the followable line
+ * floor is the count.
+ */
+export function ladderLinesPerSpeed(request: LadderRequest, profile: PrinterProfile): number {
+  const slowest = Math.min(...request.speedsMmS)
+  const c = request.followableCornerMmS
+  if (c > MIN_CORNER_SPEED_MM_S && c < tierLadderTopMmS(request, slowest)) {
+    return 2 * MIN_ACCEPTED_LINES
+  }
+  return followableLineFloor(request, profile)
+}
+
+/** Resolution of the guaranteed band top. */
+const BAND_TOP_STEP_HZ = 1
+
+/**
+ * The highest frequency, on a BAND_TOP_STEP_HZ grid from F_MIN_HZ to F_MAX_HZ, at which at
+ * least MIN_ACCEPTED_LINES rungs of the slowest tier still leave a followable bead (see
+ * followableRungCount), found by bisection (a faster ring curves the path more sharply). It is
+ * F_MAX_HZ whenever the ladder keeps its followable rungs there, which the derived ladder does
+ * unless not even the bottom rung follows a ring at F_MAX_HZ (a low acceleration or line speed),
+ * and F_MIN_HZ when no frequency of the band keeps enough rungs.
+ */
+export function guaranteedBandTopHz(spec: IsTestSpec, profile: PrinterProfile): number {
+  const keeps = (f: number) => followableRungCount(spec, profile, f) >= MIN_ACCEPTED_LINES
+  if (keeps(F_MAX_HZ)) return F_MAX_HZ
+  if (!keeps(F_MIN_HZ)) return F_MIN_HZ
+  // Bisection on the grid index; invariant: lo * step keeps the rungs, hi * step does not.
+  let lo = F_MIN_HZ / BAND_TOP_STEP_HZ
+  let hi = F_MAX_HZ / BAND_TOP_STEP_HZ
+  while (hi - lo > 1) {
+    const mid = Math.floor((lo + hi) / 2)
+    if (keeps(mid * BAND_TOP_STEP_HZ)) lo = mid
+    else hi = mid
+  }
+  return lo * BAND_TOP_STEP_HZ
+}
+
+/**
+ * The warning shown when the coupon cannot keep MIN_ACCEPTED_LINES followable lines at the band
+ * top (guaranteedBandTopHz below F_MAX_HZ), or null. The bed fit never removes the followable
+ * rungs (followableLineFloor), so the cause is always the slowest tier's line speed and the
+ * acceleration, never the bed size.
  */
 export function bandTopWarning(spec: IsTestSpec, profile: PrinterProfile): string | null {
-  const followable = followableRungCount(spec, profile)
-  if (followable >= MIN_ACCEPTED_LINES) return null
+  const topHz = guaranteedBandTopHz(spec, profile)
+  if (topHz >= F_MAX_HZ) return null
   const slowest = Math.min(...spec.speedsMmS)
   return (
-    'Raise the line speed or the print acceleration to read a resonance near ' +
-    `${F_MAX_HZ} Hz. Only ${followable} of the ${slowest} mm/s lines leave a bead that can ` +
-    `follow ringing that fast, and the analysis needs ${MIN_ACCEPTED_LINES}.`
+    `Raise the line speed or the print acceleration to read resonances up to ${F_MAX_HZ} Hz. ` +
+    `At ${slowest} mm/s and ${spec.accelMmS2} mm/s^2, the lines follow ringing only up to ` +
+    `${topHz} Hz.`
   )
 }
 
 /**
  * Fits the request to the selected printer: first resolves the speed tiers against the
- * ladder's bottom rung, then fits what the firmware can execute, then resolves the lines per
- * speed and fits the bed. This is the single place a spec is fitted and the only place a tier
+ * ladder's bottom rung, then fits what the firmware can execute, then resolves the followable
+ * corner and the lines per speed and fits the bed. This is the single place a spec is fitted and the only place a tier
  * is dropped; the generator and the analysis both read its result, so the coupon is analyzed
  * exactly as it was printed. Every change is described in a user-worded note; a request the
  * printer cannot host throws.
@@ -443,21 +554,28 @@ function fitSpecToFirmware(request: IsTestRequest): { request: IsTestRequest; no
 const BED_FIT_REASON = 'so the coupon fits the configured bed.'
 
 /**
- * Shrinks the request until the coupon fits the configured bed, in this order: the measured
- * lines are shortened toward the minimum length, then the lines per speed are reduced toward
- * the minimum (taking the longest read length that fits at each count), then the derived
- * slower tier is dropped and the same two reductions run on the single tier. Throws when the
- * bed cannot host even the smallest coupon. Every reduction is described in a user-worded
- * note; a derived line count that changes with the tiers is no reduction and gets none.
+ * Resolves the followable corner and the derived lines per speed, then shrinks the request
+ * until the coupon fits the configured bed, in this order: the measured lines are shortened
+ * toward the minimum length, then the lines per speed are reduced toward the followable line
+ * floor (taking the longest read length that fits at each count), then the derived slower tier
+ * is dropped and the same two reductions run on the single tier. Removing a line removes an
+ * upper rung of the bottom-dense ladder, and the floor keeps MIN_ACCEPTED_LINES followable
+ * rungs, so the bed fit never lowers the band top the coupon can read. The followable corner is
+ * found at the requested read length; a shorter read only shortens the window it is judged
+ * over, so its rungs stay followable. Throws when the bed cannot host even the smallest
+ * coupon. Every reduction is described in a user-worded note; a derived line count that
+ * changes with the tiers is no reduction and gets none.
  */
 function fitSpecToBed(
   request: IsTestRequest,
   profile: PrinterProfile,
 ): { spec: IsTestSpec; notes: string[] } {
   const attempt = (speedsMmS: number[]): { spec: IsTestSpec; notes: string[] } | null => {
-    const base = { ...request, speedsMmS }
+    const tiers = { ...request, speedsMmS }
+    const base = { ...tiers, followableCornerMmS: fastestFollowableCornerMmS(tiers, profile) }
     const derivedLines = ladderLinesPerSpeed(base, profile)
-    for (let n = derivedLines; n >= MIN_LINES_PER_SPEED; n--) {
+    const floorLines = followableLineFloor(base, profile)
+    for (let n = derivedLines; n >= floorLines; n--) {
       const candidate: IsTestSpec = { ...base, linesPerSpeed: n }
       const read = longestFittingReadMm(candidate, profile)
       if (read === null) continue

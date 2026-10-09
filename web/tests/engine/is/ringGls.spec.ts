@@ -146,17 +146,17 @@ describe('orthonormalBasis', () => {
 describe('nullDesign', () => {
   it('carries one flow-lag direction on a cruise window, at any nearby time constant', () => {
     // After the ramp the relative flow deficit and the homogeneous term are both e^(-t / tau)
-    // shapes, so the corner model adds one direction, not two. Corner 20 mm/s, tier 106 mm/s,
-    // 3000 mm/s^2, tau 4.468 ms; the window starts at 81.77 ms, long after the 28.67 ms ramp, and
+    // shapes, so the corner model adds one direction, not two. Corner 20 mm/s, tier 90 mm/s,
+    // 3000 mm/s^2, tau 4.468 ms; the window starts at 81.77 ms, long after the 23.33 ms ramp, and
     // the null fit must not change its column count, nor its residual by more than rounding,
     // when tau moves by 1e-10 or 1e-8 of itself.
     const m = 576
-    const dt = 25.4 / 600 / 106
+    const dt = 25.4 / 600 / 90
     const rec: LineRecord = {
       tS: Float64Array.from({ length: m }, (_, i) => 0.08177 + i * dt),
       lattice: Int32Array.from({ length: m }, (_, i) => i),
       y: Float64Array.from({ length: m }, (_, i) => 0.004 * Math.sin(1.7 * i) + 0.002 * Math.cos(0.3 * i * i)),
-      speedMmS: 106,
+      speedMmS: 90,
       cornerSpeedMmS: 20,
       accelMmS2: 3000,
       alongPxPerMm: 600 / 25.4,
@@ -176,19 +176,19 @@ describe('nullDesign', () => {
     }
   })
   it('keeps its flow-lag direction and a continuous residual while the lag decays before the window', () => {
-    // Corner 20 mm/s, tier 106 mm/s, 3000 mm/s^2: the ramp ends at 28.67 ms and the window starts
-    // at 49 ms, so at a time constant near 1 ms the flow-lag column has decayed by e^-20 or more
+    // Corner 20 mm/s, tier 90 mm/s, 3000 mm/s^2: the ramp ends at 23.33 ms and the window starts
+    // at 49 ms, so at a time constant near 1 ms the flow-lag column has decayed by e^-25 or more
     // before its first sample and is a spike on the window's first samples. Its direction is
     // still a direction of the design at every tau, so the null fit must keep one flow-lag column
     // over the whole sweep, and its residual must move continuously with tau: a relative change of
     // 1e-6 in tau moves the residual sum of squares by far less than 1e-6 of itself.
     const m = 576
-    const dt = 25.4 / 600 / 106
+    const dt = 25.4 / 600 / 90
     const rec: LineRecord = {
       tS: Float64Array.from({ length: m }, (_, i) => 0.049 + i * dt),
       lattice: Int32Array.from({ length: m }, (_, i) => i),
       y: Float64Array.from({ length: m }, (_, i) => 0.004 * Math.sin(1.7 * i) + 0.002 * Math.cos(0.3 * i * i)),
-      speedMmS: 106,
+      speedMmS: 90,
       cornerSpeedMmS: 20,
       accelMmS2: 3000,
       alongPxPerMm: 600 / 25.4,

@@ -18,7 +18,7 @@ function axis(overrides: Partial<IsAxisResult>): IsAxisResult {
     speedCheck: {
       state: 'confirmed',
       tiers: [
-        { speedMmS: 106, detected: true, detectionPBound: 1e-9, frequencyHz: 60.84, frequencySeHz: 0.2 },
+        { speedMmS: 90, detected: true, detectionPBound: 1e-9, frequencyHz: 60.84, frequencySeHz: 0.2 },
         { speedMmS: 150, detected: true, detectionPBound: 1e-8, frequencyHz: 61.06, frequencySeHz: 0.2 },
       ],
     },
@@ -49,7 +49,7 @@ describe('isCheckRows', () => {
       { label: 'Decay demonstrated', value: 'yes' },
       { label: 'Grows with corner speed', value: 'yes' },
       { label: 'Speed independence', value: 'confirmed' },
-      { label: 'Frequency at 106 mm/s', value: '60.8 Hz' },
+      { label: 'Frequency at 90 mm/s', value: '60.8 Hz' },
       { label: 'Frequency at 150 mm/s', value: '61.1 Hz' },
       { label: 'Replicate check', value: 'not assessed' },
       { label: 'Layer shift detected', value: 'no' },
@@ -62,14 +62,14 @@ describe('isCheckRows', () => {
         speedCheck: {
           state: 'not-confirmed',
           tiers: [
-            { speedMmS: 106, detected: false, detectionPBound: 0.4, frequencyHz: null, frequencySeHz: null },
+            { speedMmS: 90, detected: false, detectionPBound: 0.4, frequencyHz: null, frequencySeHz: null },
             { speedMmS: 150, detected: true, detectionPBound: 1e-8, frequencyHz: 61.06, frequencySeHz: 0.2 },
           ],
         },
       }),
     )
     expect(rows).toContainEqual({ label: 'Speed independence', value: 'not confirmed' })
-    expect(rows).toContainEqual({ label: 'Frequency at 106 mm/s', value: 'no ringing detected' })
+    expect(rows).toContainEqual({ label: 'Frequency at 90 mm/s', value: 'no ringing detected' })
     expect(isCheckRows(axis({ speedCheck: { state: 'changed', tiers: [] } }))).toContainEqual({
       label: 'Speed independence',
       value: 'changed with speed',

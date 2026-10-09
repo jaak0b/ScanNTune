@@ -19,7 +19,7 @@ import {
 const profile = defaultPrinterProfile()
 const filament = defaultFilamentProfile()
 const spec = defaultIsTestRequest(profile)
-// The fitted default the generator prints: tiers 106 / 150 mm/s, five lines per speed.
+// The fitted default the generator prints: tiers 90 / 150 mm/s, six lines per speed.
 const fitted = fitSpecToPrinter(spec, profile).spec
 const nominal = profile.nozzleDiameterMm * NOMINAL_WIDTH_FACTOR
 const g = isCouponGeometry(fitted)
@@ -175,7 +175,7 @@ describe('generateIsGcodeWithReport (Klipper)', () => {
 
   it('emits a header, start gcode, and relative extrusion setup', () => {
     expect(lines[0]).toBe('; ScanNTune input shaper resonance test')
-    expect(lines[1]).toBe('; speed tiers 106, 150 mm/s, acceleration 3000 mm/s^2')
+    expect(lines[1]).toBe('; speed tiers 90, 150 mm/s, acceleration 3000 mm/s^2')
     expect(report.gcode).toContain('M83')
     expect(report.gcode).toContain('G90')
   })
@@ -238,46 +238,57 @@ describe('generateIsGcodeWithReport (Klipper)', () => {
 
   it('names the corner-speed excitation ladder in the header', () => {
     expect(lines[2]).toBe(
-      '; corner-speed excitation ladder 20 to 100 mm/s across the 5 lines of each tier, ' +
+      '; corner-speed excitation ladder 20 to 100 mm/s across the 6 lines of each tier, ' +
         'fastest corners printed last',
     )
   })
 
-  it('cruises each run-up at its own ladder rung (hand-pinned geometric feeds)', () => {
-    // Hand-derived once: rungs 20 * 5^(j/4) mm/s for j = 0..4, times 60, rounded; both tiers
-    // share the ladder because the 106 mm/s tier is faster than the 100 mm/s corner speed.
-    const expectedFeeds = [1200, 1794, 2683, 4012, 6000]
+  it('cruises each run-up at its own ladder rung (hand-pinned bottom-dense feeds)', () => {
+    // Hand-derived once, times 60 and rounded: both tiers share the bottom rungs
+    // 20 * (29.2 / 20)^(j/2) mm/s for j = 0..2; above them the 90 mm/s tier climbs as
+    // 29.2 * (90 / 29.2)^(k/3) and the 150 mm/s tier as 29.2 * (100 / 29.2)^(k/3), k = 1..3.
+    const expectedFeeds: Record<number, number[]> = {
+      90: [1200, 1450, 1752, 2550, 3711, 5400],
+      150: [1200, 1450, 1752, 2641, 3981, 6000],
+    }
     const chunk = measuredChunk(lines)
     for (const group of g.groups) {
       group.lines.forEach((line, j) => {
         const idx = chunk.indexOf(cornerMoveStr(line))
         expect(idx, `line ${j}`).toBeGreaterThanOrEqual(0)
-        expect(chunk[idx].endsWith(`F${expectedFeeds[line.rungIndex]}`), `line ${j}`).toBe(true)
+        const feed = expectedFeeds[line.speedMmS][line.rungIndex]
+        expect(chunk[idx].endsWith(`F${feed}`), `line ${j}`).toBe(true)
       })
     }
   })
 
   it('prints the lines rung by rung, so the corner feeds never fall within a layer', () => {
     // The run-up cruise into each corner is the move ending on the corner; its feed is the
-    // rung. In print order the feeds rise from F1200 to F6000 and never fall.
+    // rung. In print order the feeds rise from F1200 to F6000 and never fall: the 90 mm/s
+    // tier's F5400 top rungs come just before the line speed tier's F6000 ones.
     const chunk = measuredChunk(lines)
     const cornerFeeds = chunk
       .map((l, i) => ({ l, i }))
       .filter(({ l }) => allLines.some((line) => l === cornerMoveStr(line)))
       .map(({ l }) => Number(l.match(/F(\d+)$/)![1]))
-    expect(cornerFeeds).toHaveLength(20)
+    expect(cornerFeeds).toHaveLength(24)
     expect(cornerFeeds).toEqual([...cornerFeeds].sort((a, b) => a - b))
-    expect(cornerFeeds.slice(-4)).toEqual([6000, 6000, 6000, 6000])
+    expect(cornerFeeds.slice(-4)).toEqual([5400, 5400, 6000, 6000])
   })
 
   it("raises the corner limit to each line's own corner speed after its first stretch, and lowers it before the wipe", () => {
-    // Raise values: the rung feeds F1200, F1794, F2683, F4012, F6000 as mm/s, rounded up to
+    // Raise values: each tier's rung feeds (see the run-up feed test) as mm/s, rounded up to
     // 3 decimals (hand-derived); lower value: the profile's 5 mm/s.
-    const raise = ['20', '29.9', '44.717', '66.867', '100']
+    const raise: Record<number, string[]> = {
+      90: ['20', '24.167', '29.2', '42.5', '61.85', '90'],
+      150: ['20', '24.167', '29.2', '44.017', '66.35', '100'],
+    }
     const chunk = measuredChunk(lines)
     for (const line of allLines) {
       const idx = chunk.indexOf(cornerMoveStr(line))
-      expect(chunk[idx - 1]).toBe(`SET_VELOCITY_LIMIT SQUARE_CORNER_VELOCITY=${raise[line.rungIndex]}`)
+      expect(chunk[idx - 1]).toBe(
+        `SET_VELOCITY_LIMIT SQUARE_CORNER_VELOCITY=${raise[line.speedMmS][line.rungIndex]}`,
+      )
       // The lower follows the coast's planner stop and precedes the wipe.
       const wipe = chunk.findIndex((l, i) => i > idx && /^G1 X.* E-/.test(l))
       expect(chunk.slice(wipe - 2, wipe)).toEqual([
@@ -290,7 +301,7 @@ describe('generateIsGcodeWithReport (Klipper)', () => {
 
   it('brings the planner to rest three times per line: before the travel, the first stretch and the wipe', () => {
     const chunk = measuredChunk(lines)
-    expect(chunk.filter((l) => l === 'G4 P0')).toHaveLength(60)
+    expect(chunk.filter((l) => l === 'G4 P0')).toHaveLength(72)
     for (const line of allLines) {
       const idx = chunk.indexOf(cornerMoveStr(line))
       // Backwards from the corner: raise, first stretch, stop, un-retract, travel, stop.
@@ -329,8 +340,8 @@ describe('generateIsGcodeWithReport (Klipper)', () => {
       chunk.flatMap((l, i) =>
         firstStretchEnds.some((p) => l.startsWith(p)) ? [[chunk[i - 2], chunk[i - 1], l.split(' E')[1]]] : [],
       )
-    expect(lineStarts(pedestal)).toEqual(Array(20).fill(['G1 E0.800 F2100', 'G4 P0', '0.06473 F1800']))
-    expect(lineStarts(measured)).toEqual(Array(20).fill(['G1 E0.800 F2100', 'G4 P0', '0.09406 F1800']))
+    expect(lineStarts(pedestal)).toEqual(Array(24).fill(['G1 E0.800 F2100', 'G4 P0', '0.06473 F1800']))
+    expect(lineStarts(measured)).toEqual(Array(24).fill(['G1 E0.800 F2100', 'G4 P0', '0.09406 F1800']))
   })
 
   it('runs each measured segment at its tier feedrate with full flow across the whole protected span', () => {
@@ -555,7 +566,7 @@ describe('generateIsGcodeWithReport (Klipper)', () => {
   })
 
   it('warns once, at the line speed, when both speed tiers exceed the flow limit', () => {
-    // A 5 mm^3/s filament limit sits below both default tiers: 106 x 0.07541592 mm^2 = 7.99 and
+    // A 5 mm^3/s filament limit sits below both default tiers: 90 x 0.07541592 mm^2 = 6.79 and
     // 150 x 0.07541592 mm^2 = 11.31 mm^3/s (the 0.42 x 0.2 mm rounded bead), hand-derived.
     const weak = { ...filament, maxVolumetricFlowMm3S: 5 }
     const flowWarnings = generateIsGcodeWithReport(profile, weak, spec).warnings.filter((w) =>
@@ -741,12 +752,12 @@ describe('contrastBase', () => {
 })
 
 describe('bed fitting', () => {
-  it('drops the derived 106 mm/s tier with a note when the coupon overflows an 80 mm bed', () => {
+  it('drops the derived 90 mm/s tier with a note when the coupon overflows an 80 mm bed', () => {
     const small: PrinterProfile = { ...profile, bedWidthMm: 80, bedDepthMm: 80 }
     const r = generateIsGcodeWithReport(small, filament, spec)
-    expect(r.warnings.some((w) => w.includes('106 mm/s') && w.includes('removed'))).toBe(true)
+    expect(r.warnings.some((w) => w.includes('90 mm/s') && w.includes('removed'))).toBe(true)
     // Only the 150 mm/s line feed remains on the measured lines.
-    expect(r.gcode).not.toMatch(/^G1 X.* E[\d.]+ F6360$/m)
+    expect(r.gcode).not.toMatch(/^G1 X.* E[\d.]+ F5400$/m)
     expect(r.gcode).toMatch(/^G1 X.* E[\d.]+ F9000$/m)
   })
 
@@ -757,9 +768,9 @@ describe('bed fitting', () => {
       'The measured lines were shortened from 30 mm to 25 mm so the coupon fits the configured bed.',
     )
     const ys = [...r.gcode.matchAll(/^G[01] X(-?[\d.]+) Y(-?[\d.]+)/gm)].map((m) => Number(m[2]))
-    // The 109.806 mm coupon starts at the 10 mm front margin and ends at 119.806 mm.
+    // The five-line 109.283 mm coupon starts at the 10 mm front margin and ends at 119.283 mm.
     expect(Math.min(...ys)).toBeGreaterThanOrEqual(10)
-    expect(Math.max(...ys)).toBeLessThanOrEqual(119.806 + 0.001)
+    expect(Math.max(...ys)).toBeLessThanOrEqual(119.283 + 0.001)
   })
 
   it('throws when even the smallest coupon overflows the bed', () => {
@@ -779,18 +790,18 @@ describe('validation and reporting', () => {
   })
 
   it('prints one tier, with the note, when the line speed is too slow for two', () => {
-    // The tiers of a 28 mm/s line speed are 19 and 28 mm/s; the 19 mm/s tier is below the
-    // 20 mm/s bottom rung, so the coupon prints the 28 mm/s tier alone.
+    // The tiers of a 33 mm/s line speed are 19 and 33 mm/s; the 19 mm/s tier is below the
+    // 20 mm/s bottom rung, so the coupon prints the 33 mm/s tier alone.
     const r = generateIsGcodeWithReport(profile, filament, {
       ...spec,
       cornerSpeedMmS: 20,
-      speedsMmS: [19, 28],
+      speedsMmS: [19, 33],
     })
-    expect(r.gcode.split('\n')[1]).toBe('; speed tiers 28 mm/s, acceleration 3000 mm/s^2')
+    expect(r.gcode.split('\n')[1]).toBe('; speed tiers 33 mm/s, acceleration 3000 mm/s^2')
     expect(r.warnings).toContain(
       'The 19 mm/s speed tier was removed because it is slower than the 20 mm/s lowest corner ' +
         'speed. With one speed tier, the analysis cannot tell print and scan patterns apart from ' +
-        'ringing. Raise the line speed to at least 29 mm/s to keep both speed tiers.',
+        'ringing. Raise the line speed to at least 34 mm/s to keep both speed tiers.',
     )
   })
 
@@ -923,9 +934,9 @@ describe('first layer speed', () => {
         .map((l) => Number(l.match(/ F(\d+)$/)![1]))
     const pedestalPrimes = primeFeeds(chunks[0])
     const measuredPrimes = primeFeeds(chunks[chunks.length - 1])
-    // One first stretch per test line on each layer: ten lines per axis, both axes.
-    expect(pedestalPrimes).toEqual(Array(20).fill(1200))
-    expect(measuredPrimes).toEqual(Array(20).fill(1800))
+    // One first stretch per test line on each layer: twelve lines per axis, both axes.
+    expect(pedestalPrimes).toEqual(Array(24).fill(1200))
+    expect(measuredPrimes).toEqual(Array(24).fill(1800))
   })
 
   it('caps only the base first layer when a contrast base is printed', () => {

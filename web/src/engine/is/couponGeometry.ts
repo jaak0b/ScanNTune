@@ -50,17 +50,37 @@ export const MIN_CORNER_SPEED_MM_S = 20
  * line speed when that is slower. A line's run-up cruises into the corner at its rung, and a
  * cruise faster than the line it feeds would brake into the corner instead of passing it.
  */
-export function tierLadderTopMmS(spec: IsTestSpec, tierSpeedMmS: number): number {
+export function tierLadderTopMmS(
+  spec: Pick<IsTestSpec, 'cornerSpeedMmS'>,
+  tierSpeedMmS: number,
+): number {
   return Math.min(spec.cornerSpeedMmS, tierSpeedMmS)
 }
 
+/** Minimum lines entering the joint fit before the axis estimate is meaningful. The ladder
+ *  reserves this many rungs at or below the fastest followable corner (ladderCornerSpeeds). */
+export const MIN_ACCEPTED_LINES = 3
+
+/** `count` geometrically spaced speeds from `from` to `to`, both included. */
+function geometricRungs(from: number, to: number, count: number): number[] {
+  if (count === 1) return [to]
+  const ratio = Math.pow(to / from, 1 / (count - 1))
+  return Array.from({ length: count }, (_, j) => from * Math.pow(ratio, j))
+}
+
 /**
- * The corner-speed excitation ladder of one tier: its lines take their ringing corner at
- * geometrically spaced speeds from MIN_CORNER_SPEED_MM_S up to the tier's ladder top, one
- * rung per line, the step-excitation idea of Klipper's ringing tower: the print self-ranges,
- * so the ringing is pronounced on some lines regardless of frame stiffness. One entry per
- * rung, lowest first. `tierSpeedMmS` defaults to the fastest tier, whose ladder top is the
- * spec's corner speed.
+ * The corner-speed excitation ladder of one tier, one rung per line, lowest first: the
+ * step-excitation idea of Klipper's ringing tower, so the print self-ranges and the ringing is
+ * pronounced on some lines regardless of frame stiffness. A fast corner rings harder but leaves
+ * a ring whose bead the traced centreline cannot follow at the top of the band (see
+ * ringPathMinRadiusMm), so the ladder is dense at the bottom: its lowest MIN_ACCEPTED_LINES
+ * rungs are spaced geometrically from MIN_CORNER_SPEED_MM_S up to the spec's fastest followable
+ * corner, and the remaining rungs geometrically from there up to the tier's ladder top. The
+ * analysis can then reach its line floor from the followable rungs alone at the band top, while
+ * the faster rungs carry the strong excitation. When the followable corner lies outside the
+ * ladder's range (every rung follows, or not even the bottom rung does), or the tier has no rung
+ * left above the followable ones, the rungs are spaced geometrically over the whole range.
+ * `tierSpeedMmS` defaults to the fastest tier, whose ladder top is the spec's corner speed.
  */
 export function ladderCornerSpeeds(
   spec: IsTestSpec,
@@ -68,9 +88,13 @@ export function ladderCornerSpeeds(
 ): number[] {
   const n = spec.linesPerSpeed
   const top = tierLadderTopMmS(spec, tierSpeedMmS)
-  if (n === 1) return [top]
-  const ratio = Math.pow(top / MIN_CORNER_SPEED_MM_S, 1 / (n - 1))
-  return Array.from({ length: n }, (_, j) => MIN_CORNER_SPEED_MM_S * Math.pow(ratio, j))
+  const followable = spec.followableCornerMmS
+  if (n <= MIN_ACCEPTED_LINES || followable <= MIN_CORNER_SPEED_MM_S || followable >= top) {
+    return geometricRungs(MIN_CORNER_SPEED_MM_S, top, n)
+  }
+  const bottom = geometricRungs(MIN_CORNER_SPEED_MM_S, followable, MIN_ACCEPTED_LINES)
+  const upper = geometricRungs(followable, top, n - MIN_ACCEPTED_LINES + 1).slice(1)
+  return [...bottom, ...upper]
 }
 
 /**
@@ -79,7 +103,7 @@ export function ladderCornerSpeeds(
  * speed defaults to the spec's top rung; ladder-aware callers pass the line's own rung.
  */
 export function tierRampMm(
-  spec: IsTestSpec,
+  spec: Pick<IsTestSpec, 'accelMmS2' | 'cornerSpeedMmS'>,
   speedMmS: number,
   cornerSpeedMmS: number = spec.cornerSpeedMmS,
 ): number {
@@ -96,7 +120,7 @@ export const MIN_MEASURED_LINE_MM = 20
  * crossing, flow change, or speed change is allowed inside it.
  */
 export function protectedSpanMm(
-  spec: IsTestSpec,
+  spec: Pick<IsTestSpec, 'accelMmS2' | 'cornerSpeedMmS' | 'measuredLineMm'>,
   speedMmS: number,
   cornerSpeedMmS: number = spec.cornerSpeedMmS,
 ): number {

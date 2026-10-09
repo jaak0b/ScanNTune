@@ -88,8 +88,8 @@ export const PROFILE_HALF_WINDOW_MM = 1.0
  * exactly the mean of the neighbouring samples, so half-pixel steps make the trace's noise
  * covariance nearly singular and the generalized least squares whitening amplify the ring
  * columns' sub-sample curvature into false detections (measured on simulated blur-1 px traces:
- * 12% of noise-only axes). The ring band lies below 0.06 cycles per pixel, so the pixel pitch
- * resolves it with nothing lost.
+ * 12% of noise-only axes). The ring band lies below 0.1 cycles per pixel (200 Hz on the 90 mm/s
+ * default slow tier at 600 dpi is 0.094), so the pixel pitch resolves it with nothing lost.
  */
 const ALONG_STEP_PX = 1
 /** Step across the line in image px. */

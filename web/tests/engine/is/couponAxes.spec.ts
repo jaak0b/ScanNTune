@@ -22,7 +22,7 @@ import type { SimRing, TraceSimOptions } from '../../helpers/isTraceSim'
 // level), with a standard error under twice the largest no-lag one: 0.0156 Hz on X, 0.0368 Hz on Y.
 
 const profile = defaultPrinterProfile()
-/** The default two-axis coupon: tiers 106 and 150 mm/s, five rungs each. */
+/** The default two-axis coupon: tiers 90 and 150 mm/s, six rungs each. */
 const twoAxes: IsTestSpec = fitSpecToPrinter(defaultIsTestRequest(profile), profile).spec
 /** A one-tier two-axis coupon at 150 mm/s. */
 const oneTier: IsTestSpec = fitSpecToPrinter({ ...defaultIsTestRequest(profile), speedsMmS: [150] }, profile).spec

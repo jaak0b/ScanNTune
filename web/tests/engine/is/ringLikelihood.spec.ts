@@ -50,11 +50,11 @@ describe('ringLikelihoodRatio', () => {
 
   it('credits a persistent ring that the null noise model absorbs', () => {
     // zeta 0.002 at 60 Hz, 0.03 mm on the top rung: an AR model of the null predicts it almost
-    // exactly. 28.7 is the single-line critical value 2 ln(1703 / 0.001) of the detection bound
+    // exactly. 29.3 is the single-line critical value 2 ln(2353 / 0.001) of the detection bound
     // (hand-computed): held fixed the line shows nothing, refitted it is detected on its own.
     const fit = nullFitOf({ noise: { model: 'iid', sigmaPx: 0.1 }, ring: { frequencyHz: 60, dampingRatio: 0.002, ampMm: 0.03 } }, 1, 9)
-    expect(heldAt(fit, 60, 0.002)).toBeLessThan(28.7)
-    expect(ringLikelihoodRatio(fit.basis, fit.h0, { frequencyHz: 60, dampingRatio: 0.002 }).statistic).toBeGreaterThan(28.7)
+    expect(heldAt(fit, 60, 0.002)).toBeLessThan(29.3)
+    expect(ringLikelihoodRatio(fit.basis, fit.h0, { frequencyHz: 60, dampingRatio: 0.002 }).statistic).toBeGreaterThan(29.3)
   })
 })
 

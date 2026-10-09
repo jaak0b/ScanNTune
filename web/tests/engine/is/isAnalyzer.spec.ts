@@ -21,7 +21,7 @@ import type { ScaleReference } from '../../../src/engine/scannerCalibration'
 // rendered at the 600 dpi class resolution a real scan is expected to have.
 const PX_PER_MM = 24
 const profile = defaultPrinterProfile()
-// The fitted default coupon: tiers 106 / 150 mm/s interleaved, five lines per speed.
+// The fitted default coupon: tiers 90 / 150 mm/s interleaved, six lines per speed.
 const baseSpec = fitSpecToPrinter(defaultIsTestRequest(profile), profile).spec
 // A single-axis (Y only) spec keeps the coupon, and thus the render time, small for the
 // refusal-gate tests; the flagship recovery test uses the full two-axis default.
@@ -398,8 +398,8 @@ describe('analyzeIsCoupon render recovery', () => {
   it(
     'refuses a coupon printed with a different lines-per-speed than the configured spec',
     async () => {
-      // The coupon is rendered at five lines per speed but analyzed with the eight-line
-      // default. The plate and its fiducials are found and an orientation solves, but the
+      // The coupon is rendered at five lines per speed but analyzed with an eight-line
+      // configuration. The plate and its fiducials are found and an orientation solves, but the
       // printed lines do not sit where the configured geometry expects, so the aligner must
       // refuse pointing at the configured test settings rather than reporting no coupon.
       const printedSpec: IsTestSpec = { ...ySpec, linesPerSpeed: 5 }

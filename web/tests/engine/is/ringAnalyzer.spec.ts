@@ -23,7 +23,7 @@ import type { SimLine, TraceSimOptions } from '../../helpers/isTraceSim'
 // isAnalyzer.spec.ts; the statistical calibration of every decision in tests/stats.
 
 const profile = defaultPrinterProfile()
-/** The default coupon's Y group: tiers 106 and 150 mm/s, five rungs each. */
+/** The default coupon's Y group: tiers 90 and 150 mm/s, six rungs each. */
 const twoTier: IsTestSpec = { ...fitSpecToPrinter(defaultIsTestRequest(profile), profile).spec, axes: ['y'] }
 /** A one-tier coupon at 150 mm/s. */
 const oneTier: IsTestSpec = {
@@ -87,9 +87,9 @@ describe('analyzeTracedLine', () => {
 })
 
 describe('poolAxisFits detection', () => {
-  it('pays the look-elsewhere penalty over 1,703 grid points', () => {
-    // 131 frequencies (20 to 150 Hz every 1 Hz) times 13 damping ratios.
-    expect(DETECTION_GRID_SIZE).toBe(1703)
+  it('pays the look-elsewhere penalty over 2,353 grid points', () => {
+    // 181 frequencies (20 to 200 Hz every 1 Hz) times 13 damping ratios.
+    expect(DETECTION_GRID_SIZE).toBe(2353)
   })
 
   it('refuses scan noise alone with the no-ringing reason and its rescan advice', () => {
@@ -184,7 +184,7 @@ describe('poolAxisFits estimation', () => {
   it('passes every check on a real ring: speed, proportionality, replicates, decay', () => {
     const p = pool(twoTier, simulate(twoTier, { noise: IID, ring: { frequencyHz: 60, dampingRatio: 0.05, ampMm: 0.03 } }))
     expect(p.speedCheck.state).toBe('confirmed')
-    expect(p.speedCheck.tiers.map((t) => t.speedMmS)).toEqual([106, 150])
+    expect(p.speedCheck.tiers.map((t) => t.speedMmS)).toEqual([90, 150])
     expect(p.proportionality).toBe('passed')
     expect(p.replicateCheck).toBe('passed')
     expect(p.decayDemonstrated).toBe(true)
@@ -336,7 +336,7 @@ describe('poolAxisFits checks', () => {
 
   it('refuses a strongly damped pedestal ring because its frequency changes with the line speed', () => {
     // The pedestal ring at damping 0.1, 0.02 mm, decays within a few millimetres, so it reads as a
-    // ring: 70.7 Hz at 106 mm/s and 100 Hz at 150 mm/s.
+    // ring: 60 Hz at 90 mm/s and 100 Hz at 150 mm/s.
     const pedestal = { frequencyHz: 30, dampingRatio: 0.1, ampMm: 0.02, speedMmS: 45 }
     const p = pool(twoTier, simulate(twoTier, { noise: IID, pedestalRing: pedestal }, 3))
     expect(p.speedCheck.state).toBe('changed')
@@ -347,11 +347,11 @@ describe('poolAxisFits checks', () => {
   })
 
   it('accepts a ring that the slower tier alone does not show, with the speed check not confirmed', () => {
-    // Truth 60 Hz, zeta 0.05, 0.03 mm on the top rung; the 106 mm/s lines (group order 106, 150,
-    // 150, 106, ...) carry eight times the scan noise, so that tier alone detects nothing. The
+    // Truth 60 Hz, zeta 0.05, 0.03 mm on the top rung; the 90 mm/s lines (group order 90, 150,
+    // 150, 90, ...) carry eight times the scan noise, so that tier alone detects nothing. The
     // joint frequency's 95% halfwidth is about 0.28 Hz here, so 0.5 Hz is more than three
     // standard errors.
-    const noisySlowTier = [8, 1, 1, 8, 8, 1, 1, 8, 8, 1]
+    const noisySlowTier = [8, 1, 1, 8, 8, 1, 1, 8, 8, 1, 1, 8]
     const p = pool(
       twoTier,
       simulate(
@@ -362,7 +362,7 @@ describe('poolAxisFits checks', () => {
     )
     expect(p.speedCheck.state).toBe('not-confirmed')
     expect(p.speedCheck.tiers.map((t) => [t.speedMmS, t.detected])).toEqual([
-      [106, false],
+      [90, false],
       [150, true],
     ])
     expect(p.refusals).toEqual([])
@@ -429,7 +429,7 @@ describe('poolAxisFits checks', () => {
     expect(p.refusals).toEqual([
       'The ringing found on this axis rests on a single line, so a print defect or dust on that ' +
         'line could have caused it. Rescan the coupon, or reprint it at a line speed of at ' +
-        'least 29 mm/s on a bed large enough for both speed tiers.',
+        'least 34 mm/s on a bed large enough for both speed tiers.',
     ])
   })
 

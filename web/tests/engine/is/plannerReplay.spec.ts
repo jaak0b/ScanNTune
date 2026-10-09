@@ -62,14 +62,19 @@ const PROFILE_LIMIT = 5
 
 /**
  * The corner speed of each ladder rung as the default coupon commands it on the measured layer,
- * mm/s, lowest rung first. Hand-derived once: the rungs 20 * (top / 20)^(j / (n - 1)) mm/s
- * rounded to the whole mm/min the G-code prints, five rungs up to 100 mm/s (F1200, F1794,
- * F2683, F4012, F6000).
+ * mm/s, per tier, lowest rung first. Hand-derived once: the bottom-dense rungs
+ * 20 * (29.2 / 20)^(j / 2) mm/s for j = 0..2, then 29.2 * (top / 29.2)^(k / 3) for k = 1..3 up to
+ * the tier's top (90 mm/s on the 90 mm/s tier, 100 mm/s on the 150 mm/s tier), rounded to the
+ * whole mm/min the G-code prints (F1200, F1450, F1752, then F2550, F3711, F5400 and F2641,
+ * F3981, F6000).
  */
-const MEASURED_RUNG_MM_S = [20, 29.9, 44.716667, 66.866667, 100]
+const MEASURED_RUNG_MM_S: Record<number, number[]> = {
+  90: [20, 24.166667, 29.2, 42.5, 61.85, 90],
+  150: [20, 24.166667, 29.2, 44.016667, 66.35, 100],
+}
 /** The same rungs on the pedestal layer, where the profile's 30 mm/s first layer speed (F1800)
  *  caps every line. */
-const PEDESTAL_RUNG_MM_S = [20, 29.9, 30, 30, 30]
+const PEDESTAL_RUNG_MM_S = [20, 24.166667, 29.2, 30, 30, 30]
 /** The pedestal layer's line speed: the profile's 30 mm/s first layer speed. */
 const PEDESTAL_LINE_SPEED_MM_S = 30
 
@@ -118,7 +123,7 @@ describe('the input shaper coupon on the Klipper planner', () => {
       const line = lineAtCorner.get(at(c.x, c.y))!
       const pedestal = k < linesPerLayer
       return {
-        rungMmS: (pedestal ? PEDESTAL_RUNG_MM_S : MEASURED_RUNG_MM_S)[line.rungIndex],
+        rungMmS: (pedestal ? PEDESTAL_RUNG_MM_S : MEASURED_RUNG_MM_S[line.speedMmS])[line.rungIndex],
         lineMmS: pedestal ? PEDESTAL_LINE_SPEED_MM_S : line.speedMmS,
       }
     })

@@ -186,8 +186,9 @@ describe('multi-mode shaper selection', () => {
   })
 
   it('tunes every shaper type within its own frequency range', () => {
+    // The search reaches the 200 Hz band top; Klipper's own search stops at 150 Hz.
     const { options } = recommendShapersForModes(twoModes)
     expect(options.map((o) => o.type)).toEqual(['ZV', 'MZV', 'EI', '2HUMP_EI', '3HUMP_EI'])
-    for (const o of options) expect(o.frequencyHz).toBeLessThanOrEqual(150)
+    for (const o of options) expect(o.frequencyHz).toBeLessThan(200)
   })
 })

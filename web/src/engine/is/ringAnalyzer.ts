@@ -97,9 +97,9 @@ import { tQuantile } from '../studentT'
 //    held fixed at every grid point, and the refitted ratio at the null spectrum's in-band peaks
 //    (where an absorbed component shows) and wherever a maximum is taken, since every maximum
 //    the analysis uses is evaluated with the refitted model. The look-elsewhere effect over the
-//    grid G (FREQUENCY_GRID_HZ x ZETA_GRID, |G| = 1,703) is paid by the Bonferroni bound
-//    pBound = min(1, |G| P(chi2_2K >= max_G Q)) (Dunn 1961); a lower bound of Q can only raise
-//    pBound, so the bound stays valid. Per-line labels use the same bound on each line's own
+//    grid G (FREQUENCY_GRID_HZ x ZETA_GRID, |G| = 181 x 13 = 2,353) is paid by the Bonferroni
+//    bound pBound = min(1, |G| P(chi2_2K >= max_G Q)) (Dunn 1961); a lower bound of Q can only
+//    raise pBound, so the bound stays valid. Per-line labels use the same bound on each line's own
 //    statistic.
 // 5. Estimation: seed at argmax_G Q, then generalized least squares variable projection (Golub
 //    and Pereyra 1973) over (f, zeta, log tau) with each line's noise model refitted under the

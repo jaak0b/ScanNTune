@@ -99,7 +99,8 @@ function distanceAtTime(t: number, c: number, v: number, a: number): number {
 }
 
 /** Step of the deposit-time table along a lagged line, mm: linear interpolation over it misses a
- *  0.25 mm ring of 0.7 mm wavelength (150 Hz at 106 mm/s) by under a tenth of a micrometre. */
+ *  0.25 mm ring of 0.45 mm wavelength (200 Hz at 90 mm/s) by under 0.2 micrometres, a two
+ *  hundredth of a 600 dpi pixel. */
 const LAG_TABLE_STEP_MM = 0.005
 
 function gauss(rand: () => number): number {

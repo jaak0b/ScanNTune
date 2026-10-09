@@ -17,7 +17,7 @@ function fitted(overrides: Partial<IsTestRequest>): IsTestSpec {
   return { ...fitSpecToPrinter({ ...defaultIsTestRequest(profile), ...overrides }, profile).spec, axes: ['y'] }
 }
 
-/** The default coupon's Y group: tiers 106 and 150 mm/s, five rungs each. */
+/** The default coupon's Y group: tiers 90 and 150 mm/s, six rungs each. */
 export const TWO_TIER = fitted({})
 
 type CaseOptions = Omit<TraceSimOptions, 'seed' | 'spec'>
