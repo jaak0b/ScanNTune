@@ -228,21 +228,25 @@ speed check's power and the confidence gate (`speedTiersFor`, ratio 1.6547; 90 a
 both tiers need a line speed of at least 34 mm/s). Each tier has a bottom-dense corner-speed ladder, one
 rung per line, with the fastest corners printed last in every layer: three rungs spaced geometrically from
 20 mm/s up to the fastest corner whose bead still follows a ring at every 1 Hz grid frequency of the band
-(`fastestFollowableCornerMmS`, 29.2 mm/s by default, carried on the fitted spec as `followableCornerMmS`),
-the rest geometrically from there up to the corner speed (100 mm/s by default). Followability is judged at
-an assumed damping ratio of 0.04 from the first traced millimetre, at every grid frequency, because it is
-not monotone in frequency. At a low acceleration the 20 mm/s bottom rung itself folds inside the band; the
-ladder is then designed up to the highest frequency that rung still follows (58 Hz at 1000 mm/s^2, 86 Hz
-at 1200 with a 0.4 mm nozzle), and `bandTopWarning` names that reduced band top and the acceleration, or
-says the coupon reads nothing when even that rung folds at 20 Hz. The line count per speed is derived
-(`ladderLinesPerSpeed`), 6 by default: three followable rungs plus three faster ones; the bed fit removes
-only upper rungs and never goes below the followable floor of 4, so a smaller bed never lowers the band
-top. Each line
+(`fastestFollowableCornerMmS`, 25.5 mm/s by default, carried on the fitted spec as `followableCornerMmS`),
+then an upper ladder spaced in three geometric steps from there towards the corner speed (100 mm/s by
+default), of which only the rungs whose bead follows a ring at one band frequency at least are printed.
+Followability is judged from the first traced millimetre, at every grid frequency, at the damping ratio
+the request carries as `followabilityDampingRatio` (`FOLLOWABILITY_DAMPING_RATIO`, 0.03: a well-built
+CoreXY X axis measured 0.033 by accelerometer, and a lighter damping is the safe side). At a low
+acceleration the 20 mm/s bottom rung itself folds inside the band; the ladder is then designed up to the
+highest frequency that rung still follows (47 Hz at 1000 mm/s^2, 64 Hz at 1200, 97 Hz at 1500 with a
+0.4 mm nozzle), and `bandTopWarning` names that reduced band top and the acceleration. When even that rung
+folds at 20 Hz (below 567 mm/s^2 for a 0.4 mm nozzle at the default speeds, and for a
+line speed of 60 mm/s or less at 1500 to 20000 mm/s^2), `fitSpecToPrinter` refuses the coupon, so no G-code is offered. The line
+count per speed is derived (`ladderLinesPerSpeed`), 4 by default: three followable rungs plus the one
+upper rung that follows at the low end of the band; the bed fit removes only upper rungs and never goes
+below the followable floor of 3, so a smaller bed never lowers the band top. Each line
 raises the firmware's corner limit to its own rung only for its run-up, measured segment, tail and coast,
 then sets the profile's own value back (`junctionLimitCommands`), with planner stops (`G4 P0`) between
 lines. The test runs at the profile's print acceleration and resets the speed factor with `M220 S100`,
 because a leftover speed factor would scale the frequency on both tiers alike. The default coupon is
-124.283 mm square (about 16.6 minutes of motion); a 120 mm bed fits it at 119.283 mm with 25 mm lines. Measurement (`lineTracer`, `ringAnalyzer`, `ringGls`, `ringLikelihood`,
+104.283 mm square (about 13.1 minutes of motion) and fits a 120 mm bed unchanged. Measurement (`lineTracer`, `ringAnalyzer`, `ringGls`, `ringLikelihood`,
 `artifactSearch`, `inputProportionality`, `alongTrackLag`): each line's centre is traced to sub-pixel
 precision and its lateral deviation converts to true mm through the card `ScaleReference`. The time base
 is the deliberate exception: a sample's time since the corner comes from its commanded coupon-frame
