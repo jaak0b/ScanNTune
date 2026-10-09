@@ -1,11 +1,11 @@
-import { F_MAX_HZ, F_MIN_HZ } from './types'
+import { F_MAX_HZ, F_MIN_HZ, FREQUENCY_GRID_HZ } from './types'
+
+export { FREQUENCY_GRID_HZ }
 
 // The regressor columns of the input shaper ring model, as functions of a line's sample times
 // (seconds since the ringing corner). Pure functions, shared by the detection field and the
 // estimation stages so both use identical columns.
 
-/** Frequency step of the detection grid, Hz. */
-export const FREQUENCY_GRID_HZ = 1
 /** Damping grid of the detection field and the estimation seed (log-spaced over the physical
  *  range of machine damping). */
 export const ZETA_GRID = [0.001, 0.002, 0.005, 0.01, 0.02, 0.035, 0.05, 0.075, 0.1, 0.15, 0.22, 0.3, 0.4]

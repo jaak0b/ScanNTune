@@ -178,6 +178,16 @@ describe('bottom-dense ladder and derived lines per speed (bead followability on
     expect(spec.linesPerSpeed).toBe(6)
     expect(followableRungCount(spec, wide)).toBe(3)
   })
+  it('never reports a corner that folds inside the band as followable up to 200 Hz', () => {
+    // 0.4 mm nozzle at 1500 mm/s^2, 90 mm/s tier: a 21.2 mm/s corner follows a ring at 200 Hz but
+    // folds from 129 to 193 Hz (checked once at every 1 Hz grid point by a scratch script), while
+    // the 20 and 20.6 mm/s rungs follow the whole band.
+    const p = { ...profile, printAccelMmS2: 1500 }
+    const spec = fitted(defaultIsTestRequest(p), p)
+    expect(guaranteedBandTopHz({ ...spec, followableCornerMmS: 21.2 }, p)).toBe(128)
+    expect(spec.followableCornerMmS).toBeLessThan(21.2)
+    expect(guaranteedBandTopHz(spec, p)).toBe(200)
+  })
   it('falls back to three plain rungs when not even the bottom rung follows, and warns', () => {
     // At 1000 mm/s^2 even a 20 mm/s corner folds at 200 Hz, so no ladder can keep three
     // followable rungs there.

@@ -64,8 +64,8 @@ export interface IsTestSpec {
    */
   cornerSpeedMmS: number
   /**
-   * The fastest corner speed whose bead still follows a ring at the band top F_MAX_HZ on the
-   * slowest tier (fastestFollowableCornerMmS), derived by fitSpecToPrinter. The ladder places its
+   * The fastest corner speed whose bead still follows a ring at every grid frequency of the band
+   * on the slowest tier (fastestFollowableCornerMmS), derived by fitSpecToPrinter. The ladder places its
    * lowest rungs at or below it (ladderCornerSpeeds), so the generator, the analysis and the
    * simulators all read the same rungs from this one value.
    */
@@ -99,6 +99,9 @@ type LadderRequest = Omit<IsTestSpec, 'linesPerSpeed'>
 /** Frequency search range of the ringing fit: the flow's measurable resonance band. */
 export const F_MIN_HZ = 20
 export const F_MAX_HZ = 200
+/** Step of the band's frequency grid, Hz: the detection grid's frequency axis and the grid the
+ *  coupon's bead followability is checked on. */
+export const FREQUENCY_GRID_HZ = 1
 
 /** The flow's false-alarm level for every detection decision (0.1%). */
 export const DETECTION_ALPHA = 0.001
@@ -342,12 +345,50 @@ function followsRing(
 }
 
 /**
+ * The highest frequency up to which a corner's bead follows a ring at every point of the band's
+ * frequency grid (every FREQUENCY_GRID_HZ from F_MIN_HZ), found by scanning upward to the first
+ * failure; null when it fails already at F_MIN_HZ. Followability is not monotone in frequency: a
+ * higher frequency curves the ring more sharply per unit amplitude, but its ring also decays
+ * faster in time, so a corner can fold inside the band and follow again at its top. Only the scan
+ * from the bottom of the band is safe.
+ */
+function followedBandTopHz(
+  spec: RingPathInputs,
+  profile: PrinterProfile,
+  tierSpeedMmS: number,
+  cornerSpeedMmS: number,
+): number | null {
+  let top: number | null = null
+  for (let f = F_MIN_HZ; f <= F_MAX_HZ; f += FREQUENCY_GRID_HZ) {
+    if (!followsRing(spec, profile, tierSpeedMmS, cornerSpeedMmS, f)) return top
+    top = f
+  }
+  return top
+}
+
+/** Whether a corner's bead follows a ring at every grid frequency from F_MIN_HZ up to `topHz`. */
+function followsBandUpTo(
+  spec: RingPathInputs,
+  profile: PrinterProfile,
+  tierSpeedMmS: number,
+  cornerSpeedMmS: number,
+  topHz: number,
+): boolean {
+  for (let f = F_MIN_HZ; f <= topHz; f += FREQUENCY_GRID_HZ) {
+    if (!followsRing(spec, profile, tierSpeedMmS, cornerSpeedMmS, f)) return false
+  }
+  return true
+}
+
+/**
  * The fastest corner speed, on a FOLLOWABLE_CORNER_STEP_MM_S grid, whose bead follows a ring at
- * F_MAX_HZ on the slowest tier, found by bisection between MIN_CORNER_SPEED_MM_S and the tier's
- * ladder top (a faster corner rings with a larger amplitude, so its path curves more sharply).
- * The slowest tier binds: its along-track speed is the lowest, so every faster tier follows the
- * same corners. Returns the ladder top when even that rung follows, and one step below
- * MIN_CORNER_SPEED_MM_S when not even the bottom rung does.
+ * every grid frequency of the band on the slowest tier (followsBandUpTo up to F_MAX_HZ), found by
+ * bisection between MIN_CORNER_SPEED_MM_S and the tier's ladder top: at every sample a faster
+ * corner rings with a larger amplitude and leaves a smaller along-track gain over its own speed,
+ * so its path curves more sharply at every frequency. The slowest tier binds: its along-track
+ * speed is the lowest, so every faster tier follows the same corners. Returns the ladder top when
+ * even that rung follows, and one step below MIN_CORNER_SPEED_MM_S when not even the bottom rung
+ * does.
  */
 export function fastestFollowableCornerMmS(
   request: IsTestRequest,
@@ -355,7 +396,7 @@ export function fastestFollowableCornerMmS(
 ): number {
   const slowest = Math.min(...request.speedsMmS)
   const step = FOLLOWABLE_CORNER_STEP_MM_S
-  const follows = (c: number) => followsRing(request, profile, slowest, c, F_MAX_HZ)
+  const follows = (c: number) => followsBandUpTo(request, profile, slowest, c, F_MAX_HZ)
   const top = tierLadderTopMmS(request, slowest)
   if (follows(top)) return top
   if (!follows(MIN_CORNER_SPEED_MM_S)) return MIN_CORNER_SPEED_MM_S - step
@@ -371,25 +412,25 @@ export function fastestFollowableCornerMmS(
 }
 
 /**
- * How many rungs of the slowest tier's ladder leave a bead that follows a ring at
- * `frequencyHz` (the band top F_MAX_HZ unless stated) over the whole read window (see
- * followsRing). The slowest tier binds: its along-track speed is the lowest.
+ * How many rungs of the slowest tier's ladder leave a bead that follows a ring at every grid
+ * frequency from F_MIN_HZ up to `topHz` (the band top F_MAX_HZ unless stated) over the whole read
+ * window (see followsBandUpTo). The slowest tier binds: its along-track speed is the lowest.
  */
 export function followableRungCount(
   spec: IsTestSpec,
   profile: PrinterProfile,
-  frequencyHz: number = F_MAX_HZ,
+  topHz: number = F_MAX_HZ,
 ): number {
   const slowest = Math.min(...spec.speedsMmS)
   return ladderCornerSpeeds(spec, slowest).filter((c) =>
-    followsRing(spec, profile, slowest, c, frequencyHz),
+    followsBandUpTo(spec, profile, slowest, c, topHz),
   ).length
 }
 
 /**
  * The fewest lines per speed (at least MIN_LINES_PER_SPEED) whose ladder keeps at least
  * MIN_ACCEPTED_LINES followable rungs on the slowest tier, so the analysis can reach its line
- * floor at the top of the band; MIN_LINES_PER_SPEED when no line count can (not even the bottom
+ * floor across the whole band; MIN_LINES_PER_SPEED when no line count can (not even the bottom
  * rung follows). The bed fit never removes lines below it. With a bottom-dense ladder this is
  * MIN_ACCEPTED_LINES + 1: the followable rungs plus the ladder top.
  */
@@ -405,7 +446,7 @@ function followableLineFloor(request: LadderRequest, profile: PrinterProfile): n
 /**
  * The derived lines per speed. When the fastest followable corner splits the slowest tier's
  * ladder (it lies between the bottom rung and the ladder top), the ladder takes
- * MIN_ACCEPTED_LINES rungs at or below it, so the band top stays readable at the analysis' line
+ * MIN_ACCEPTED_LINES rungs at or below it, so the whole band stays readable at the analysis' line
  * floor, and MIN_ACCEPTED_LINES rungs above it, so a stiff frame whose ring is too small to
  * detect on the slow corners still reaches the line floor from the strong excitation of the
  * fast ones: 6 lines. Otherwise every rung follows (or none does), and the followable line
@@ -420,30 +461,21 @@ export function ladderLinesPerSpeed(request: LadderRequest, profile: PrinterProf
   return followableLineFloor(request, profile)
 }
 
-/** Resolution of the guaranteed band top. */
-const BAND_TOP_STEP_HZ = 1
-
 /**
- * The highest frequency, on a BAND_TOP_STEP_HZ grid from F_MIN_HZ to F_MAX_HZ, at which at
- * least MIN_ACCEPTED_LINES rungs of the slowest tier still leave a followable bead (see
- * followableRungCount), found by bisection (a faster ring curves the path more sharply). It is
- * F_MAX_HZ whenever the ladder keeps its followable rungs there, which the derived ladder does
- * unless not even the bottom rung follows a ring at F_MAX_HZ (a low acceleration or line speed),
- * and F_MIN_HZ when no frequency of the band keeps enough rungs.
+ * The highest grid frequency up to which at least MIN_ACCEPTED_LINES rungs of the slowest tier
+ * follow a ring at every grid frequency from F_MIN_HZ (see followedBandTopHz): the
+ * MIN_ACCEPTED_LINES-th highest of the rungs' own followed band tops. It is F_MAX_HZ whenever the
+ * ladder keeps its followable rungs over the whole band, which the derived ladder does unless not
+ * even the bottom rung follows the whole band (a low acceleration), and F_MIN_HZ when no frequency
+ * of the band keeps enough rungs.
  */
 export function guaranteedBandTopHz(spec: IsTestSpec, profile: PrinterProfile): number {
-  const keeps = (f: number) => followableRungCount(spec, profile, f) >= MIN_ACCEPTED_LINES
-  if (keeps(F_MAX_HZ)) return F_MAX_HZ
-  if (!keeps(F_MIN_HZ)) return F_MIN_HZ
-  // Bisection on the grid index; invariant: lo * step keeps the rungs, hi * step does not.
-  let lo = F_MIN_HZ / BAND_TOP_STEP_HZ
-  let hi = F_MAX_HZ / BAND_TOP_STEP_HZ
-  while (hi - lo > 1) {
-    const mid = Math.floor((lo + hi) / 2)
-    if (keeps(mid * BAND_TOP_STEP_HZ)) lo = mid
-    else hi = mid
-  }
-  return lo * BAND_TOP_STEP_HZ
+  const slowest = Math.min(...spec.speedsMmS)
+  const tops = ladderCornerSpeeds(spec, slowest)
+    .map((c) => followedBandTopHz(spec, profile, slowest, c))
+    .filter((top): top is number => top !== null)
+    .sort((x, y) => y - x)
+  return tops.length < MIN_ACCEPTED_LINES ? F_MIN_HZ : tops[MIN_ACCEPTED_LINES - 1]
 }
 
 /**
