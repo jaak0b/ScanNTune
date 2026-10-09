@@ -2,10 +2,11 @@ import { chiSquareSurvivalEvenDof } from '../math'
 import { F_MAX_HZ, F_MIN_HZ } from './types'
 import { FREQUENCY_GRID_HZ, arcLengthMm, knownArtifactPeriodsMm, periodicColumns } from './ringRegressors'
 import { projectColumns, projectPeriodic, ringScratch } from './ringGls'
-import type { LineBasis } from './ringGls'
+import type { LineBasis, RingProjection } from './ringGls'
 import { heldNoiseStatistic, ringLikelihoodRatio } from './ringLikelihood'
 import type { NullFit, TestedComponent } from './ringLikelihood'
-import { proportionalityCheck } from './inputProportionality'
+import { cornerLockingShown } from './cornerTransient'
+import type { CornerPhasor } from './cornerTransient'
 
 // Searches an axis's traced lines for stationary arc-length artifacts: patterns fixed along the
 // printed path, such as the mesh of a GT2 belt's teeth, or fixed in the scan's pixels, such as
@@ -29,10 +30,11 @@ import { proportionalityCheck } from './inputProportionality'
 // 1961), and an artifact is detected only when each speed tier's own lines also show it at that
 // period at the same level (closed testing, Marcus, Peritz and Gabriel 1976): a ring of the
 // machine matches one spatial frequency on one tier only, unless two modes happen to stand in the
-// tiers' speed ratio. So an artifact must also fail the input-proportionality test
-// (inputProportionality.ts) at the same level: its amplitude does not grow with the corner speed,
-// a ring's does. A detection is added to the null design and the stage repeats. With one tier an
-// artifact cannot be told from a ring, so no search runs.
+// tiers' speed ratio. So an artifact must also not be shown locked to the corner at the same level
+// (cornerTransient.ts): a ring the candidate's columns pick up starts at the corner with one phase
+// on every line, while a pattern fixed along the path or in the scan sits wherever the line falls
+// on it. A detection is added to the null design and the stage repeats. With one tier an artifact
+// cannot be told from a ring, so no search runs.
 
 /**
  * A candidate pattern of the search: an arc-length sinusoid of a period, or the pixel locking of
@@ -117,6 +119,19 @@ function heldStatistic(basis: LineBasis, h0: NullFit, candidate: ArtifactCandida
   return heldNoiseStatistic(h0, basis.m, D)
 }
 
+/** A line's refitted amplitude of a candidate for the corner-locking test. The alternative's
+ *  noise model has unit innovation variance with the variance profiled out, so the precision of
+ *  the coefficients is their Gram matrix over the variance estimate ssr / m. */
+function candidatePhasor(basis: LineBasis, ring: RingProjection | null, ssr: number): CornerPhasor {
+  return {
+    a: ring?.a ?? 0,
+    b: ring?.b ?? 0,
+    precision: ring ? (ring.G11 + ring.G22) / 2 / (ssr / basis.m) : 0,
+    cornerSpeedMmS: basis.rec.cornerSpeedMmS,
+    lateralTowardRunUp: basis.rec.lateralTowardRunUp,
+  }
+}
+
 /** The component the likelihood ratio of a candidate tests on one line. */
 function testedComponent(candidate: ArtifactCandidate, basis: LineBasis, h0: NullFit): TestedComponent {
   return candidate.periodMm !== null ? { periodMm: candidate.periodMm } : { columns: candidateColumns(candidate, basis, h0) }
@@ -139,7 +154,7 @@ export function searchStage(
   // Held-noise statistics everywhere, the refitted ratio at the running maximum until the maximum
   // is a refitted value (each refit only raises a candidate's sum).
   const values = candidates.map((c) => bases.map((b, l) => heldStatistic(b, fits[l], c)))
-  const refitted = new Map<number, number[]>()
+  const refitted = new Map<number, CornerPhasor[]>()
   let best = 0
   for (;;) {
     best = 0
@@ -153,7 +168,7 @@ export function searchStage(
     })
     if (refitted.has(best)) break
     const ratios = bases.map((b, l) => ringLikelihoodRatio(b, fits[l], testedComponent(candidates[best], b, fits[l])))
-    refitted.set(best, ratios.map((r) => Math.hypot(r.fit.ring?.a ?? 0, r.fit.ring?.b ?? 0)))
+    refitted.set(best, ratios.map((r, l) => candidatePhasor(bases[l], r.fit.ring, r.fit.ssr)))
     values[best] = values[best].map((held, l) => Math.max(held, ratios[l].statistic))
   }
   const statistics = values[best]
@@ -165,7 +180,7 @@ export function searchStage(
     const tierSum = members.reduce((s, l) => s + statistics[l], 0)
     if (!(chiSquareSurvivalEvenDof(tierSum, 2 * members.length) <= alpha)) return null
   }
-  if (proportionalityCheck(bases, refitted.get(best)!) !== 'failed') return null
+  if (cornerLockingShown(refitted.get(best)!, alpha)) return null
   return {
     artifact: { ...candidates[best], detectionPBound: pBound },
     columns: bases.map((b, l) => candidateColumns(candidates[best], b, fits[l])),

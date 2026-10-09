@@ -1,6 +1,6 @@
 // Student-t distribution support for the confidence ranges of the N-scan error separation and,
-// in the input shaper flow, for the frequency interval's critical value and the t tests of the
-// input proportionality and layer shift checks.
+// in the input shaper flow, for the frequency interval's critical value and the t test of the
+// layer shift check.
 // Pure TypeScript, no dependencies. The quantile is found by inverting the t CDF numerically
 // (bisection on a bracketed root, an established monotone-inversion approach); the CDF itself is
 // the standard relation to the regularized incomplete beta function,

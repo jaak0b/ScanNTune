@@ -127,8 +127,6 @@ export interface IsAxisResult {
   linesDetected: number
   /** Whether the zeta = 0 boundary test found the ring decaying; null when not fitted. */
   decayDemonstrated: boolean | null
-  /** Input proportionality: 'passed' when the ring grows with the corner speed. */
-  proportionality: CheckState
   speedCheck: SpeedCheck
   replicateCheck: CheckState
   /** One-tier check that the detection survives leaving out any one line. */
@@ -143,8 +141,8 @@ export interface IsAxisResult {
    *  null when the axis was refused. */
   secondModePBound: number | null
   /** The axis's second mode when the search detected one; the axis's own frequency and damping
-   *  are then the dominant mode's. Its proportionality 'failed' marks a steady tone, which the
-   *  shaper selection ignores. */
+   *  are then the dominant mode's. A second mode not locked to the corner is a steady tone, which
+   *  the shaper selection ignores. */
   secondMode: SecondMode | null
   /** Arc-length artifacts (belt teeth, JPEG blocks, other stationary patterns of the print or the
    *  scan) the analysis detected and carried in its model; empty without a search. */

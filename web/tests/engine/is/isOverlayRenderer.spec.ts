@@ -90,7 +90,6 @@ function fakeAxisResult(alignment: IsAlignment): IsAxisResult {
     detectionPBound: 1e-12,
     linesDetected: lines.filter((l) => l.detected).length,
     decayDemonstrated: true,
-    proportionality: 'passed',
     speedCheck: { state: 'not-assessed', tiers: [] },
     replicateCheck: 'passed',
     influenceCheck: 'passed',

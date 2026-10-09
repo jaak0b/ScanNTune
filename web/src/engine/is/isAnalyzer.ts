@@ -302,7 +302,6 @@ function refusedAxis(
     detectionPBound: null,
     linesDetected: 0,
     decayDemonstrated: null,
-    proportionality: 'not-assessed',
     speedCheck: { state: 'not-assessed', tiers: [] },
     replicateCheck: 'not-assessed',
     influenceCheck: 'not-assessed',
@@ -516,7 +515,6 @@ function axisResult(group: IsLineGroup, traced: TracedAxisGroup, pool: AxisPool,
     detectionPBound: pool.detectionPBound,
     linesDetected: pool.linesDetected,
     decayDemonstrated: pool.decayDemonstrated,
-    proportionality: pool.proportionality,
     speedCheck: pool.speedCheck,
     replicateCheck: pool.replicateCheck,
     influenceCheck: pool.influenceCheck,
@@ -537,10 +535,10 @@ function axisResult(group: IsLineGroup, traced: TracedAxisGroup, pool: AxisPool,
     return r
   }
 
-  // A second mode that grows with the corner speed shapes the spectrum the shaper must cover; a
-  // steady tone next to the ring does not.
+  // A second mode locked to the corner shapes the spectrum the shaper must cover; a steady tone
+  // next to the ring does not.
   const dominant = { frequencyHz: pool.frequencyHz!, dampingRatio: pool.dampingRatio!, amplitudeMm: pool.amplitudeMm ?? 0 }
-  const second = pool.secondMode !== null && pool.secondMode.proportionality !== 'failed' ? pool.secondMode : null
+  const second = pool.secondMode !== null && pool.secondMode.cornerLocked ? pool.secondMode : null
   const recommendation =
     second !== null
       ? recommendShapersForModes([dominant, second])

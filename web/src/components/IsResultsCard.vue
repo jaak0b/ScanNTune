@@ -34,11 +34,11 @@ function percent(v: number): string {
   return `${(100 * v).toFixed(1)}%`
 }
 
-// With a second mode that grows with the corner speed, the shapers are scored by the share of the
+// With a second mode locked to the corner, the shapers are scored by the share of the
 // two modes' spectrum they leave above the reduction floor, not by the residual across one mode's
 // tolerance band.
 function residualHeader(a: IsAxisResult): string {
-  return a.secondMode !== null && a.secondMode.proportionality !== 'failed'
+  return a.secondMode !== null && a.secondMode.cornerLocked
     ? 'Remaining vibration over both modes'
     : 'Residual vibration across the tolerance band'
 }

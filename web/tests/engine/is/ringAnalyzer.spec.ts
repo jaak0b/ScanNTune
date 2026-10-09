@@ -13,7 +13,7 @@ import type { TracedLine } from '../../../src/engine/is/lineTracer'
 import { defaultIsTestRequest, fitSpecToPrinter } from '../../../src/engine/is/types'
 import type { IsTestSpec } from '../../../src/engine/is/types'
 import { defaultPrinterProfile } from '../../../src/engine/gcode/profileTypes'
-import { simulateAxis } from '../../helpers/isTraceSim'
+import { SIM_PX_PER_MM, simulateAxis } from '../../helpers/isTraceSim'
 import type { SimLine, TraceSimOptions } from '../../helpers/isTraceSim'
 
 // Unit-level validation of the ring detection and estimation on simulated traced lines
@@ -183,11 +183,11 @@ describe('poolAxisFits estimation', () => {
     }
   })
 
-  it('passes every check on a real ring: speed, proportionality, replicates, decay', () => {
+  it('passes every check on a real ring: speed, corner locking, replicates, decay', () => {
     const p = pool(twoTier, simulate(twoTier, { noise: IID, ring: { frequencyHz: 60, dampingRatio: 0.05, ampMm: 0.03 } }))
     expect(p.speedCheck.state).toBe('confirmed')
     expect(p.speedCheck.tiers.map((t) => t.speedMmS)).toEqual([90, 150])
-    expect(p.proportionality).toBe('passed')
+    expect(p.cornerLocked).toBe(true)
     expect(p.replicateCheck).toBe('passed')
     expect(p.decayDemonstrated).toBe(true)
   })
@@ -223,7 +223,7 @@ describe('poolAxisFits estimation', () => {
     expect(Math.abs(p.frequencyHz! - 45)).toBeLessThan(0.5)
     expect(p.secondModePBound!).toBeLessThanOrEqual(0.001)
     expect(Math.abs(p.secondMode!.frequencyHz - 62)).toBeLessThan(1.5)
-    expect(p.secondMode!.proportionality).toBe('passed')
+    expect(p.secondMode!.cornerLocked).toBe(true)
   })
 
   it('measures a ring on an axis whose corner model is the bead drag without a spurious second mode', () => {
@@ -333,10 +333,16 @@ describe('poolAxisFits checks', () => {
     expect(p.detectionPBound!).toBeGreaterThan(0.001)
   })
 
-  it('identifies the pixel locking of the tracer on a tilted line and finds no ringing', () => {
-    // 0.08 px locking on lines tilted 1 degree against the pixel grid.
+  it('identifies the pixel locking of the tracer on a tilted line as a pattern and finds no ringing', () => {
+    // 0.08 px locking on lines tilted 1 degree against the pixel grid. The locking's phase follows
+    // the pixel grid, not the corner, so the corner-locking test cannot judge the pixel-locking
+    // candidate; on the tilted line the locking repeats every 1 / (tan 1 deg x px/mm) = 2.43 mm
+    // of arc length, which the grid stage labels a pattern (its period step there is
+    // 2.43^2 / 150 = 0.039 mm, hand-computed).
     const p = pool(twoTier, simulate(twoTier, { noise: IID, artifacts: { pixelLock: { tiltDeg: 1, ampPx: 0.08 } } }, 2))
-    expect(p.artifacts.map((a) => [a.periodMm, a.pixelLockHarmonic])).toEqual([[null, 1]])
+    const periodMm = 1 / (Math.tan(Math.PI / 180) * SIM_PX_PER_MM)
+    expect(p.artifacts).toHaveLength(1)
+    expect(Math.abs(p.artifacts[0].periodMm! - periodMm)).toBeLessThanOrEqual(0.039)
     expect(p.detectionPBound!).toBeGreaterThan(0.001)
   })
 
@@ -390,26 +396,27 @@ describe('poolAxisFits checks', () => {
     expect(Math.abs(p.frequencyHz! - 40)).toBeLessThan(1.8)
   })
 
-  it('refuses a forced tone because it does not grow with the corner speed', () => {
+  it('refuses a forced tone because it is neither locked to the corner nor decaying', () => {
     // A 100 Hz tone fixed in time, 0.002 mm on every line with a random phase: it keeps its
-    // frequency at both speeds, so only input proportionality can tell it from ringing.
+    // frequency at both speeds, so only the corner-transient gate can tell it from ringing.
     const p = pool(twoTier, simulate(twoTier, { noise: IID, artifacts: { forcedTone: { frequencyHz: 100, ampMm: 0.002 } } }))
     expect(p.speedCheck.state).toBe('confirmed')
-    expect(p.proportionality).toBe('failed')
+    expect(p.cornerLocked).toBe(false)
+    expect(p.decayDemonstrated).toBe(false)
     expect(p.refusals).toEqual([
-      'The pattern on this axis does not grow with the corner speed the way ringing of the ' +
-        'machine does. A steady vibration, such as a fan, or a pattern in the print or the scan ' +
-        'is the likely cause, so no shaper is recommended.',
+      'The pattern on this axis neither starts in step with the corner nor fades the way ringing ' +
+        'of the machine does. A steady vibration, such as a fan, or a pattern in the print or the ' +
+        'scan is the likely cause, so no shaper is recommended.',
     ])
   })
 
   it('detects a strong forced tone the noise model of the null absorbs, then refuses it', () => {
     // 0.01 mm at 100 Hz on every line with a random phase: a null noise model predicts it, so
     // without the refit the axis read as noise only; refitted it is found, and it fails the
-    // proportionality gate.
+    // corner-transient gate.
     const p = pool(twoTier, simulate(twoTier, { noise: IID, artifacts: { forcedTone: { frequencyHz: 100, ampMm: 0.01 } } }))
     expect(p.detectionPBound!).toBeLessThanOrEqual(0.001)
-    expect(p.proportionality).toBe('failed')
+    expect(p.cornerLocked).toBe(false)
     expect(p.accepted).toBe(false)
   })
 
@@ -461,8 +468,8 @@ describe('withSecondMode', () => {
     // The search found a larger mode than the joint fit's, so the axis now reports that mode. The
     // pool's interval belongs to the joint fit's mode at another frequency, so it must not stand
     // in for the reported one: the confidence gate then has no interval and refuses the axis.
-    const found: SecondMode = { frequencyHz: 62, dampingRatio: 0.05, frequencySeHz: null, amplitudeMm: 0.03, proportionality: 'passed' }
-    const joint: SecondMode = { frequencyHz: 45, dampingRatio: 0.05, frequencySeHz: 0.2, amplitudeMm: 0.02, proportionality: 'passed' }
+    const found: SecondMode = { frequencyHz: 62, dampingRatio: 0.05, frequencySeHz: null, amplitudeMm: 0.03, cornerLocked: true }
+    const joint: SecondMode = { frequencyHz: 45, dampingRatio: 0.05, frequencySeHz: 0.2, amplitudeMm: 0.02, cornerLocked: true }
     const pool = { frequencyHz: 45, frequencyCi95Hz: 0.4 } as AxisPool
     const fields = withSecondMode(pool, {
       pBound: 1e-6,
@@ -474,13 +481,13 @@ describe('withSecondMode', () => {
 })
 
 describe('secondModeOutcome', () => {
-  const joint: SecondMode = { frequencyHz: 60.46, dampingRatio: 0.044, frequencySeHz: 0.1, amplitudeMm: 0.007, proportionality: 'passed' }
+  const joint: SecondMode = { frequencyHz: 60.46, dampingRatio: 0.044, frequencySeHz: 0.1, amplitudeMm: 0.007, cornerLocked: true }
 
   it('reports no second mode when the found mode sits at the damping bound', () => {
     // A damping ratio at the 0.4 bound is the fit's limit, where frequency and damping are not
     // identified: such a mode is no measurement, so it neither replaces the joint fit's mode
     // (even with the larger amplitude) nor stands as a second mode.
-    const found: SecondMode = { frequencyHz: 101.69, dampingRatio: 0.4, frequencySeHz: 9.39, amplitudeMm: 0.011, proportionality: 'passed' }
+    const found: SecondMode = { frequencyHz: 101.69, dampingRatio: 0.4, frequencySeHz: 9.39, amplitudeMm: 0.011, cornerLocked: true }
 
     const search = secondModeOutcome(3.3e-24, [{ mode: joint, rings: [] }, { mode: found, rings: [] }])
 
@@ -490,8 +497,8 @@ describe('secondModeOutcome', () => {
   it('reports no second mode when the joint fit mode sits at the damping bound and the found mode would swap in', () => {
     // The refitted joint mode is the other mode of a swap; at the 0.4 bound it is no measurement
     // either, so it must not be reported as a second mode or shape the recommended shaper.
-    const boundJoint: SecondMode = { frequencyHz: 60.46, dampingRatio: 0.4, frequencySeHz: 9.1, amplitudeMm: 0.007, proportionality: 'passed' }
-    const found: SecondMode = { frequencyHz: 45, dampingRatio: 0.05, frequencySeHz: 0.13, amplitudeMm: 0.03, proportionality: 'passed' }
+    const boundJoint: SecondMode = { frequencyHz: 60.46, dampingRatio: 0.4, frequencySeHz: 9.1, amplitudeMm: 0.007, cornerLocked: true }
+    const found: SecondMode = { frequencyHz: 45, dampingRatio: 0.05, frequencySeHz: 0.13, amplitudeMm: 0.03, cornerLocked: true }
 
     const search = secondModeOutcome(1e-6, [{ mode: boundJoint, rings: [] }, { mode: found, rings: [] }])
 
@@ -499,7 +506,7 @@ describe('secondModeOutcome', () => {
   })
 
   it('makes a larger found mode below the damping bound the dominant mode', () => {
-    const found: SecondMode = { frequencyHz: 45, dampingRatio: 0.05, frequencySeHz: 0.13, amplitudeMm: 0.03, proportionality: 'passed' }
+    const found: SecondMode = { frequencyHz: 45, dampingRatio: 0.05, frequencySeHz: 0.13, amplitudeMm: 0.03, cornerLocked: true }
 
     const search = secondModeOutcome(1e-6, [{ mode: joint, rings: [] }, { mode: found, rings: [] }])
 

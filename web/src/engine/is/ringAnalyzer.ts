@@ -52,7 +52,8 @@ import {
 } from './ringLikelihood'
 import type { NullFit, RingPoint, RingRatio } from './ringLikelihood'
 import { gridCandidates, knownCandidates, searchStage } from './artifactSearch'
-import { proportionalityCheck } from './inputProportionality'
+import { cornerLockingShown, decayShown } from './cornerTransient'
+import type { CornerPhasor } from './cornerTransient'
 import type { DetectedArtifact } from './artifactSearch'
 import type { CornerModelKind, VarianceCovariate } from './ringRegressors'
 import { defaultMaxArOrder } from '../correlatedNoise'
@@ -111,25 +112,21 @@ import { tQuantile } from '../studentT'
 //    second mode is then searched with the first one in the null design (sequential forward
 //    detection, Quinn and Hannan 2001) and, when detected, both are fitted jointly.
 // 6. Checks, each at DETECTION_ALPHA:
-//    - Input proportionality (output-error model, Ljung 1999): the ring is the linear response
-//      to the corner's velocity step, so each line's ring amplitude is its rung's corner speed
-//      times one scale per speed tier, through zero. The intercept of the least squares
-//      regression of the per-line amplitudes on the corner speeds is t-tested against zero with
-//      the lines' own scatter as the error (Student 1908); a forced tone (rung-independent
-//      amplitude) has a large intercept and fails it.
-//    - Speed check with two tiers: each tier is tested on its own lines only on a local grid
-//      around the axis estimate and its arc-length artifact images f rho^(+/-1) (closed testing,
-//      Marcus, Peritz and Gabriel 1976), then fitted on its own; d = ln(f_slow / f_fast) with the
-//      delta-method standard error. Confirmed when the artifact hypothesis d = -ln rho is
-//      rejected one-sided and d = 0 is not rejected two-sided; changed with speed when d = 0 is
-//      rejected; otherwise not confirmed. Only a change with speed refuses the axis; a check
-//      not confirmed is reported and the other gates decide.
+//    - Corner transient (cornerTransient.ts): the response is ringing only when it is shown to be
+//      the transient the corner starts, locked to the corner (a randomization test of the lines'
+//      phases, Barnard 1963, Hope 1968) or decaying (the boundary likelihood ratio test of
+//      zeta = 0, Self and Liang 1987), each at DETECTION_ALPHA / 2 (Bonferroni, Dunn 1961). A
+//      forced tone, such as a fan, is neither.
+//    - Speed check with two tiers: a nested likelihood ratio test (Wilks 1938) of the log ratio
+//      d = ln(f_slow / f_fast), one extra parameter of the joint fit, against d = 0, chi2_1 at
+//      DETECTION_ALPHA; the unrestricted fit starts from no change and from the two arc-length
+//      pattern images. Changed with speed when d = 0 is rejected; confirmed when it is not and the
+//      pattern hypothesis d = -ln rho is rejected one-sided by the Wald test of the unrestricted
+//      fit; otherwise not confirmed. Only a change with speed refuses the axis.
 //    - One tier: the detection is tested again with each single line deleted (a leave-one-out
 //      influence check).
 //    - Replicate check: Cochran's Q homogeneity test (Cochran 1954) on the inverse-variance
 //      weighted per-line frequencies of the detected lines.
-//    - Damping diagnostic: boundary likelihood-ratio test of zeta = 0 (Self and Liang 1987),
-//      null law 0.5 chi2_0 + 0.5 chi2_1, reported, never a gate.
 // 7. Screening and guards: a Hampel identifier on the per-line frequencies of the detected lines,
 //    the band-edge guard, at least MIN_ACCEPTED_LINES lines, and the
 //    MAX_CI95_REL confidence gate.
@@ -160,9 +157,9 @@ const AGREEMENT_MIN_HZ = 2
 const Z_ONE_SIDED = normalQuantile(1 - DETECTION_ALPHA)
 /** z_(1-alpha/2): two-sided critical value at the detection level. */
 const Z_TWO_SIDED = normalQuantile(1 - DETECTION_ALPHA / 2)
-/** Critical value of the zeta = 0 boundary LRT: P(0.5 chi2_0 + 0.5 chi2_1 > c) = alpha gives
- *  c = z_(1-alpha)^2 (9.5495 at alpha 0.001). */
-const DECAY_CRITICAL = Z_ONE_SIDED * Z_ONE_SIDED
+/** Critical value of a chi2_1 likelihood ratio test at the detection level, 10.83: the test of a
+ *  constant innovation variance and the speed check's test of the tiers' frequency ratio. */
+const CHI2_1_CRITICAL = normalQuantile(1 - DETECTION_ALPHA / 2) ** 2
 
 /**
  * Why a traced line could not enter the analysis on its own, as a category: 'irregular-trace' is
@@ -212,8 +209,9 @@ export interface SecondMode {
   frequencySeHz: number | null
   /** Median over the lines of the mode's amplitude at the fit-window start, mm. */
   amplitudeMm: number
-  /** Input proportionality of this mode: 'failed' marks a steady tone, not a mode. */
-  proportionality: CheckState
+  /** True when this mode's amplitudes are shown to be locked to the corner (cornerTransient.ts);
+   *  false marks a steady tone, not a mode. */
+  cornerLocked: boolean
 }
 
 export interface AxisPool {
@@ -236,12 +234,14 @@ export interface AxisPool {
   detectionPBound: number | null
   linesDetected: number
   linesUsed: number
-  /** Boundary LRT of zeta = 0 rejected; null when the axis was not fitted. */
+  /** Boundary LRT of zeta = 0 rejected at the corner-transient gate's level; null when the axis
+   *  was not fitted. */
   decayDemonstrated: boolean | null
   /** The boundary LRT statistic of zeta = 0 (0.5 chi2_0 + 0.5 chi2_1 under an undamped ring). */
   decayStatistic: number | null
-  /** Input-proportionality test: passed when the ring grows with the corner speed. */
-  proportionality: CheckState
+  /** True when the ring's amplitudes are shown to be locked to the corner (cornerTransient.ts);
+   *  null when the axis was not fitted. */
+  cornerLocked: boolean | null
   speedCheck: SpeedCheck
   replicateCheck: CheckState
   /** One-tier leave-one-line-out influence check of the detection. */
@@ -475,9 +475,6 @@ function olsTau(bases: LineBasis[], tauBounds: [number, number]): number {
   )
 }
 
-/** Critical value of the chi2_1 likelihood ratio test of a constant innovation variance. */
-const VARIANCE_CRITICAL = normalQuantile(1 - DETECTION_ALPHA / 2) ** 2
-
 /**
  * The slope of the axis's innovation variance function (ringGls.pooledVarianceSlope, by
  * restricted likelihood over each line's mean model) against each line's covariate, or 0 when its
@@ -486,7 +483,7 @@ const VARIANCE_CRITICAL = normalQuantile(1 - DETECTION_ALPHA / 2) ** 2
  */
 function axisVarianceSlope(lines: VarianceLine[]): number {
   const pooled = pooledVarianceSlope(lines)
-  return pooled.statistic > VARIANCE_CRITICAL ? pooled.slope : 0
+  return pooled.statistic > CHI2_1_CRITICAL ? pooled.slope : 0
 }
 
 /**
@@ -1144,7 +1141,7 @@ function emptyPool(verdicts: LineVerdict[]): AxisPool {
     linesUsed: 0,
     decayDemonstrated: null,
     decayStatistic: null,
-    proportionality: 'not-assessed',
+    cornerLocked: null,
     speedCheck: NOT_ASSESSED_SPEED,
     replicateCheck: 'not-assessed',
     influenceCheck: 'not-assessed',
@@ -1352,8 +1349,8 @@ function completeAxis(
 
   // Diagnostics and checks.
   base.decayStatistic = decayStatistic(inBases, noise1, joint, estBounds)
-  base.decayDemonstrated = base.decayStatistic > DECAY_CRITICAL
-  base.proportionality = proportionalityCheck(inBases, rings.map((r) => Math.hypot(r.a, r.b)))
+  base.decayDemonstrated = decayShown(base.decayStatistic)
+  base.cornerLocked = cornerLockingShown(cornerPhasors(inBases, rings))
   // The speed and replicate checks judge the mode the axis reports: the two-mode fit's dominant
   // mode when the second-mode search found one that outgrows the joint fit's mode.
   const dominant = secondMode.modes?.swapped ? secondMode.modes.dominant.mode : null
@@ -1376,7 +1373,7 @@ function completeAxis(
   replicate.frequencies.forEach((f, j) => (verdicts[windowed[included[detectedK[j]]]].frequencyHz = f))
 
   // A second mode, searched before the verdict: an unmodeled second mode distorts the single-mode
-  // fit's per-line amplitudes, so with one the dominant mode's proportionality comes from the
+  // fit's per-line amplitudes, so with one the dominant mode's corner locking comes from the
   // two-mode fit.
   Object.assign(base, withSecondMode(base, secondMode))
   return verdict(base)
@@ -1521,6 +1518,19 @@ function jointRings(inBases: LineBasis[], noises: LineNoise[], joint: JointFit):
   })
 }
 
+/** The lines' rings for the corner-locking test, aligned with `bases`: each ring's precision is
+ *  the mean of the diagonal of its Gram matrix, whose columns the line's noise model whitened to
+ *  unit innovation variance. */
+function cornerPhasors(bases: LineBasis[], rings: RingProjection[]): CornerPhasor[] {
+  return bases.map((b, k) => ({
+    a: rings[k].a,
+    b: rings[k].b,
+    precision: (rings[k].G11 + rings[k].G22) / 2,
+    cornerSpeedMmS: b.rec.cornerSpeedMmS,
+    lateralTowardRunUp: b.rec.lateralTowardRunUp,
+  }))
+}
+
 /** The lines' fitted rings for the along-track response, aligned with `bases`. */
 function fittedRings(bases: LineBasis[], rings: { a: number; b: number }[]): FittedLineRing[] {
   return bases.map((b, k) => ({
@@ -1561,12 +1571,12 @@ function verdict(result: AxisPool): AxisPool {
         `least ${MIN_TWO_TIER_LINE_SPEED_MM_S} mm/s on a bed large enough for both speed tiers.`,
     )
   }
-  if (result.proportionality === 'failed') {
+  if (!result.cornerLocked && !result.decayDemonstrated) {
     return refusal(
       result,
-      'The pattern on this axis does not grow with the corner speed the way ringing of the ' +
-        'machine does. A steady vibration, such as a fan, or a pattern in the print or the scan ' +
-        'is the likely cause, so no shaper is recommended.',
+      'The pattern on this axis neither starts in step with the corner nor fades the way ringing ' +
+        'of the machine does. A steady vibration, such as a fan, or a pattern in the print or the ' +
+        'scan is the likely cause, so no shaper is recommended.',
     )
   }
   if (result.replicateCheck === 'failed') {
@@ -1595,7 +1605,7 @@ function verdict(result: AxisPool): AxisPool {
  * modes are fitted jointly by variable projection over (f1, zeta1, f2, zeta2, log tau) with each
  * line's linear terms, polished by Levenberg-Marquardt; covariance sigma^2 (J'J)^-1. The axis then
  * reports the dominant mode (the larger median amplitude) and the other as its second mode, with
- * the input-proportionality check of that mode.
+ * the corner-locking test of that mode.
  */
 function searchSecondMode(fit: JointFitResult): SecondModeSearch {
   const { inBases: bases, noise1: noises, joint, estBounds: tauBounds } = fit
@@ -1660,7 +1670,7 @@ export function withSecondMode(pool: AxisPool, search: SecondModeSearch): Partia
     frequencySeHz: m1.frequencySeHz,
     frequencyCi95Hz: m1.frequencySeHz !== null ? normalQuantile(0.975) * m1.frequencySeHz : fallbackCi95,
     amplitudeMm: m1.amplitudeMm,
-    proportionality: m1.proportionality,
+    cornerLocked: m1.cornerLocked,
     secondModePBound: pBound,
     secondMode: m2,
   }
@@ -1711,7 +1721,7 @@ function twoModeFit(
       dampingRatio: zeta,
       frequencySeHz: se(seIndex),
       amplitudeMm: amplitude(rings, f, zeta),
-      proportionality: proportionalityCheck(bases, rings.map((r) => Math.hypot(r.a, r.b))),
+      cornerLocked: cornerLockingShown(cornerPhasors(bases, rings)),
     },
     rings,
   })
