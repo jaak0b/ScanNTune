@@ -247,7 +247,7 @@ then sets the profile's own value back (`junctionLimitCommands`), with planner s
 lines. The test runs at the profile's print acceleration and resets the speed factor with `M220 S100`,
 because a leftover speed factor would scale the frequency on both tiers alike. The default coupon is
 104.283 mm square (about 13.1 minutes of motion) and fits a 120 mm bed unchanged. Measurement (`lineTracer`, `ringAnalyzer`, `ringGls`, `ringLikelihood`,
-`artifactSearch`, `inputProportionality`, `alongTrackLag`): each line's centre is traced to sub-pixel
+`artifactSearch`, `cornerTransient`, `alongTrackLag`): each line's centre is traced to sub-pixel
 precision and its lateral deviation converts to true mm through the card `ScaleReference`. The time base
 is the deliberate exception: a sample's time since the corner comes from its commanded coupon-frame
 distance (the sample mapped back through the fiducial affine) and the commanded speed profile, so printer
@@ -256,13 +256,16 @@ axis scale and plastic shrinkage cannot bias the frequency. Per axis, the lines 
 projection. Detection is the generalized likelihood ratio with the noise model refitted under each
 hypothesis, summed over the lines, with the look-elsewhere effect over the 2,353-point frequency and
 damping grid paid by a Bonferroni bound at a 0.1% false-alarm level; the frequency interval is the
-profile-likelihood interval. With two tiers, the two-speed check compares the tiers (a machine resonance
-keeps its frequency at both tiers, a print or scan pattern scales with the speed): an axis whose
-frequency changes with the speed is refused, while a check that cannot confirm the ring does not refuse;
-a coupon left with one tier (a small bed, or a line speed below 34 mm/s) gets a leave-one-line-out
-influence check instead. The ring amplitude must also be proportional to the corner speed through zero
-(which rejects forced tones such as a fan), and the replicate check and the confidence gate must not
-fail. A damping ratio fitted at its 0.4 bound does not refuse the axis: the shaper is then designed at
+profile-likelihood interval. With two tiers, the speed check is a nested likelihood ratio test inside
+the joint fit: one extra parameter, the log ratio of the slower tier's frequency to the faster tier's,
+tested against zero at the 0.1% level (a machine resonance keeps its frequency at both tiers, a print
+or scan pattern scales with the speed); only a frequency that demonstrably changes with the speed
+refuses the axis; a coupon left with one tier (a small bed, or a line speed below 34 mm/s) gets a
+leave-one-line-out influence check instead. The response must also be shown to be the corner's
+transient, which rejects forced tones such as a fan: locked to the corner (a seeded Monte Carlo
+randomization test of the lines' phases) or decaying (the boundary test of zero damping), each at half
+the 0.1% level; the artifact search labels a pattern only when it is not shown locked to the corner.
+The replicate check and the confidence gate must not fail. A damping ratio fitted at its 0.4 bound does not refuse the axis: the shaper is then designed at
 Klipper's default damping ratio 0.1, which the configuration snippet writes. The two axes are then estimated jointly: the axis along one group's lines is the other group's
 measured axis and rings after its corner too, so each axis's ring is refitted on deposit times
 corrected by the other axis's fitted ring at the same corner

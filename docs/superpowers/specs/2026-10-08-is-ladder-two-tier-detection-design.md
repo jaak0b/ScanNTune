@@ -40,15 +40,15 @@ to 8.
   (the scanner blurs them together), so the app first learns each line's own noise pattern and filters
   it out exactly. It then tries 2,353 combinations of frequency and damping and pays for having tried
   that many, so scanner noise and bead roughness alone pass as ringing at most 1 time in 1,000. It also
-  checks that the wiggle grows with the corner speed, the way a real ring does and a fan or a scanner
-  pattern does not.
+  checks that the wiggle is started by the corner: on every line it starts in step with the corner, or
+  it fades out, the way a real ring does and a fan or a scanner pattern does not.
 - **Why two speeds.** Real ringing belongs to the machine and keeps its frequency at any line speed.
   Patterns that sit in the print or the scan (belt teeth, scanner compression blocks) are fixed in
   distance, so their apparent frequency changes in step with the speed. The slower speed was chosen so
   that, at the weakest precision the app accepts, a pattern is caught as "changed with the speed" 95% of
   the time while a real ring is wrongly refused at most 0.1% of the time, counting that each speed has
-  only half the lines. With two speeds printed, an axis is refused when its frequency changes with the
-  speed; a check that cannot confirm the ring does not refuse it.
+  only half the lines. With two speeds printed, an axis is refused when its frequency demonstrably
+  changes with the speed; a check that cannot confirm the ring does not refuse it.
 - **How the motors are protected.** No safe corner speed can be computed, because it depends on motor
   torque, step angle and moving mass, none of which the printer profile records. Instead: 100 mm/s stays
   the default, with a warning above it but no hard limit; the fastest corners print last in every layer,
@@ -232,8 +232,7 @@ speed, not a higher acceleration, is the remedy there (section 5).
 | 0.6 mm nozzle, 2956 mm/s^2 and more | 200 Hz | 4 | 20, 20.05, 20.1, 33.13 at 3000 |
 
 Where the followable corner rounds to the bottom rung itself (20.0 mm/s, for example at 800 to
-1500 mm/s^2 with a 0.4 mm nozzle), the three bottom rungs are three replicate lines at 20 mm/s, and the
-proportionality check has no corner-speed spread among them (section 5). With the worst-case along-track
+1500 mm/s^2 with a 0.4 mm nozzle), the three bottom rungs are three replicate lines at 20 mm/s. With the worst-case along-track
 term the upper rungs fold in the first millimetres after the corner at most or all frequencies of the
 band (section 1.4.1); only those that follow somewhere are printed.
 
@@ -463,7 +462,7 @@ planner boundaries; the coupon moves Z only between layers).
 The pipeline is `lineTracer.ts` (tracing and time base), `ringAnalyzer.ts` (fit window, detection,
 estimation, checks, verdict), `ringRegressors.ts` (model columns), `ringGls.ts` (generalized least
 squares machinery and variance function), `ringLikelihood.ts` (likelihood ratio with refitted noise),
-`artifactSearch.ts` and `inputProportionality.ts` (pattern search and the proportionality test),
+`artifactSearch.ts` and `cornerTransient.ts` (pattern search and the corner-transient gate),
 `layerShift.ts`, `shaperRecommender.ts`, all under `web/src/engine/is/`, plus the shared
 `web/src/engine/correlatedNoise.ts`. Every decision is a hypothesis test at `DETECTION_ALPHA = 0.001`; no
 amplitude threshold, fit-quality gate or damping floor decides anything (`AMPLITUDE_RESOLUTION_PX`,
@@ -676,34 +675,45 @@ screen it: one line carries little information about the damping, so its own fit
 
 Checks, each at alpha = 0.001:
 
-- **Input proportionality** (`inputProportionality.ts`, amendment M5, the gate against forced tones such
-  as a part-cooling fan imbalance): the ring is the linear response to the corner's velocity step
-  (output-error model, Ljung 1999), so each line's ring amplitude at the corner is its rung's speed times
-  one scale per tier, through zero. The ordinary least squares fit amplitude = b0 + b_T c (one slope per
-  tier, one shared intercept) and the two-sided Student t test of b0 = 0 with K - 1 - T degrees of
-  freedom (Student 1908; Seber and Lee, "Linear Regression Analysis", 2003, s4.4) use the lines' own
-  scatter as the error. A forced tone keeps its amplitude on every rung, its intercept carries all of it,
-  and the test rejects. A failure refuses the axis.
-- **Speed check** (two tiers, amendment M4): each tier is tested on its own lines only on a local grid,
-  the points within 10% of the axis estimate f and of its pattern images f rho and f / rho, with the
-  Bonferroni bound over that local count (closed testing, Marcus, Peritz and Gabriel, Biometrika 63,
-  1976), then fitted on its own (tau held at the joint value). With d = ln(f_slow / f_fast) and the
-  delta-method standard error s_d from the two tiers' standard errors: "changed with speed" when
-  |d| / s_d > z_(1 - alpha/2) = 3.29; "confirmed" when the pattern hypothesis d = -ln(rho) is rejected
-  one-sided, (d + ln rho) / s_d > z_(1 - alpha) = 3.09, and d = 0 is not rejected; otherwise "not
-  confirmed", which includes a tier whose own detection fails. Only "changed" refuses the axis; "not
-  confirmed" is reported and does not refuse (owner decision 2026-10-08, 9ace4a0; section 4). With one
-  tier the check is "not assessed". The check's power against a pattern at the weakest accepted
-  measurement is about 0.60, not the 0.95 the tier ratio was designed for (section 1.2).
+- **Corner transient** (`cornerTransient.ts`, the gate against forced tones such as a part-cooling fan
+  imbalance; 2026-10-10, replacing the input proportionality t test): a response is accepted as ringing
+  of the machine only when it is shown to be the transient the corner's velocity step starts, corner
+  locking shown OR decay shown, each tested at alpha / 2, so the union keeps a forced tone's acceptance
+  at most alpha (the Bonferroni bound of a union, Dunn 1961). Corner locking: each line's ring
+  coefficients at the corner, turned toward the line's run-up (the sign convention of
+  `alongTrackLag.ts`), are summed with the weight c_l P_l (corner speed times the precision of the
+  coefficients, the weighted least squares response per unit corner speed through the origin), and the
+  length of the sum is tested by the randomization test of independent uniform phases conditional on
+  the magnitudes, computed as a Monte Carlo test (Barnard 1963; Hope 1968) with 99,999 replicates from
+  a fixed seed, so the same scan always gives the same decision. At alpha / 2 = 0.0005, (N + 1) alpha / 2
+  = 50 is an integer, so the Monte Carlo test is exact at that level, and the power lost against the
+  exact randomization test is negligible (Marriott 1979). Decay: the boundary likelihood ratio test of
+  zeta = 0 (Self and Liang, JASA 82, 1987), null law 0.5 chi2_0 + 0.5 chi2_1, at alpha / 2, critical
+  value z_0.9995^2 = 10.83, with f and tau re-optimized under zeta = 0; it is reported as "Decay
+  demonstrated: yes/no". A ring at zeta 0.03 decays little over a line and is shown by its locking; a
+  weak ring whose phases scatter is often shown by its decay. A forced tone is neither, and the axis is
+  refused. The second mode's check is the corner-locking test alone (no decay test in the two-mode
+  fit); a second mode not shown locked counts as a steady tone.
+- **Speed check** (two tiers; 2026-10-10, replacing the per-tier fits and their delta-method d test): a
+  nested likelihood ratio test (Wilks, Ann. Math. Stat. 9, 1938) inside the joint fit. The unrestricted
+  fit has one parameter more, d = ln(f_slow / f_fast), bounded by the widest ratio of two band
+  frequencies; it starts from no change and from the two arc-length pattern images (the faster tier at
+  the estimate and the slower at f / rho, the slower at the estimate and the faster at f rho), so it
+  cannot stall at the restricted optimum, and keeps the smallest sum of squares. The statistic
+  (SSR_restricted - SSR) / sigma^2 is chi2_1 under d = 0: "changed with speed" above 10.83 (alpha 0.001,
+  two-sided); "confirmed" when no change is shown and the pattern hypothesis d = -ln rho is rejected
+  one-sided by the Wald test of d in the unrestricted fit, (d + ln rho) / s_d > z_0.999 = 3.09;
+  otherwise "not confirmed", which includes a joint fit without lines of both tiers. Only "changed"
+  refuses the axis. The frequency at each tier speed shown in the results comes from the unrestricted
+  fit. With one tier the check is "not assessed". In simulations during the design (25 seeds each)
+  the statistic stayed below 8.4 on real rings at 60, 93.3, 143.2 and 190 Hz, while a strongly damped
+  pedestal ring was refused 20 of 20 times and a pattern at 100 or 150 Hz was refused far more often than
+  by the previous check.
 - **Influence check** (one tier only, amendment I12): the detection must survive leaving out any single
   line (Cook 1977), so a dust speck on one line cannot carry the axis.
 - **Replicate check**: Cochran's Q homogeneity test (Cochran 1954) on the inverse-variance weighted
   frequencies of the detected joint-fit lines, each fitted from the joint estimate, against chi2_(k-1);
   "not assessed" with fewer than 3 such lines.
-- **Damping diagnostic**: the boundary likelihood ratio test of zeta = 0 (Self and Liang, JASA 82, 1987),
-  null law 0.5 chi2_0 + 0.5 chi2_1, critical value z_0.999^2 = 9.5495, with f and tau re-optimized under
-  zeta = 0. It is reported as "Decay demonstrated: yes/no" and is never a gate (amendment M5): as a gate
-  it would refuse about half of real rings at zeta 0.02 and 30 Hz.
 - **Guards**: the fitted frequency within 2 Hz of a band edge, and the confidence gate: the 95%
   halfwidth must stay under 10% of the frequency (`MAX_CI95_REL`), the stopband the EI shaper family
   covers.
@@ -712,17 +722,20 @@ Checks, each at alpha = 0.001:
   designed at Klipper's default damping ratio 0.1 (section 2.10).
 
 Verdict order, the most specific failing gate first: band edge, speed changed, influence,
-proportionality, replicate, confidence gate. Each refusal has its own worded
+corner transient, replicate, confidence gate. Each refusal has its own worded
 reason; a refusal where only the fastest-corner lines showed ringing adds the ladder advice to raise the
 corner speed in small steps.
 
-Changed from the plan, implementer change: amendment M5 specified a nested likelihood ratio test on the
-per-line complex amplitudes (proportional model against free amplitudes). The code t-tests the intercept
-of the amplitude magnitudes instead (fb1e5f0). The complex-amplitude test measured misfit against the
+Changed from the plan, implementer change, since superseded by the corner-transient gate (2026-10-10):
+amendment M5 specified a nested likelihood ratio test on the per-line complex amplitudes (proportional
+model against free amplitudes). The code t-tested the intercept of the amplitude magnitudes instead
+(fb1e5f0). The complex-amplitude test measured misfit against the
 scan noise alone, so at tiny noise a model misfit of the same order on every line refused correct rings,
 and it needed each line's corner-time phase, which a corner position error of hundredths of a millimetre
-at a slow corner shifts by tenths of a radian. The t test uses the lines' own scatter, so such a misfit
-widens the test instead, and the phase does not enter.
+at a slow corner shifts by tenths of a radian. The t test used the lines' own scatter, so such a misfit
+widened the test instead, and the phase did not enter. On the four-line ladder it reached only about
+32% of its design power, so a fan was accepted on about 4 of 10 seeds; the corner-locking test of the
+gate pools the phases with weights instead and does not need each line's phase to be exact.
 
 Changed from the plan: the redesign made the zeta = 0 test a refusal gate and checked the tiers and
 replicates against a fixed max(2 Hz, 5%) tolerance; amendments M4 and M5 replaced these with the
@@ -736,7 +749,7 @@ Estimation and Tracking of Frequency", 2001, ch. 5): the first mode's ring colum
 design and the same likelihood ratio field and Bonferroni bound test for a further ring at alpha. On
 detection both modes are fitted jointly by variable projection over (f1, zeta1, f2, zeta2, log tau) with
 a Levenberg-Marquardt polish. The axis reports the dominant mode (the larger median amplitude) and the
-other as its second mode, each with its own proportionality check; the dominant mode's confidence
+other as its second mode, each with its own corner-locking test; the dominant mode's confidence
 halfwidth then is 1.96 times its linearized standard error from the two-mode fit. When the two-mode fit
 gives the dominant mode no standard error, the joint fit's interval stands in only when the dominant
 mode is the joint fit's own; a dominant mode the search found then has no interval, and the confidence
@@ -749,8 +762,8 @@ Shaper choice (`shaperRecommender.ts`): with one mode, every shaper (ZV, MZV, EI
 Singer and Seering 1990; Singhose, Seering and Singer) is tuned to the measured frequency and judged by
 its worst residual vibration over a band of max(5%, the relative 95% halfwidth); among those within the
 5% tolerance the one allowing the highest acceleration under Klipper's 0.12 mm smoothing target wins
-(when none qualifies, the lowest worst residual). With a second mode whose proportionality check does
-not fail (a steady tone next to the ring does not shape the spectrum the shaper must cover), the choice
+(when none qualifies, the lowest worst residual). With a second mode shown locked to the corner (a
+steady tone next to the ring does not shape the spectrum the shaper must cover), the choice
 follows Klipper's `shaper_calibrate.py` (`fit_shaper`, `find_best_shaper`) on a spectrum synthesized from
 the fitted modes (Lorentzian lines in acceleration, added incoherently). Its shaper search reaches the
 200 Hz band top (Klipper's own search stops at 150 Hz, while `input_shaper.py` and `SET_INPUT_SHAPER`
@@ -782,8 +795,9 @@ from a ring and no search runs.
 
 Each stage runs at alpha / 2 with the likelihood ratio summed over the lines and the Bonferroni bound over
 its candidates. A candidate counts as a pattern only when every tier's own lines also show it at that
-level (closed testing) and it FAILS the input proportionality test (a ring grows with the corner speed, a
-pattern does not). A detected pattern joins every line's null design as fixed columns and the stage
+level (closed testing) and it is NOT shown locked to the corner at that level (`cornerTransient.ts`): a
+ring the candidate's columns pick up starts at the corner with one phase on every line, a pattern fixed
+along the path or in the scan sits wherever the line falls on it. A detected pattern joins every line's null design as fixed columns and the stage
 repeats. The search runs before the corner-model choice and the detection, and again after the joint
 fit with the fitted ring in the null design (a ring missed by the first search leaks into a pattern's
 columns on its own tier); when that second search finds more patterns, the whole axis analysis repeats
@@ -815,10 +829,10 @@ an axis.
 ### 2.13 Results shown
 
 Per axis, raw rows (`web/src/components/isCheckRows.ts`): lines with ringing detected (k of n), detection
-p-value bound, decay demonstrated, grows with corner speed, speed independence (confirmed, changed with
-speed, not confirmed, not assessed), the frequency at each tier speed, replicate check, detection without
-any single line (one tier), layer shift detected, the second mode's p-value bound, frequency, damping
-ratio and proportionality, each detected pattern's period and source,
+p-value bound, decay demonstrated, speed independence (confirmed, changed with speed, not confirmed, not
+assessed), the frequency at each tier speed, replicate check, detection without any single line (one
+tier), layer shift detected, the second mode's p-value bound, frequency and damping ratio, each detected
+pattern's period and source,
 and the corner model with its time constant or drag length. The line table shows each line's speed and
 whether ringing was detected on it.
 
@@ -953,32 +967,42 @@ timeout. The build and unit test job is capped at 15 minutes. The earlier sharde
   shaper recommendation still span 20 to 200 Hz. A ring above the reduced top is still searched on beads
   the model says fold. Limiting the search would change the detection grid and its Bonferroni count and
   needs the render-recovery tests and the statistics suite; it is an owner decision.
-- **Replicate bottom rungs at a reduced band top.** Where the followable corner rounds to 20.0 mm/s, the
-  three followable lines share one corner speed. The proportionality check then has no corner-speed
-  spread among those lines and returns not assessed when only they are accepted, so a forced tone is not
-  refused by that check there. A design rule that lowers the band top until the bottom rungs are spread
-  far enough for the check to reach a design power was examined on 2026-10-09 and not built, because no
-  spread reaches it. Taking the design power of the reverted cb68806 (power 0.95 at level 0.001 against a
-  forced tone each line detects on its own, 6.98 standard errors per line, through the noncentral t of
-  the intercept test), three bottom rungs on each of two tiers give the test 3 degrees of freedom and at
-  most power 0.67 even with the rungs infinitely far apart; rungs from 20 to 40 mm/s give 0.06, 20 to
-  100 mm/s 0.30. The full band is affected too: the default bottom rungs 20 to 25.5 mm/s give 0.006, and
-  the four-line default ladder 0.32 where all four lines follow. The check's power comes from the upper
-  rungs, which fold at the higher frequencies.
 - **The refusal of a coupon that reads nothing names only the acceleration.** A line speed of 60 mm/s or
   less reads nothing at any tested acceleration (section 1.4), and the refusal then advises a higher
   acceleration, which does not help; the remedy is a faster line speed. The tier rules for a line speed
   below 34 mm/s (section 1.2) are reached only on a frame damped far above the design damping.
 
-- **S3 coverage under iid noise is expected to stay red** (`s3-iid.stats.spec.ts`): the wild seed is
-  fixed (9153a65, 87c7e3d), but the spread to SE ratio on seeds 1 to 200 was about 1.17 to 1.18 locally
-  against the 1.15 criterion. The remaining excess (wrong estimates under heavy damping, the flow-lag
-  time constant settling at its lower bound) is under investigation; the CI result is pending.
-- **The speed check's real power is open.** The 1.6547 tier ratio (section 1.2) prices the half-line
-  tiers and the two-sided refusing branch, so the design power 0.95 holds at the weakest accepted
-  measurement in the delta-method sense. Near the gate a tier can still miss its own detection on half
-  the lines, and a tier's standard error scatters from fit to fit (1.25 to 2.23 times the joint one in
-  simulation), so the achieved power is a matter of the analysis and is not yet measured.
+- **Heavy damping (B2): estimates about 0.3 Hz high, interval coverage acceptable.** Investigated
+  2026-10-10 on the default coupon's Y group with a 60.4 Hz ring at zeta 0.25 and iid scan noise (100
+  seeds): the mean estimate is 60.71 Hz, about 0.3 Hz high (a quarter of the 1.14 Hz mean standard
+  error), the spread to standard error ratio 1.11, and the 95% interval covers the truth on 93 of 100
+  seeds. A local optimum is ruled out: a global grid search over 50 to 72 Hz at 0.5 Hz with a
+  polish finds no lower sum of squares than the fit beyond 0.17 (on 50 seeds). Over-selection of the
+  AR noise order is ruled out: refitting with white noise or with BIC orders (Schwarz 1978) instead of
+  AICc moves the mean estimate by about 0.02 Hz (a median shift of 0.06 Hz per seed) and leaves the
+  ratio at 1.13 to 1.15. The bias is small against the standard error and is left as a known
+  limitation.
+- **Flow-lag time constant at its lower bound (C2).** In 20 to 40% of fits the flow-lag time constant
+  settles at the lower bound of its range (20 of the 100 seeds at zeta 0.25 above). A principled lower
+  bound, the earliest fit-window start (the lag must reach into the window), changes nothing
+  measurable: the mean moves by 0.06 Hz and the spread to standard error ratio does not improve (1.23
+  against 1.11). The bound is kept as it is.
+- **S3 coverage under iid noise**: the wild seed is fixed (9153a65, 87c7e3d), and the spread to SE ratio
+  on seeds 1 to 200 was about 1.17 to 1.18 locally against the 1.15 criterion. The remaining excess is
+  the heavy damping and flow-lag items above, both kept as known limitations; the criterion stays red
+  until it is fixed honestly.
+- **The speed check's real power is measured only in simulation.** The 1.6547 tier ratio (section 1.2)
+  was priced for the earlier delta-method check. The nested likelihood ratio test (section 2.9) uses
+  every line in one fit and in those simulations refused far more patterns, but its power at the
+  weakest accepted measurement is not yet measured by the statistics suite.
+- **The pixel-locking candidate and heavily damped strong rings.** The corner-locking test judges an
+  arc-length candidate by its phase at the corner, but the pixel-locking candidate's phase follows the
+  pixel grid. A strong, heavily damped ring that leaks into the pixel-locking columns in the first
+  search then reads as not locked, and the candidate is labelled a pattern, which absorbs part of the
+  ring: since the gate change (2026-10-10) two unit cases (45.3 Hz at zeta 0.3 with 0.15 mm, and 40 Hz
+  at zeta 0.42 with 0.8 mm) lose a detected line, or fail the confidence gate, where the removed
+  proportionality branch had kept the candidate unlabelled. True pixel locking on a tilted line is
+  still labelled, by the grid stage as an arc-length period. Open for an owner decision.
 - **S1 under 2 px blur was red at 67 exceedances of the 95% point** (allowed 68 to 132; 11 above the 99%
   point) when the S1 files left the suite (c4c19a2). The detection was slightly conservative there, the
   safe direction: it costs some sensitivity and never adds false acceptances. Alternatives measured and
@@ -1053,3 +1077,7 @@ change that also refuses the two-mode fit when the refitted joint mode sits at t
 2026-10-09: the bottom-dense ladder at 200 Hz (c94e3d7, 9fb8313, 79bfda7, f7b603f, 51b939b, 0b1aecb),
 then the design damping 0.03 carried on the request, the four-line ladder that prints only upper rungs
 that follow somewhere, and the refusal of a coupon that reads nothing.
+
+2026-10-10: 02c1a0b (the corner-transient gate replaces the proportionality check), 09a0fa3 (the speed
+check as a nested likelihood ratio test inside the joint fit), 66cbf6a (the detection threshold's
+degrees of freedom from the coupon's line count).
