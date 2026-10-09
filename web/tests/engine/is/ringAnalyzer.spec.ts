@@ -58,8 +58,6 @@ function trace(tS: number[], lateralMm: number[], observed: number[]): TracedLin
     lateralMm: Float64Array.from(lateralMm),
     observed: Uint8Array.from(observed),
     alongPxPerMm: 23.6,
-    acrossImagePx: new Float64Array(tS.length),
-    acrossAxisPxPerMm: 23.6,
     lateralTowardRunUp: 1,
   }
 }
@@ -334,11 +332,9 @@ describe('poolAxisFits checks', () => {
   })
 
   it('identifies the pixel locking of the tracer on a tilted line as a pattern and finds no ringing', () => {
-    // 0.08 px locking on lines tilted 1 degree against the pixel grid. The locking's phase follows
-    // the pixel grid, not the corner, so the corner-locking test cannot judge the pixel-locking
-    // candidate; on the tilted line the locking repeats every 1 / (tan 1 deg x px/mm) = 2.43 mm
-    // of arc length, which the grid stage labels a pattern (its period step there is
-    // 2.43^2 / 150 = 0.039 mm, hand-computed).
+    // 0.08 px locking on lines tilted 1 degree against the pixel grid: on the tilted line the
+    // locking repeats every 1 / (tan 1 deg x px/mm) = 2.43 mm of arc length, which the grid stage
+    // labels a pattern (its period step there is 2.43^2 / 150 = 0.039 mm, hand-computed).
     const p = pool(twoTier, simulate(twoTier, { noise: IID, artifacts: { pixelLock: { tiltDeg: 1, ampPx: 0.08 } } }, 2))
     const periodMm = 1 / (Math.tan(Math.PI / 180) * SIM_PX_PER_MM)
     expect(p.artifacts).toHaveLength(1)

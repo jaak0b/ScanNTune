@@ -160,8 +160,6 @@ describe('nullDesign', () => {
       cornerSpeedMmS: 20,
       accelMmS2: 3000,
       alongPxPerMm: 600 / 25.4,
-      acrossImagePx: new Float64Array(m),
-      acrossAxisPxPerMm: 600 / 25.4,
       lateralTowardRunUp: 1,
     }
     const basis = lineBasis(rec)
@@ -192,8 +190,6 @@ describe('nullDesign', () => {
       cornerSpeedMmS: 20,
       accelMmS2: 3000,
       alongPxPerMm: 600 / 25.4,
-      acrossImagePx: new Float64Array(m),
-      acrossAxisPxPerMm: 600 / 25.4,
       lateralTowardRunUp: 1,
     }
     const basis = lineBasis(rec)

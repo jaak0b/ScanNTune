@@ -79,7 +79,7 @@ import { tQuantile } from '../studentT'
 //    in commanded arc length, whichever null model has the lower pooled AICc (Hurvich and Tsai
 //    1989), its one scale per axis chosen by golden-section search on a log scale (Kiefer 1953);
 //    the arc-length patterns the pattern search detected (artifactSearch.ts: belt teeth, JPEG
-//    blocks, pixel locking, other stationary patterns of the print or the scan), searched before
+//    blocks, other stationary patterns of the print or the scan), searched before
 //    the detection and again with the fitted ring in the null design; the damped quadrature ring
 //    pair; and AR(p) noise on the sample lattice.
 // 3. Noise: per line AR(p) by Burg's method over the runs of read samples (Burg 1975; de Waele
@@ -380,8 +380,6 @@ export function analyzeTracedLine(line: TracedLine): LineFit {
     cornerSpeedMmS: line.cornerSpeedMmS,
     accelMmS2: line.accelMmS2,
     alongPxPerMm: line.alongPxPerMm,
-    acrossImagePx: Float64Array.from(lattice, (k) => line.acrossImagePx[k]),
-    acrossAxisPxPerMm: line.acrossAxisPxPerMm,
     lateralTowardRunUp: line.lateralTowardRunUp,
   }
   const columns = fixedNullColumns(record).length + 4
@@ -539,9 +537,7 @@ function withArtifacts(
       const candidates = known ? knownCandidates(bases) : gridCandidates(speedsMmS)
       const hit = searchStage(bases, fits, candidates, DETECTION_ALPHA / 2)
       if (hit === null) break
-      const same = carried.artifacts.some(
-        (a) => a.periodMm === hit.artifact.periodMm && a.pixelLockHarmonic === hit.artifact.pixelLockHarmonic,
-      )
+      const same = carried.artifacts.some((a) => a.periodMm === hit.artifact.periodMm)
       if (same) break
       carried.artifacts.push(hit.artifact)
       hit.columns.forEach((pair, l) => carried.columns[l].push(...pair))

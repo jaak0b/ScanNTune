@@ -1,6 +1,6 @@
 import { burgArSegments, latticeSegments, spectralDensity } from '../correlatedNoise'
 import type { ArFit } from '../correlatedNoise'
-import { nullDesign, noiseModel, projectColumns, projectPeriodic, projectRing, ringScratch } from './ringGls'
+import { nullDesign, noiseModel, projectPeriodic, projectRing, ringScratch } from './ringGls'
 import type { LineBasis, LineNoise, NullDesign, RingProjection } from './ringGls'
 import { F_MAX_HZ, F_MIN_HZ } from './types'
 import { FREQUENCY_GRID_HZ, depositTimes, ringColumns } from './ringRegressors'
@@ -82,13 +82,8 @@ export interface PeriodicComponent {
   periodMm: number
 }
 
-/** A component given by its two raw columns on the line's samples. */
-export interface ColumnComponent {
-  columns: Float64Array[]
-}
-
-/** The component a likelihood ratio tests: a ring, an arc-length artifact, or explicit columns. */
-export type TestedComponent = RingPoint | PeriodicComponent | ColumnComponent
+/** The component a likelihood ratio tests: a ring or an arc-length artifact. */
+export type TestedComponent = RingPoint | PeriodicComponent
 
 /** The likelihood ratio of a ring at one point of one line, with its alternative fit. */
 export interface RingRatio {
@@ -165,9 +160,7 @@ function alternativeWith(
   }
   const whitened = new Float64Array(m)
   let ring: RingProjection
-  if ('columns' in point) {
-    ring = projectColumns(basis, noise, design, point.columns[0], point.columns[1], whitened)
-  } else if ('periodMm' in point) {
+  if ('periodMm' in point) {
     ring = projectPeriodic(basis, noise, design, point.periodMm, ringScratch(m), new Float64Array(design.k), new Float64Array(design.k), whitened)
   } else {
     ring = projectRing(basis, noise, design, point.frequencyHz, point.dampingRatio, ringScratch(m), new Float64Array(design.k), new Float64Array(design.k), whitened)

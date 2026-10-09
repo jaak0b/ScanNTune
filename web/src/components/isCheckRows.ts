@@ -35,9 +35,6 @@ function pBoundText(p: number | null): string {
 /** Where a detected print or scan pattern comes from (its known source, or none), and which
  *  harmonic of that source it is where the source has harmonics. */
 function patternSource(artifact: DetectedArtifact): { source: string; harmonic: number | null } {
-  if (artifact.pixelLockHarmonic !== null) {
-    return { source: 'pixel locking of the tracer', harmonic: artifact.pixelLockHarmonic }
-  }
   if (!artifact.known) return { source: 'not a known period', harmonic: null }
   if (artifact.periodMm === GT2_PITCH_MM) return { source: 'GT2 belt pitch', harmonic: 1 }
   if (artifact.periodMm === GT2_PITCH_MM / 2) return { source: 'GT2 belt pitch', harmonic: 2 }
@@ -89,9 +86,7 @@ export function isCheckRows(a: IsAxisResult): CheckRow[] {
     )
   }
   a.artifacts.forEach((artifact, i) => {
-    if (artifact.periodMm !== null) {
-      rows.push({ label: `Print or scan pattern ${i + 1} period`, value: `${artifact.periodMm.toFixed(2)} mm` })
-    }
+    rows.push({ label: `Print or scan pattern ${i + 1} period`, value: `${artifact.periodMm.toFixed(2)} mm` })
     const { source, harmonic } = patternSource(artifact)
     rows.push({ label: `Print or scan pattern ${i + 1} source`, value: source })
     if (harmonic !== null) rows.push({ label: `Print or scan pattern ${i + 1} harmonic`, value: String(harmonic) })

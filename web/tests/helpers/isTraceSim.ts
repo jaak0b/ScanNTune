@@ -391,7 +391,6 @@ export function simulateAxis(options: TraceSimOptions): SimLine[] {
 
     const tTraced = new Float64Array(count)
     const lateral = new Float64Array(count)
-    const acrossNominal = new Float64Array(count)
     const along = options.alongTrack
     const alongAmp = along ? (along.ampMm ?? cTop / (2 * Math.PI * along.frequencyHz)) * (c / cTop) : 0
     const sign = options.lateralTowardRunUp ?? 1
@@ -464,11 +463,10 @@ export function simulateAxis(options: TraceSimOptions): SimLine[] {
       // tracer reads them in its own lateral coordinate.
       y *= sign
       const tilt = art?.pixelLock ? Math.tan((art.pixelLock.tiltDeg * Math.PI) / 180) : 0
-      acrossNominal[k] = lockOffset + xPx * tilt
       if (art?.pixelLock) {
         // The centroid locks toward pixel centres by where the bead actually lies across the
         // pixel grid: the nominal centerline plus the lateral deviation.
-        const acrossPx = acrossNominal[k] + y * pxPerMm
+        const acrossPx = lockOffset + xPx * tilt + y * pxPerMm
         const sub = acrossPx - Math.floor(acrossPx)
         y += (art.pixelLock.ampPx * Math.sin(2 * Math.PI * sub)) / pxPerMm
       }
@@ -514,8 +512,6 @@ export function simulateAxis(options: TraceSimOptions): SimLine[] {
       lateralMm: lateral,
       observed: Uint8Array.from(observed, (o) => (o ? 1 : 0)),
       alongPxPerMm: pxPerMm,
-      acrossImagePx: acrossNominal,
-      acrossAxisPxPerMm: pxPerMm,
       lateralTowardRunUp: sign,
     }
     return {

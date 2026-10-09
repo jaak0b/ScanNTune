@@ -76,9 +76,8 @@ describe('isCheckRows', () => {
         secondModePBound: 3.2e-9,
         secondMode: { frequencyHz: 62.04, dampingRatio: 0.047, frequencySeHz: 0.4, amplitudeMm: 0.004, cornerLocked: true },
         artifacts: [
-          { periodMm: 2, pixelLockHarmonic: null, known: true, detectionPBound: 1e-20 },
-          { periodMm: 1.7051, pixelLockHarmonic: null, known: false, detectionPBound: 1e-12 },
-          { periodMm: null, pixelLockHarmonic: 1, known: true, detectionPBound: 1e-9 },
+          { periodMm: 2, known: true, detectionPBound: 1e-20 },
+          { periodMm: 1.7051, known: false, detectionPBound: 1e-12 },
         ],
         cornerModel: { kind: 'flow-lag', scale: 0.0412 },
       }),
@@ -91,10 +90,7 @@ describe('isCheckRows', () => {
     expect(rows).toContainEqual({ label: 'Print or scan pattern 1 harmonic', value: '1' })
     expect(rows).toContainEqual({ label: 'Print or scan pattern 2 period', value: '1.71 mm' })
     expect(rows).toContainEqual({ label: 'Print or scan pattern 2 source', value: 'not a known period' })
-    expect(rows).toContainEqual({ label: 'Print or scan pattern 3 source', value: 'pixel locking of the tracer' })
-    expect(rows).toContainEqual({ label: 'Print or scan pattern 3 harmonic', value: '1' })
     expect(rows.map((r) => r.label)).not.toContain('Print or scan pattern 2 harmonic')
-    expect(rows.map((r) => r.label)).not.toContain('Print or scan pattern 3 period')
     expect(rows).toContainEqual({ label: 'Corner model', value: 'extrusion lag' })
     expect(rows).toContainEqual({ label: 'Extrusion lag time constant', value: '41 ms' })
   })
@@ -103,8 +99,8 @@ describe('isCheckRows', () => {
     const rows = isCheckRows(
       axis({
         artifacts: [
-          { periodMm: 1, pixelLockHarmonic: null, known: true, detectionPBound: 1e-15 },
-          { periodMm: 0.3387, pixelLockHarmonic: null, known: true, detectionPBound: 1e-11 },
+          { periodMm: 1, known: true, detectionPBound: 1e-15 },
+          { periodMm: 0.3387, known: true, detectionPBound: 1e-11 },
         ],
       }),
     )

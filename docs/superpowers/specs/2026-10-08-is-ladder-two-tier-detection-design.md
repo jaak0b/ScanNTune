@@ -484,9 +484,8 @@ mapped back through the fiducial affine, and the commanded trapezoid `timeAtDist
 the tier speed v at a, then cruise). The printed coupon carries the printer's axis scale error and the
 plastic's shrinkage exactly as its fiducials do, so the affine-mapped distance is the distance the
 printer executed at the commanded speed; a card conversion biased the frequency by the shrinkage
-fraction (0.5% shrinkage read 0.5% high). The tracer also exports, per sample, the scan pixels per
-millimetre along the line and the nominal across-image coordinate, which the JPEG and pixel-lock
-patterns need.
+fraction (0.5% shrinkage read 0.5% high). The tracer also exports the scan pixels per millimetre along
+the line, which the JPEG patterns need.
 
 Klipper's ramps are exact trapezoids. The Marlin S-curve ramp-end fit window start was removed on
 2026-10-08 by owner decision; the app supports Klipper only.
@@ -777,7 +776,7 @@ Klipper's `fit_shaper` does. The Klipper snippet always writes the damping ratio
 at, 0.1 included (0fc6cc0), because a `damping_ratio` line already in printer.cfg would otherwise stay
 in effect and the firmware would build a different shaper than the one scored.
 
-### 2.11 Print and scan patterns (order tracking) and pixel locking
+### 2.11 Print and scan patterns (order tracking)
 
 `artifactSearch.ts` searches for patterns stationary in arc length: fixed along the printed path (the
 mesh of a GT2 belt's teeth) or in the scan's pixels (JPEG blocks). In a line's time base they read as
@@ -788,8 +787,7 @@ from a ring and no search runs.
 
 - **Known stage**: the GT2 pitch of 2 mm and its 1 mm harmonic, the JPEG 8 x 8 px block and the 16 px
   minimum coded unit (ITU-T T.81) through the scan's pixels per millimetre along the line, each kept only
-  when its frequency at the line's speed lies in the 20 to 200 Hz band; plus the tracer's pixel locking
-  at harmonics m = 1 and 2.
+  when its frequency at the line's speed lies in the 20 to 200 Hz band.
 - **Grid stage**: spatial frequencies from F_MIN / v_max to F_MAX / v_min cycles per mm, at the step
   1 Hz / v_max.
 
@@ -803,13 +801,14 @@ fit with the fitted ring in the null design (a ring missed by the first search l
 columns on its own tier); when that second search finds more patterns, the whole axis analysis repeats
 with them.
 
-Pixel locking (peak locking, Westerweel, Meas. Sci. Technol. 8, 1997; Prasad et al. 1992; Roth and Katz,
-Meas. Sci. Technol. 12, 2001) pulls the centroid toward pixel centres as a periodic function of the
-bead's sub-pixel position across the line. It is modelled by sin and cos of 2 pi m phi, m = 1 and 2, with
-phi the sub-pixel phase of the bead's slow position (the nominal across-image coordinate plus the null
-fit's lateral motion without the ring, one pass). On a line tilted against the pixel grid the phase
-sweeps along the line and the bias reads as a tone, in band at typical placement tilts of 0.3 to 2.4
-degrees at 600 dpi and 150 mm/s.
+The tracer's pixel locking (peak locking, Westerweel, Meas. Sci. Technol. 8, 1997; Roth and Katz, Meas.
+Sci. Technol. 12, 2001) pulls the centroid toward pixel centres as a periodic function of the bead's
+sub-pixel position across the line. It has no candidate of its own. On a line tilted against the pixel
+grid it repeats at a fixed arc-length period, which the grid stage labels as a pattern; on an untilted
+line its phase hardly moves along the line, and the offset and drift terms of the null model absorb it.
+A candidate modelled on the sub-pixel phase was removed on 2026-10-10 (owner decision): its phase
+follows the pixel grid, so the corner-locking test could not judge it, and a strong, heavily damped
+ring leaking into its columns was labelled a pattern and lost part of its detection.
 
 Changed from the plan: the plan put the known periods (GT2 2 mm and 1 mm, JPEG 8 and 16 px) into every
 null and full model always, and regressed on the pixel-lock phase always. Always-present columns pushed
@@ -995,14 +994,6 @@ timeout. The build and unit test job is capped at 15 minutes. The earlier sharde
   was priced for the earlier delta-method check. The nested likelihood ratio test (section 2.9) uses
   every line in one fit and in those simulations refused far more patterns, but its power at the
   weakest accepted measurement is not yet measured by the statistics suite.
-- **The pixel-locking candidate and heavily damped strong rings.** The corner-locking test judges an
-  arc-length candidate by its phase at the corner, but the pixel-locking candidate's phase follows the
-  pixel grid. A strong, heavily damped ring that leaks into the pixel-locking columns in the first
-  search then reads as not locked, and the candidate is labelled a pattern, which absorbs part of the
-  ring: since the gate change (2026-10-10) two unit cases (45.3 Hz at zeta 0.3 with 0.15 mm, and 40 Hz
-  at zeta 0.42 with 0.8 mm) lose a detected line, or fail the confidence gate, where the removed
-  proportionality branch had kept the candidate unlabelled. True pixel locking on a tilted line is
-  still labelled, by the grid stage as an arc-length period. Open for an owner decision.
 - **S1 under 2 px blur was red at 67 exceedances of the 95% point** (allowed 68 to 132; 11 above the 99%
   point) when the S1 files left the suite (c4c19a2). The detection was slightly conservative there, the
   safe direction: it costs some sensitivity and never adds false acceptances. Alternatives measured and

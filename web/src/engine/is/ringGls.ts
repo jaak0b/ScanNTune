@@ -36,10 +36,6 @@ export interface LineRecord extends SampleTimes {
   /** Scan pixels per commanded millimetre along the line (0 when unknown), locating patterns
    *  fixed in scan pixels. */
   alongPxPerMm: number
-  /** The nominal centerline's image coordinate across the line per sample, px, and the image px
-   *  per mm of lateral deviation along it (lineTracer.TracedLine). */
-  acrossImagePx: Float64Array
-  acrossAxisPxPerMm: number
   /** The trace's lateral sign relative to the run-up (lineTracer.TracedLine). */
   lateralTowardRunUp: 1 | -1
   /** Commanded time since the corner of each observed sample, seconds. */

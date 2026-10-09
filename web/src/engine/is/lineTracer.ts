@@ -55,12 +55,6 @@ export interface TracedLine {
   /** Scan pixels per commanded millimetre along the line (the alignment's), locating patterns
    *  fixed in scan pixels such as JPEG blocks. */
   alongPxPerMm: number
-  /** Per sample, the image coordinate of the nominal centerline along the image axis nearest
-   *  the line's perpendicular, px: the coordinate the centroid's pixel locking acts on. */
-  acrossImagePx: Float64Array
-  /** Image px along that axis per mm of lateral deviation (signed), so the centroid's coordinate
-   *  is acrossImagePx + acrossAxisPxPerMm * lateralMm. */
-  acrossAxisPxPerMm: number
   /** +1 when a positive lateral deviation points along the run-up's direction of travel into the
    *  corner, -1 when it points against it: the sign that turns the trace into the displacement
    *  of the axis the corner stopped, in the direction it was moving. */
@@ -229,9 +223,6 @@ function traceLine(
 
   const tS = new Float64Array(count)
   const lateralMm = new Float64Array(count)
-  // Pixel locking acts along the image axis nearest the perpendicular.
-  const acrossOnY = Math.abs(py) >= Math.abs(px)
-  const acrossImagePx = new Float64Array(count)
   let invalid = 0
   const bgSamples: number[] = []
   for (let k = 0; k < count; k++) {
@@ -239,7 +230,6 @@ function traceLine(
     const sLocMm = TRACE_START_MM + k * stepAlongMm
     const cx = corner.x + ux * sLocMm * affinePxPerMm
     const cy = corner.y + uy * sLocMm * affinePxPerMm
-    acrossImagePx[k] = acrossOnY ? cy : cx
 
     let valid = 0
     for (let j = 0; j < acrossCount; j++) {
@@ -319,8 +309,6 @@ function traceLine(
     lateralMm,
     observed,
     alongPxPerMm: affinePxPerMm,
-    acrossImagePx,
-    acrossAxisPxPerMm: (acrossOnY ? py : px) * acrossPxPerMm,
     lateralTowardRunUp,
   }
 }
