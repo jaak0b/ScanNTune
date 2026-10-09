@@ -381,25 +381,41 @@ function followsBandUpTo(
 }
 
 /**
+ * The top of the band the coupon is designed for: the highest grid frequency up to which the
+ * ladder's bottom rung (MIN_CORNER_SPEED_MM_S) on the slowest tier follows a ring at every grid
+ * frequency from F_MIN_HZ (followedBandTopHz). It is F_MAX_HZ on most printers; a low
+ * acceleration lowers it, because the along-track speed right after the corner grows with the
+ * acceleration while the ring does not. Null when not even the bottom rung follows a ring at
+ * F_MIN_HZ: then no ladder reads any frequency of the band.
+ */
+function designBandTopHz(
+  request: RingPathInputs & Pick<IsTestSpec, 'speedsMmS'>,
+  profile: PrinterProfile,
+): number | null {
+  return followedBandTopHz(request, profile, Math.min(...request.speedsMmS), MIN_CORNER_SPEED_MM_S)
+}
+
+/**
  * The fastest corner speed, on a FOLLOWABLE_CORNER_STEP_MM_S grid, whose bead follows a ring at
- * every grid frequency of the band on the slowest tier (followsBandUpTo up to F_MAX_HZ), found by
+ * every grid frequency up to the design band top (designBandTopHz) on the slowest tier, found by
  * bisection between MIN_CORNER_SPEED_MM_S and the tier's ladder top: at every sample a faster
  * corner rings with a larger amplitude and leaves a smaller along-track gain over its own speed,
  * so its path curves more sharply at every frequency. The slowest tier binds: its along-track
- * speed is the lowest, so every faster tier follows the same corners. Returns the ladder top when
- * even that rung follows, and one step below MIN_CORNER_SPEED_MM_S when not even the bottom rung
- * does.
+ * speed is the lowest, so every faster tier follows the same corners. The bottom rung follows up
+ * to the design band top by its definition. Returns the ladder top when even that rung follows,
+ * and one step below MIN_CORNER_SPEED_MM_S when there is no design band top.
  */
 export function fastestFollowableCornerMmS(
   request: IsTestRequest,
   profile: PrinterProfile,
 ): number {
-  const slowest = Math.min(...request.speedsMmS)
   const step = FOLLOWABLE_CORNER_STEP_MM_S
-  const follows = (c: number) => followsBandUpTo(request, profile, slowest, c, F_MAX_HZ)
+  const topHz = designBandTopHz(request, profile)
+  if (topHz === null) return MIN_CORNER_SPEED_MM_S - step
+  const slowest = Math.min(...request.speedsMmS)
+  const follows = (c: number) => followsBandUpTo(request, profile, slowest, c, topHz)
   const top = tierLadderTopMmS(request, slowest)
   if (follows(top)) return top
-  if (!follows(MIN_CORNER_SPEED_MM_S)) return MIN_CORNER_SPEED_MM_S - step
   // Bisection on the grid index; invariant: lo * step follows, hi * step does not.
   let lo = Math.round(MIN_CORNER_SPEED_MM_S / step)
   let hi = Math.ceil(top / step)
@@ -429,25 +445,27 @@ export function followableRungCount(
 
 /**
  * The fewest lines per speed (at least MIN_LINES_PER_SPEED) whose ladder keeps at least
- * MIN_ACCEPTED_LINES followable rungs on the slowest tier, so the analysis can reach its line
- * floor across the whole band; MIN_LINES_PER_SPEED when no line count can (not even the bottom
- * rung follows). The bed fit never removes lines below it. With a bottom-dense ladder this is
- * MIN_ACCEPTED_LINES + 1: the followable rungs plus the ladder top.
+ * MIN_ACCEPTED_LINES rungs on the slowest tier that follow up to the design band top
+ * (designBandTopHz), so the analysis can reach its line floor across the band the coupon is
+ * designed for; MIN_LINES_PER_SPEED when there is no design band top. The bed fit never removes
+ * lines below it. With a bottom-dense ladder this is MIN_ACCEPTED_LINES + 1: the followable rungs
+ * plus the ladder top.
  */
 function followableLineFloor(request: LadderRequest, profile: PrinterProfile): number {
+  const topHz = designBandTopHz(request, profile)
+  if (topHz === null) return MIN_LINES_PER_SPEED
   for (let n = MIN_LINES_PER_SPEED; n <= MAX_LINES_PER_SPEED; n++) {
-    if (followableRungCount({ ...request, linesPerSpeed: n }, profile) >= MIN_ACCEPTED_LINES) {
-      return n
-    }
+    const spec = { ...request, linesPerSpeed: n }
+    if (followableRungCount(spec, profile, topHz) >= MIN_ACCEPTED_LINES) return n
   }
   return MIN_LINES_PER_SPEED
 }
 
 /**
  * The derived lines per speed. When the fastest followable corner splits the slowest tier's
- * ladder (it lies between the bottom rung and the ladder top), the ladder takes
- * MIN_ACCEPTED_LINES rungs at or below it, so the whole band stays readable at the analysis' line
- * floor, and MIN_ACCEPTED_LINES rungs above it, so a stiff frame whose ring is too small to
+ * ladder (it lies at or above the bottom rung and below the ladder top), the ladder takes
+ * MIN_ACCEPTED_LINES rungs at or below it, so the design band (up to designBandTopHz) stays
+ * readable at the analysis' line floor, and MIN_ACCEPTED_LINES rungs above it, so a stiff frame whose ring is too small to
  * detect on the slow corners still reaches the line floor from the strong excitation of the
  * fast ones: 6 lines. Otherwise every rung follows (or none does), and the followable line
  * floor is the count.
@@ -455,7 +473,7 @@ function followableLineFloor(request: LadderRequest, profile: PrinterProfile): n
 export function ladderLinesPerSpeed(request: LadderRequest, profile: PrinterProfile): number {
   const slowest = Math.min(...request.speedsMmS)
   const c = request.followableCornerMmS
-  if (c > MIN_CORNER_SPEED_MM_S && c < tierLadderTopMmS(request, slowest)) {
+  if (c >= MIN_CORNER_SPEED_MM_S && c < tierLadderTopMmS(request, slowest)) {
     return 2 * MIN_ACCEPTED_LINES
   }
   return followableLineFloor(request, profile)
@@ -464,34 +482,41 @@ export function ladderLinesPerSpeed(request: LadderRequest, profile: PrinterProf
 /**
  * The highest grid frequency up to which at least MIN_ACCEPTED_LINES rungs of the slowest tier
  * follow a ring at every grid frequency from F_MIN_HZ (see followedBandTopHz): the
- * MIN_ACCEPTED_LINES-th highest of the rungs' own followed band tops. It is F_MAX_HZ whenever the
- * ladder keeps its followable rungs over the whole band, which the derived ladder does unless not
- * even the bottom rung follows the whole band (a low acceleration), and F_MIN_HZ when no frequency
- * of the band keeps enough rungs.
+ * MIN_ACCEPTED_LINES-th highest of the rungs' own followed band tops. The derived ladder reaches
+ * its design band top (designBandTopHz): F_MAX_HZ on most printers, lower at a low acceleration.
+ * Null when fewer than MIN_ACCEPTED_LINES rungs follow a ring even at F_MIN_HZ, so the coupon reads
+ * no frequency of the band.
  */
-export function guaranteedBandTopHz(spec: IsTestSpec, profile: PrinterProfile): number {
+export function guaranteedBandTopHz(spec: IsTestSpec, profile: PrinterProfile): number | null {
   const slowest = Math.min(...spec.speedsMmS)
   const tops = ladderCornerSpeeds(spec, slowest)
     .map((c) => followedBandTopHz(spec, profile, slowest, c))
     .filter((top): top is number => top !== null)
     .sort((x, y) => y - x)
-  return tops.length < MIN_ACCEPTED_LINES ? F_MIN_HZ : tops[MIN_ACCEPTED_LINES - 1]
+  return tops.length < MIN_ACCEPTED_LINES ? null : tops[MIN_ACCEPTED_LINES - 1]
 }
 
 /**
- * The warning shown when the coupon cannot keep MIN_ACCEPTED_LINES followable lines at the band
- * top (guaranteedBandTopHz below F_MAX_HZ), or null. The bed fit never removes the followable
- * rungs (followableLineFloor), so the cause is always the slowest tier's line speed and the
- * acceleration, never the bed size.
+ * The warning shown when the coupon cannot keep MIN_ACCEPTED_LINES followable lines over the
+ * whole band (guaranteedBandTopHz below F_MAX_HZ, or null when it reads nothing), or null. The
+ * bed fit never removes the followable rungs (followableLineFloor), and a faster line speed does
+ * not help either: the binding stretch is the acceleration ramp right after the corner, whose
+ * along-track speed depends on the corner speed and the acceleration only. The cause the user can
+ * change is the acceleration.
  */
 export function bandTopWarning(spec: IsTestSpec, profile: PrinterProfile): string | null {
   const topHz = guaranteedBandTopHz(spec, profile)
+  if (topHz === null) {
+    return (
+      'Raise the print acceleration before printing this coupon. ' +
+      `At ${spec.accelMmS2} mm/s^2, the lines cannot follow ringing at any frequency from ` +
+      `${F_MIN_HZ} to ${F_MAX_HZ} Hz.`
+    )
+  }
   if (topHz >= F_MAX_HZ) return null
-  const slowest = Math.min(...spec.speedsMmS)
   return (
-    `Raise the line speed or the print acceleration to read resonances up to ${F_MAX_HZ} Hz. ` +
-    `At ${slowest} mm/s and ${spec.accelMmS2} mm/s^2, the lines follow ringing only up to ` +
-    `${topHz} Hz.`
+    `Raise the print acceleration to measure resonances up to ${F_MAX_HZ} Hz. ` +
+    `At ${spec.accelMmS2} mm/s^2, the lines follow ringing only up to ${topHz} Hz.`
   )
 }
 

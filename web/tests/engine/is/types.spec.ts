@@ -188,28 +188,30 @@ describe('bottom-dense ladder and derived lines per speed (bead followability on
     expect(spec.followableCornerMmS).toBeLessThan(21.2)
     expect(guaranteedBandTopHz(spec, p)).toBe(200)
   })
-  it('falls back to three plain rungs when not even the bottom rung follows, and warns', () => {
-    // At 1000 mm/s^2 even a 20 mm/s corner folds at 200 Hz, so no ladder can keep three
-    // followable rungs there.
-    const slow = { ...profile, printAccelMmS2: 1000 }
-    const spec = fitted(defaultIsTestRequest(slow), slow)
-    expect(spec.followableCornerMmS).toBeLessThan(20)
-    expect(spec.linesPerSpeed).toBe(3)
-    expect(bandTopWarning(spec, slow)).not.toBeNull()
-  })
-  it('states the reduced band top the coupon still reads', () => {
-    // 1200 mm/s^2 and a 25 mm/s corner speed: plain rungs 20, 22.36, 25 mm/s, all three
-    // followable up to 43 Hz but not at 44 Hz.
+  it('designs the ladder at the reduced band top a low acceleration still reads, and names the acceleration', () => {
+    // 1200 mm/s^2, 90 mm/s tier: the 20 mm/s bottom rung follows a ring at every 1 Hz grid point
+    // up to 86 Hz and folds at 87 Hz (checked once by a scratch script), so the six-line ladder is
+    // designed for a band ending at 86 Hz.
     const slow = { ...profile, printAccelMmS2: 1200 }
-    const spec = fitted({ ...defaultIsTestRequest(slow), cornerSpeedMmS: 25 }, slow)
-    expect(guaranteedBandTopHz(spec, slow)).toBe(43)
-    expect(followableRungCount(spec, slow, 43)).toBe(3)
-    expect(followableRungCount(spec, slow, 44)).toBe(2)
+    const spec = fitted(defaultIsTestRequest(slow), slow)
+    expect(spec.linesPerSpeed).toBe(6)
+    expect(guaranteedBandTopHz(spec, slow)).toBe(86)
     expect(bandTopWarning(spec, slow)).toBe(
-      'Raise the line speed or the print acceleration to read resonances up to 200 Hz. At ' +
-        '90 mm/s and 1200 mm/s^2, the lines follow ringing only up to 43 Hz.',
+      'Raise the print acceleration to measure resonances up to 200 Hz. At 1200 mm/s^2, the ' +
+        'lines follow ringing only up to 86 Hz.',
     )
     expect(bandTopWarning(fitted(request), profile)).toBeNull()
+  })
+  it('reports a coupon whose bottom rung folds already at 20 Hz as reading nothing', () => {
+    // 500 mm/s^2: even the 20 mm/s bottom rung of the 90 mm/s tier folds at 20 Hz (checked once
+    // by a scratch script).
+    const slow = { ...profile, printAccelMmS2: 500 }
+    const spec = fitted(defaultIsTestRequest(slow), slow)
+    expect(guaranteedBandTopHz(spec, slow)).toBeNull()
+    expect(bandTopWarning(spec, slow)).toBe(
+      'Raise the print acceleration before printing this coupon. At 500 mm/s^2, the lines ' +
+        'cannot follow ringing at any frequency from 20 to 200 Hz.',
+    )
   })
 })
 

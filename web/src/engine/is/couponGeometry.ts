@@ -78,8 +78,10 @@ function geometricRungs(from: number, to: number, count: number): number[] {
  * corner, and the remaining rungs geometrically from there up to the tier's ladder top. The
  * analysis can then reach its line floor from the followable rungs alone at the band top, while
  * the faster rungs carry the strong excitation. When the followable corner lies outside the
- * ladder's range (every rung follows, or not even the bottom rung does), or the tier has no rung
- * left above the followable ones, the rungs are spaced geometrically over the whole range.
+ * ladder's range (every rung follows, or it sits below the bottom rung because not even that rung
+ * follows), or the tier has no rung left above the followable ones, the rungs are spaced
+ * geometrically over the whole range. A followable corner equal to the bottom rung gives three
+ * bottom rungs at that one speed: three replicate lines that still follow.
  * `tierSpeedMmS` defaults to the fastest tier, whose ladder top is the spec's corner speed.
  */
 export function ladderCornerSpeeds(
@@ -89,7 +91,7 @@ export function ladderCornerSpeeds(
   const n = spec.linesPerSpeed
   const top = tierLadderTopMmS(spec, tierSpeedMmS)
   const followable = spec.followableCornerMmS
-  if (n <= MIN_ACCEPTED_LINES || followable <= MIN_CORNER_SPEED_MM_S || followable >= top) {
+  if (n <= MIN_ACCEPTED_LINES || followable < MIN_CORNER_SPEED_MM_S || followable >= top) {
     return geometricRungs(MIN_CORNER_SPEED_MM_S, top, n)
   }
   const bottom = geometricRungs(MIN_CORNER_SPEED_MM_S, followable, MIN_ACCEPTED_LINES)
