@@ -50,11 +50,11 @@ describe('ringLikelihoodRatio', () => {
 
   it('credits a persistent ring that the null noise model absorbs', () => {
     // zeta 0.002 at 60 Hz, 0.03 mm on the top rung: an AR model of the null predicts it almost
-    // exactly. 29.3 is the single-line critical value 2 ln(2353 / 0.001) of the detection bound
-    // (hand-computed): held fixed the line shows nothing, refitted it is detected on its own.
+    // exactly. 29.35 is the single-line critical value 2 ln(2353 / 0.001) = 29.342 of the detection
+    // bound (hand-computed), rounded up: held fixed the line shows nothing, refitted it is detected on its own.
     const fit = nullFitOf({ noise: { model: 'iid', sigmaPx: 0.1 }, ring: { frequencyHz: 60, dampingRatio: 0.002, ampMm: 0.03 } }, 1, 9)
-    expect(heldAt(fit, 60, 0.002)).toBeLessThan(29.3)
-    expect(ringLikelihoodRatio(fit.basis, fit.h0, { frequencyHz: 60, dampingRatio: 0.002 }).statistic).toBeGreaterThan(29.3)
+    expect(heldAt(fit, 60, 0.002)).toBeLessThan(29.35)
+    expect(ringLikelihoodRatio(fit.basis, fit.h0, { frequencyHz: 60, dampingRatio: 0.002 }).statistic).toBeGreaterThan(29.35)
   })
 })
 
@@ -85,7 +85,7 @@ describe('noiseSpectrumPeaks', () => {
 
   it('reports the band edge a monotone spectrum falls away from', () => {
     expect(noiseSpectrumPeaks({ coefficients: [0.5], noiseVariance: 1 }, 1 / 3000)).toEqual([20])
-    expect(noiseSpectrumPeaks({ coefficients: [-0.5], noiseVariance: 1 }, 1 / 3000)).toEqual([150])
+    expect(noiseSpectrumPeaks({ coefficients: [-0.5], noiseVariance: 1 }, 1 / 3000)).toEqual([200])
   })
 
   it('reports none for a white noise model', () => {

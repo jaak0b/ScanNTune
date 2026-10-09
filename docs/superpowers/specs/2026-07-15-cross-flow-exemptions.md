@@ -77,12 +77,12 @@ contrast is intrinsic to the coupon). Adding the fields would present settings w
 ## 5. Input shaper only: the look-elsewhere detection test
 
 `web/src/engine/is/ringAnalyzer.ts` first decides whether an axis rings at all. It maximizes the
-whitened detection statistic over a grid of candidate rings (20 to 150 Hz in 1 Hz steps, times the
-13 damping ratios of `ZETA_GRID`, 1,703 points) and pays for that search with the Bonferroni bound
+whitened detection statistic over a grid of candidate rings (20 to 200 Hz in 1 Hz steps, times the
+13 damping ratios of `ZETA_GRID`, 2,353 points) and pays for that search with the Bonferroni bound
 of Dunn (1961),
 `pBound = min(1, |G| P(chi2_2K >= max_G Q))`; `is/layerShift.ts` uses the same bound for its search
 over the split point of a layer shift. The bound exists because the decision is taken at the best
-of many tried parameter values: without it, the largest of 1,703 noise statistics would pass as a
+of many tried parameter values: without it, the largest of 2,353 noise statistics would pass as a
 detection far more often than the nominal rate.
 
 No other flow takes a detection decision by searching a parameter. PA always reports an estimate,
