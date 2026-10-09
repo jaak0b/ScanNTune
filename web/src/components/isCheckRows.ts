@@ -32,13 +32,11 @@ function pBoundText(p: number | null): string {
   return p >= 0.001 ? p.toPrecision(2) : p.toExponential(1)
 }
 
-/** Where a detected print or scan pattern comes from (its known source, or none), and which
- *  harmonic of that source it is where the source has harmonics. */
-function patternSource(artifact: DetectedArtifact): { source: string; harmonic: number | null } {
-  if (!artifact.known) return { source: 'not a known period', harmonic: null }
-  if (artifact.periodMm === GT2_PITCH_MM) return { source: 'GT2 belt pitch', harmonic: 1 }
-  if (artifact.periodMm === GT2_PITCH_MM / 2) return { source: 'GT2 belt pitch', harmonic: 2 }
-  return { source: 'JPEG block of the scan', harmonic: null }
+/** Where a detected print or scan pattern comes from: its known source, or none. */
+function patternSource(artifact: DetectedArtifact): string {
+  if (!artifact.known) return 'not a known period'
+  if (artifact.periodMm === GT2_PITCH_MM || artifact.periodMm === GT2_PITCH_MM / 2) return 'GT2 belt pitch'
+  return 'JPEG block of the scan'
 }
 
 /** Why the along-track lag correction was not applied, naming the other axis where it is the
@@ -89,9 +87,7 @@ export function isCheckRows(a: IsAxisResult): CheckRow[] {
   }
   a.artifacts.forEach((artifact, i) => {
     rows.push({ label: `Print or scan pattern ${i + 1} period`, value: `${artifact.periodMm.toFixed(2)} mm` })
-    const { source, harmonic } = patternSource(artifact)
-    rows.push({ label: `Print or scan pattern ${i + 1} source`, value: source })
-    if (harmonic !== null) rows.push({ label: `Print or scan pattern ${i + 1} harmonic`, value: String(harmonic) })
+    rows.push({ label: `Print or scan pattern ${i + 1} source`, value: patternSource(artifact) })
   })
   if (a.cornerModel !== null) {
     const extrusion = a.cornerModel.kind === 'flow-lag'

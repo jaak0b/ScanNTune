@@ -90,15 +90,13 @@ describe('isCheckRows', () => {
     expect(rows).toContainEqual({ label: 'Second mode locked to the corner', value: 'yes' })
     expect(rows).toContainEqual({ label: 'Print or scan pattern 1 period', value: '2.00 mm' })
     expect(rows).toContainEqual({ label: 'Print or scan pattern 1 source', value: 'GT2 belt pitch' })
-    expect(rows).toContainEqual({ label: 'Print or scan pattern 1 harmonic', value: '1' })
     expect(rows).toContainEqual({ label: 'Print or scan pattern 2 period', value: '1.71 mm' })
     expect(rows).toContainEqual({ label: 'Print or scan pattern 2 source', value: 'not a known period' })
-    expect(rows.map((r) => r.label)).not.toContain('Print or scan pattern 2 harmonic')
     expect(rows).toContainEqual({ label: 'Corner model', value: 'extrusion lag' })
     expect(rows).toContainEqual({ label: 'Extrusion lag time constant', value: '41 ms' })
   })
 
-  it('names the GT2 second harmonic and a JPEG block as separate source and harmonic rows', () => {
+  it('names the GT2 belt pitch at half its period and a JPEG block as their sources', () => {
     const rows = isCheckRows(
       axis({
         artifacts: [
@@ -109,10 +107,9 @@ describe('isCheckRows', () => {
     )
     expect(rows).toContainEqual({ label: 'Print or scan pattern 1 period', value: '1.00 mm' })
     expect(rows).toContainEqual({ label: 'Print or scan pattern 1 source', value: 'GT2 belt pitch' })
-    expect(rows).toContainEqual({ label: 'Print or scan pattern 1 harmonic', value: '2' })
     expect(rows).toContainEqual({ label: 'Print or scan pattern 2 period', value: '0.34 mm' })
     expect(rows).toContainEqual({ label: 'Print or scan pattern 2 source', value: 'JPEG block of the scan' })
-    expect(rows.map((r) => r.label)).not.toContain('Print or scan pattern 2 harmonic')
+    expect(rows.some((r) => r.label.includes('harmonic'))).toBe(false)
   })
 
   it('reports an applied along-track lag correction as yes with no reason row', () => {
