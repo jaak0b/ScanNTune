@@ -187,7 +187,7 @@ describe('bottom-dense ladder and derived lines per speed (bead followability on
     )
     expect(bandTopWarning(fitted(request), profile)).toBeNull()
   })
-  it('refuses to fit a coupon whose bottom rung folds already at 20 Hz, judged per printer', () => {
+  it('refuses to fit a coupon whose bottom rung folds already at 20 Hz, judged per printer, naming the cause', () => {
     // 500 mm/s^2: even the 20 mm/s bottom rung of the 90 mm/s tier folds at 20 Hz with the 0.21 mm
     // half bead of a 0.4 mm nozzle (checked once by a scratch script), so no G-code is offered.
     // The 0.13125 mm half bead of a 0.25 mm nozzle still follows at that acceleration.
@@ -198,6 +198,14 @@ describe('bottom-dense ladder and derived lines per speed (bead followability on
     )
     const fine = { ...slow, nozzleDiameterMm: 0.25 }
     expect(guaranteedBandTopHz(fitted(defaultIsTestRequest(fine), fine), fine)).not.toBeNull()
+    // A 60 mm/s line speed at 3000 mm/s^2: the 36 mm/s slower tier is reached from the 20 mm/s
+    // bottom rung within (36^2 - 20^2) / 6000 = 0.149 mm, before the read starts 1 mm past the
+    // corner, so the line speed is named instead of the acceleration.
+    expect(() => fitSpecToPrinter({ ...request, speedsMmS: speedTiersFor(60) }, profile)).toThrow(
+      'Raise the line speed before printing this coupon. At a line speed of 60 mm/s, the lines ' +
+        'cannot follow ringing at any frequency from 20 to 200 Hz, and a higher print ' +
+        'acceleration cannot change that.',
+    )
   })
 })
 

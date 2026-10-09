@@ -16,6 +16,7 @@ import {
   protectedSpanMm,
   shortestRunUpMoveMm,
   tierLadderTopMmS,
+  tierRampMm,
   timeAtDistance,
   TRACE_START_MM,
 } from './couponGeometry'
@@ -537,14 +538,33 @@ export function guaranteedBandTopHz(spec: IsTestSpec, profile: PrinterProfile): 
 }
 
 /**
- * The text a coupon whose lines follow ringing at no band frequency (guaranteedBandTopHz null) is
- * refused with: fitSpecToPrinter throws it, so no G-code is offered.
+ * Whether the line speed, not the acceleration, keeps a coupon from reading: the slowest tier's
+ * ramp from the ladder's bottom rung ends before the first traced sample (TRACE_START_MM), so the
+ * along-track speed over the whole read window is already the tier speed. A higher acceleration
+ * then cannot raise the along-track speed; it only shortens the time the ring has to decay before
+ * the read starts. Only a faster line speed straightens the bead's path.
  */
-function readsNothingMessage(accelMmS2: number): string {
+function lineSpeedBindsReading(spec: Pick<IsTestSpec, 'speedsMmS' | 'accelMmS2'>): boolean {
+  return tierRampMm(spec, Math.min(...spec.speedsMmS), MIN_CORNER_SPEED_MM_S) <= TRACE_START_MM
+}
+
+/**
+ * The text a coupon whose lines follow ringing at no band frequency (guaranteedBandTopHz null) is
+ * refused with: fitSpecToPrinter throws it, so no G-code is offered. It names the line speed when
+ * a higher acceleration cannot help (lineSpeedBindsReading), and the acceleration otherwise.
+ */
+function readsNothingMessage(spec: Pick<IsTestSpec, 'speedsMmS' | 'accelMmS2'>): string {
+  const band = `any frequency from ${F_MIN_HZ} to ${F_MAX_HZ} Hz`
+  if (lineSpeedBindsReading(spec)) {
+    return (
+      'Raise the line speed before printing this coupon. ' +
+      `At a line speed of ${Math.max(...spec.speedsMmS)} mm/s, the lines cannot follow ringing ` +
+      `at ${band}, and a higher print acceleration cannot change that.`
+    )
+  }
   return (
     'Raise the print acceleration before printing this coupon. ' +
-    `At ${accelMmS2} mm/s^2, the lines cannot follow ringing at any frequency from ` +
-    `${F_MIN_HZ} to ${F_MAX_HZ} Hz.`
+    `At ${spec.accelMmS2} mm/s^2, the lines cannot follow ringing at ${band}.`
   )
 }
 
@@ -559,7 +579,7 @@ function readsNothingMessage(accelMmS2: number): string {
  */
 export function bandTopWarning(spec: IsTestSpec, profile: PrinterProfile): string | null {
   const topHz = guaranteedBandTopHz(spec, profile)
-  if (topHz === null) return readsNothingMessage(spec.accelMmS2)
+  if (topHz === null) return readsNothingMessage(spec)
   if (topHz >= F_MAX_HZ) return null
   return (
     `Raise the print acceleration to measure resonances up to ${F_MAX_HZ} Hz. ` +
@@ -585,7 +605,7 @@ export function fitSpecToPrinter(
   checkFirmwareCorner(tiers.request)
   const bed = fitSpecToBed(tiers.request, profile)
   if (guaranteedBandTopHz(bed.spec, profile) === null) {
-    throw new Error(readsNothingMessage(bed.spec.accelMmS2))
+    throw new Error(readsNothingMessage(bed.spec))
   }
   return { spec: bed.spec, notes: [...tiers.notes, ...bed.notes] }
 }
