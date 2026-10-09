@@ -793,9 +793,15 @@ from a ring and no search runs.
 
 Each stage runs at alpha / 2 with the likelihood ratio summed over the lines and the Bonferroni bound over
 its candidates. A candidate counts as a pattern only when every tier's own lines also show it at that
-level (closed testing) and it is NOT shown locked to the corner at that level (`cornerTransient.ts`): a
-ring the candidate's columns pick up starts at the corner with one phase on every line, a pattern fixed
-along the path or in the scan sits wherever the line falls on it. A detected pattern joins every line's null design as fixed columns and the stage
+level (closed testing). A known period is labelled by that alone. A grid period must also NOT be shown
+locked to the corner at that level (`cornerTransient.ts`): a ring the candidate's columns pick up starts
+at the corner with one phase on every line, a pattern of unknown origin is taken to sit wherever the
+line falls on it. The known periods are exempt because a belt pattern is locked to its motor, and on
+this coupon that means locked to the corner: each group's corners lie on a 45 degree diagonal, so CoreXY
+motor A (position x + y, Klipper's corexy convention; motor B is x - y) stands at the same position at
+every corner, and its belt's pattern has the same phase on every line. The corner-locking test would
+call it a ring; the closed test over the tiers tells the two apart, since a ring matches a known period
+on one tier only. A detected pattern joins every line's null design as fixed columns and the stage
 repeats. The search runs before the corner-model choice and the detection, and again after the joint
 fit with the fitted ring in the null design (a ring missed by the first search leaks into a pattern's
 columns on its own tier); when that second search finds more patterns, the whole axis analysis repeats

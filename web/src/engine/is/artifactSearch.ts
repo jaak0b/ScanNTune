@@ -30,10 +30,16 @@ import type { CornerPhasor } from './cornerTransient'
 // 1961), and an artifact is detected only when each speed tier's own lines also show it at that
 // period at the same level (closed testing, Marcus, Peritz and Gabriel 1976): a ring of the
 // machine matches one spatial frequency on one tier only, unless two modes happen to stand in the
-// tiers' speed ratio. So an artifact must also not be shown locked to the corner at the same level
+// tiers' speed ratio. A known period, whose source is named, is labelled by that significance
+// alone. A grid period must also not be shown locked to the corner at the same level
 // (cornerTransient.ts): a ring the candidate's columns pick up starts at the corner with one phase
-// on every line, while a pattern fixed along the path or in the scan sits wherever the line falls
-// on it. A detection is added to the null design and the stage repeats. With one tier an artifact
+// on every line, while a pattern of unknown origin is taken to sit wherever the line falls on it.
+// The known periods are exempt because a belt pattern is locked to a motor, and on this coupon also
+// to the corner: each group's corners lie on a 45 degree diagonal, so one CoreXY motor (position
+// x + y) stands at the same position at every corner, and its belt's pattern has the same phase on
+// every line. The corner-locking test would call that pattern a ring; the closed test over the
+// tiers tells them apart, a ring matching a known period on one tier only. A detection is added to
+// the null design and the stage repeats. With one tier an artifact
 // cannot be told from a ring, so no search runs.
 
 /** A candidate pattern of the search: an arc-length sinusoid of a period. */
@@ -141,7 +147,7 @@ export function searchStage(
     const tierSum = members.reduce((s, l) => s + statistics[l], 0)
     if (!(chiSquareSurvivalEvenDof(tierSum, 2 * members.length) <= alpha)) return null
   }
-  if (cornerLockingShown(refitted.get(best)!, alpha)) return null
+  if (!candidates[best].known && cornerLockingShown(refitted.get(best)!, alpha)) return null
   return {
     artifact: { ...candidates[best], detectionPBound: pBound },
     columns: bases.map((b) => candidateColumns(candidates[best], b)),

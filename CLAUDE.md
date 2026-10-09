@@ -264,7 +264,10 @@ refuses the axis; a coupon left with one tier (a small bed, or a line speed belo
 leave-one-line-out influence check instead. The response must also be shown to be the corner's
 transient, which rejects forced tones such as a fan: locked to the corner (a seeded Monte Carlo
 randomization test of the lines' phases) or decaying (the boundary test of zero damping), each at half
-the 0.1% level; the artifact search labels a pattern only when it is not shown locked to the corner.
+the 0.1% level. The artifact search labels a known period (GT2 belt pitch, JPEG block) by its
+significance alone and a period of unknown origin only when it is not shown locked to the corner: each
+group's corners lie on a 45 degree diagonal, so one CoreXY motor (x + y) stands at the same position at
+every corner and its belt pattern has the same phase on every line.
 The replicate check and the confidence gate must not fail. A damping ratio fitted at its 0.4 bound does not refuse the axis: the shaper is then designed at
 Klipper's default damping ratio 0.1, which the configuration snippet writes. The two axes are then estimated jointly: the axis along one group's lines is the other group's
 measured axis and rings after its corner too, so each axis's ring is refitted on deposit times

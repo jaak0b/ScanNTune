@@ -19,8 +19,9 @@ import type { TracedLine } from '../../src/engine/is/lineTracer'
 //   tracer's bilinear interpolation at the line's sub-pixel phase); Gaussian blur of 1 or 2 px
 //   along the line, then the bilinear read; red AR(2) noise with its spectral peak inside the ring
 //   band; per-line noise levels.
-// - Artifacts: a belt-tooth pattern fixed in arc length (GT2, 2 mm pitch) printed on both tiers;
-//   a forced tone fixed in hertz (fan imbalance) with a random phase per line and an amplitude
+// - Artifacts: the belt-tooth pattern of a CoreXY machine (GT2, 2 mm pitch), fixed on each of the
+//   two belts, so its phase at a corner is set by that motor's position there (see SimArtifacts);
+//   an arc-length pattern whose phase the corner does not set, random per line; a forced tone fixed in hertz (fan imbalance) with a random phase per line and an amplitude
 //   that does not depend on the rung; a JPEG 8 px block pattern fixed in scan pixels; pixel
 //   locking of a line tilted against the pixel grid.
 // - Mechanisms: the first-order flow lag of the commanded flow (run-up at the rung, corner, ramp
@@ -81,8 +82,21 @@ export interface SimRing {
 }
 
 export interface SimArtifacts {
-  /** Arc-length periodic pattern of a belt, identical on both tiers. */
-  beltTooth?: { periodMm: number; ampMm: number }
+  /**
+   * The tooth mesh of a CoreXY machine's two belts, identical on both tiers: motor A's pattern
+   * moves the nozzle across the line by ampMm[0], motor B's by ampMm[1]. Convention (Klipper's corexy kinematics): motor A's
+   * position is x + y and motor B's is x - y, in coupon-frame millimetres, and a motor error
+   * (dA, dB) moves the nozzle by ((dA + dB) / 2, (dA - dB) / 2). Each motor's pattern is fixed on
+   * its belt, so its phase at a line's corner is the motor's position there over the period plus
+   * one seeded phase per motor (where the coupon sits on the bed). A group's corners lie on a
+   * 45 degree diagonal, so motor A sits at the same position at every corner of the group and its
+   * pattern has the same phase on every line.
+   */
+  beltTooth?: { periodMm: number; ampMm: [number, number] }
+  /** Arc-length periodic pattern whose phase the corner does not set (such as an extruder drive
+   *  gear's, which follows the filament fed since the print start): random phase per line,
+   *  identical on both tiers. */
+  arcPattern?: { periodMm: number; ampMm: number }
   /** Hertz-fixed undamped tone, random phase per line, rung-independent amplitude. */
   forcedTone?: { frequencyHz: number; ampMm: number }
   /** Scan-pixel periodic block pattern. */
@@ -376,6 +390,8 @@ export function simulateAxis(options: TraceSimOptions): SimLine[] {
   const jpeg = options.artifacts?.jpegBlock
     ? blockPattern(options.artifacts.jpegBlock.periodPx, rand)
     : null
+  // Drawn only when used, so the streams of every existing seed stay unchanged.
+  const beltMotorPhases = options.artifacts?.beltTooth ? [2 * Math.PI * rand(), 2 * Math.PI * rand()] : [0, 0]
   const indices = options.lineIndices ?? group.lines.map((_, i) => i)
   const stepMm = ALONG_STEP_PX / pxPerMm
 
@@ -411,7 +427,15 @@ export function simulateAxis(options: TraceSimOptions): SimLine[] {
     let f = ring ? (ring.frequencyByTierHz?.[tierIndex] ?? ring.frequencyHz) : 0
     if (ring?.frequencyGradientHzPerMm) f += ring.frequencyGradientHzPerMm * (offsetMm - meanOffset)
     const toneRand = lineRand()
-    const beltPhase = 2 * Math.PI * lineRand()
+    const arcPhase = 2 * Math.PI * lineRand()
+    // The measured segment's direction from the corner and the run-up's direction of travel,
+    // along which the mechanisms below are displacements.
+    const seg = line.measured
+    const segLength = Math.hypot(seg.x1 - seg.x0, seg.y1 - seg.y0)
+    const [ux, uy] = [(seg.x1 - seg.x0) / segLength, (seg.y1 - seg.y0) / segLength]
+    const run = line.runUp
+    const runLength = Math.hypot(run.x1 - run.x0, run.y1 - run.y0)
+    const [rx, ry] = [(run.x1 - run.x0) / runLength, (run.y1 - run.y0) / runLength]
     const pixelPhase = lineRand()
     const lockOffset = lineRand()
     // Drawn only when used, so the noise streams of every existing seed stay unchanged.
@@ -446,7 +470,14 @@ export function simulateAxis(options: TraceSimOptions): SimLine[] {
       }
       const art = options.artifacts
       if (art?.beltTooth) {
-        y += art.beltTooth.ampMm * Math.sin((2 * Math.PI * s) / art.beltTooth.periodMm + beltPhase)
+        const { periodMm, ampMm } = art.beltTooth
+        const [x, yPos] = [seg.x0 + ux * s, seg.y0 + uy * s]
+        const dA = 2 * ampMm[0] * Math.sin((2 * Math.PI * (x + yPos)) / periodMm + beltMotorPhases[0])
+        const dB = 2 * ampMm[1] * Math.sin((2 * Math.PI * (x - yPos)) / periodMm + beltMotorPhases[1])
+        y += rx * ((dA + dB) / 2) + ry * ((dA - dB) / 2)
+      }
+      if (art?.arcPattern) {
+        y += art.arcPattern.ampMm * Math.sin((2 * Math.PI * s) / art.arcPattern.periodMm + arcPhase)
       }
       if (art?.forcedTone) {
         y += art.forcedTone.ampMm * Math.cos(2 * Math.PI * (art.forcedTone.frequencyHz * t + toneRand))

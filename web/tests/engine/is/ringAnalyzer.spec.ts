@@ -291,16 +291,19 @@ describe('poolAxisFits estimation', () => {
 
 describe('poolAxisFits checks', () => {
   it('identifies a GT2 belt-tooth pattern as a known artifact and finds no ringing', () => {
-    // The 2 mm GT2 pitch, 0.002 mm on every line of both tiers: the known-period stage finds it,
-    // and with it in the null design nothing is left to detect.
-    const belt = { beltTooth: { periodMm: 2, ampMm: 0.002 } }
+    // The 2 mm GT2 pitch on CoreXY motor A's belt, moving the nozzle 0.002 mm across the line on
+    // both tiers, its phase set by the motor's position (x + y) at the corner: the group's corners
+    // lie on a 45 degree diagonal, so the pattern has the same phase on every line and the
+    // corner-locking test calls it locked, the way it would a ring. The known-period stage still
+    // labels it, and with it in the null design nothing is left to detect.
+    const belt = { beltTooth: { periodMm: 2, ampMm: [0.002, 0] as [number, number] } }
     const p = pool(twoTier, simulate(twoTier, { noise: IID, artifacts: belt }, 3))
     expect(p.artifacts.map((a) => [a.periodMm, a.known])).toEqual([[2, true]])
     expect(p.detectionPBound!).toBeGreaterThan(0.001)
   })
 
   it('finds a stationary pattern of unknown period and still measures the ring next to it', () => {
-    // A 1.7 mm arc-length pattern, 0.002 mm, beside a 60 Hz ring: the grid's period step at
+    // A 1.7 mm arc-length pattern, 0.002 mm with a random phase per line, beside a 60 Hz ring: the grid's period step at
     // 1.7 mm is 1.7^2 / 150 = 0.019 mm (hand-computed), and the ring stays within 0.5 Hz.
     const p = pool(
       twoTier,
@@ -309,7 +312,7 @@ describe('poolAxisFits checks', () => {
         {
           noise: IID,
           ring: { frequencyHz: 60, dampingRatio: 0.05, ampMm: 0.03 },
-          artifacts: { beltTooth: { periodMm: 1.7, ampMm: 0.002 } },
+          artifacts: { arcPattern: { periodMm: 1.7, ampMm: 0.002 } },
         },
         2,
       ),
