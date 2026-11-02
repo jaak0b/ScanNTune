@@ -476,16 +476,41 @@ function tryParseOrca(content: string): Record<string, unknown> | null {
   }
   if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return null
   const obj = parsed as Record<string, unknown>
-  // Preset JSON exported from the Orca UI carries "type"; presets copied straight out of the
-  // user config folder (as the app's own docs point users to) often don't. Accept any of the
-  // other markers that are unique to an Orca preset file instead.
-  if (typeof obj.type === 'string') return obj
-  if (typeof obj.printer_settings_id === 'string') return obj
-  if (typeof obj.print_settings_id === 'string') return obj
-  if (typeof obj.filament_settings_id !== 'undefined') return obj
-  if (typeof obj.from === 'string' && typeof obj.version === 'string') return obj
-  if (typeof obj.inherits !== 'undefined') return obj
-  return null
+  return isOrcaPreset(obj) ? renameOrcaLegacyKeys(obj) : null
+}
+
+/** Preset JSON exported from the Orca UI carries "type"; presets copied straight out of the
+ *  user config folder (as the app's own docs point users to) often don't. Any of the other
+ *  markers that are unique to an Orca preset file is accepted instead. */
+function isOrcaPreset(obj: Record<string, unknown>): boolean {
+  return (
+    typeof obj.type === 'string' ||
+    typeof obj.printer_settings_id === 'string' ||
+    typeof obj.print_settings_id === 'string' ||
+    typeof obj.filament_settings_id !== 'undefined' ||
+    (typeof obj.from === 'string' && typeof obj.version === 'string') ||
+    typeof obj.inherits !== 'undefined'
+  )
+}
+
+/** Legacy Orca key names mapped to their current names, for the keys this importer reads. Orca
+ *  renames these per file as it loads each preset, before inheritance, so a child's value wins
+ *  over its parent's whichever spelling either file uses. */
+const ORCA_LEGACY_KEYS: Readonly<Record<string, string>> = {
+  chamber_temperatures: 'chamber_temperature',
+  tool_change_gcode: 'change_filament_gcode',
+}
+
+/** Renames one preset file's legacy keys to their current names, as Orca does on load. A
+ *  current key present in the same file wins over its legacy spelling. */
+function renameOrcaLegacyKeys(preset: Record<string, unknown>): Record<string, unknown> {
+  const renamed = { ...preset }
+  for (const [legacy, current] of Object.entries(ORCA_LEGACY_KEYS)) {
+    if (!(legacy in renamed)) continue
+    if (!(current in renamed)) renamed[current] = renamed[legacy]
+    delete renamed[legacy]
+  }
+  return renamed
 }
 
 /** Orca values are strings or arrays of strings; element 0 counts and "nil" means absent. */
@@ -525,7 +550,7 @@ function importOrca(preset: Record<string, unknown>): SlicerImportResult {
     startGcode: 'machine_start_gcode',
     endGcode: 'machine_end_gcode',
     pauseGcode: ['machine_pause_gcode', 'change_filament_gcode'],
-    chamberTemp: ['chamber_temperatures', 'chamber_temperature'],
+    chamberTemp: ['chamber_temperature'],
     gcodeTransform: (raw) => raw,
   })
   setNum(ctx, 'bedTempC', orcaBedTemp(ctx))

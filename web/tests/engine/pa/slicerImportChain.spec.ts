@@ -203,6 +203,49 @@ describe('importSlicerConfigs: multi-file Orca inherits resolution', () => {
     ])
   })
 
+  // Modeled on a real Orca filament chain: only the root system preset still carries the legacy
+  // plural chamber_temperatures key, which Orca renames per file before inheritance.
+  const filamentChainRoot = (chamberKey: string, value: string) =>
+    JSON.stringify({
+      type: 'filament',
+      name: 'fdm_filament_common',
+      from: 'system',
+      [chamberKey]: [value],
+    })
+  const filamentChainMiddle = [
+    { name: 'fdm_filament_asa', inherits: 'fdm_filament_common' },
+    { name: 'Generic ASA @System', inherits: 'fdm_filament_asa' },
+  ].map((p, i) => ({
+    fileName: `parent_${i}.json`,
+    content: JSON.stringify({ type: 'filament', from: 'system', ...p }),
+  }))
+  const filamentChainLeaf = (chamberKey: string, value: string) =>
+    JSON.stringify({
+      from: 'User',
+      name: 'T - Elegoo ASA',
+      inherits: 'Generic ASA @System',
+      filament_settings_id: ['T - Elegoo ASA'],
+      [chamberKey]: [value],
+    })
+
+  it('lets a child chamber_temperature win over a legacy chamber_temperatures root', () => {
+    const result = importSlicerConfigs([
+      { fileName: 'leaf.json', content: filamentChainLeaf('chamber_temperature', '65') },
+      ...filamentChainMiddle,
+      { fileName: 'root.json', content: filamentChainRoot('chamber_temperatures', '0') },
+    ])
+    expect(result.fields.filament.chamberTempC).toBe(65)
+  })
+
+  it('lets a child legacy chamber_temperatures win over a chamber_temperature root', () => {
+    const result = importSlicerConfigs([
+      { fileName: 'leaf.json', content: filamentChainLeaf('chamber_temperatures', '65') },
+      ...filamentChainMiddle,
+      { fileName: 'root.json', content: filamentChainRoot('chamber_temperature', '0') },
+    ])
+    expect(result.fields.filament.chamberTempC).toBe(65)
+  })
+
   it('resolves the chain from a cached parent preset without re-upload', () => {
     const result = importSlicerConfigs(
       [{ fileName: 'orca_machine_chubechanger.json', content: chubechanger }],
